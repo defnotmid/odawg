@@ -1,0 +1,9 @@
+{
+  "name": "chicago", "key": "F minor", "seed": 3,
+  "sections": [
+    { "name": "intro", "duration": "4m", "bpm": 124, "style": "chicago_house", "energy": 0.55, "chords": "Fm7 Ebmaj7 Db Eb" },
+    { "name": "groove", "duration": "8m", "energy": 0.8 },
+    { "name": "break", "duration": "4m", "energy": 0.35 },
+    { "name": "peak", "duration": "8m", "energy": 1 }
+  ]
+}

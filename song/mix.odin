@@ -1,0 +1,170 @@
+package odawg_song
+
+import "core:slice"
+import "core:strings"
+import base "../base"
+import device "../device"
+
+// A mix: songs and clips on one timeline (onimite's video), as one Song the
+// engine streams. A song is appended by copying its tables with every index
+// moved past what is there and every time moved to where it starts; a clip
+// is a track of its own playing one note on a Player. The form, chords and
+// markers stay with the songs (questions go to them); the mix is what plays.
+
+mix_init :: proc(m: ^Song) {
+	m^ = {}
+	m.findings = make(base.Findings)
+}
+
+// Appends a composed song starting at `at` seconds on the mix's clock, its
+// parts named `prefix/part` ("score/drums"), `gain_db` added to its tracks.
+// `window` (on the mix's clock) lets it through with fades, as a placed
+// clip is; `duck` (a spans sidechain) dips every track of it under the voice
+// too, on top of what already ducks it (the bass under the kick).
+append_song :: proc(m: ^Song, s: ^Song, at: f64, prefix: string, gain_db: f64 = 0, window: Window = {}, duck: Sidechain = {}) {
+	if m.bank == nil {
+		m.bank = s.bank
+	}
+	part0, dev0, chain0 := i32(len(m.parts)), i32(len(m.devices)), i32(len(m.chain))
+	send0, ret0, track0, note0 := i32(len(m.sends)), i32(len(m.returns)), i32(len(m.tracks)), i32(len(m.notes))
+	shift :: proc(sp: Span, by: i32) -> Span {return {sp.first + by, sp.count}}
+	for p in s.parts {
+		append(&m.parts, strings.concatenate({prefix, "/", p}))
+	}
+	append(&m.devices, ..s.devices[:])
+	append(&m.params, ..s.params[:])
+	for d in s.chain {
+		append(&m.chain, d + dev0)
+	}
+	for snd in s.sends {
+		append(&m.sends, Send{snd.ret + ret0, snd.gain})
+	}
+	for r in s.returns {
+		append(&m.returns, Return{strings.concatenate({prefix, "/", r.name}), shift(r.chain, chain0)})
+	}
+	for t in s.tracks {
+		x := t
+		x.part += part0
+		x.instrument += dev0
+		x.chain = shift(t.chain, chain0)
+		x.sends = shift(t.sends, send0)
+		x.notes = shift(t.notes, note0)
+		x.gain_db += gain_db
+		x.window = window
+		// it makes room only where it asked for it (the mix's room spans are
+		// every song's)
+		if len(s.room) == 0 && s.room_from == "" {
+			x.room = 0
+		}
+		x.sidechains = {i32(len(m.sidechains)), 0}
+		for sc in s.sidechains[t.sidechains.first:base.span_end(t.sidechains)] {
+			y := sc
+			if y.mode == .Hits {
+				y.part += part0
+			}
+			append(&m.sidechains, y)
+			x.sidechains.count += 1
+		}
+		if duck.mode != .None {
+			append(&m.sidechains, duck)
+			x.sidechains.count += 1
+		}
+		append(&m.tracks, x)
+	}
+	for i in 0 ..< len(s.notes) {
+		n := s.notes[i]
+		n.time += at
+		n.track += u16(track0)
+		append_soa(&m.notes, n)
+	}
+	for r in s.room {
+		append(&m.room, [2]f64{r[0] + at, r[1] + at})
+	}
+	for r in s.regions {
+		append(&m.regions, Region{r.part + part0, r.start + at, r.stop + at, r.source})
+	}
+	m.duration = max(m.duration, at + s.duration)
+}
+
+// A clip on the mix: a bank set played from `offset` seconds in, from
+// `start` to `stop` seconds on the mix, with onimite's track options.
+Clip :: struct {
+	name:     string, // its part ("music.mp3", "intro")
+	set:      i32, // into bank.sets
+	start:    f64,
+	stop:     f64,
+	offset:   f64,
+	gain_db:  f64,
+	pan:      f64,
+	fade_in:  f64,
+	fade_out: f64,
+	curve:    device.Curve,
+	mono:     bool,
+	voice:    bool, // speech: ducks the ducked
+	ducked:   bool,
+	duck:     struct {
+		depth_db, attack, hold, release, merge: f64,
+	},
+}
+
+append_clip :: proc(m: ^Song, c: Clip) -> i32 {
+	part := i32(len(m.parts))
+	append(&m.parts, strings.clone(c.name))
+	p := device.params_from_kind(.Player)
+	p[.Sample_Set] = f32(c.set)
+	p[.Offset] = f32(c.offset)
+	p[.Fade_In] = f32(c.fade_in)
+	p[.Fade_Out] = f32(c.fade_out)
+	p[.Curve] = f32(c.curve)
+	p[.Mono] = c.mono ? 1 : 0
+	append(&m.devices, device.Device_Kind.Player)
+	append(&m.params, p)
+	t := Track{part = part, variant = "", instrument = i32(len(m.devices) - 1), gain_db = c.gain_db, pan = c.pan, pan_law = .Balance, voice = c.voice, notes = {i32(len(m.notes)), 1}}
+	if c.ducked {
+		t.sidechains = {i32(len(m.sidechains)), 1}
+		append(&m.sidechains, duck_under_voice(c.duck.depth_db, c.duck.attack, c.duck.hold, c.duck.release, c.duck.merge))
+	}
+	track := i32(len(m.tracks))
+	append(&m.tracks, t)
+	append_soa(&m.notes, Note_Row{time = c.start, duration = c.stop - c.start, velocity = 1, track = u16(track)})
+	append(&m.regions, Region{part, c.start, c.stop, c.name})
+	m.duration = max(m.duration, c.stop)
+	return track
+}
+
+// A spans sidechain with onimite's (fframes') defaults for what is 0:
+// -12 dB, 0.2 s before the voice, 0.3 s hold, 0.8 s release, gaps under
+// 0.8 s merged.
+duck_under_voice :: proc(depth_db, attack, hold, release, merge: f64) -> Sidechain {
+	return {mode = .Spans, depth = depth_db != 0 ? depth_db : -12, attack = attack > 0 ? attack : 0.2, hold = hold > 0 ? hold : 0.3, release = release > 0 ? release : 0.8, merge = merge > 0 ? merge : 0.8}
+}
+
+// After the appends: the notes in time order, the voice spans merged by the
+// widest merge any ducked track asks (each track then merges by its own
+// when it ducks).
+mix_end :: proc(m: ^Song) {
+	sort_regions(m)
+	clear(&m.by_time)
+	for i in 0 ..< len(m.notes) {
+		append(&m.by_time, i32(i))
+	}
+	context.user_ptr = m
+	slice.stable_sort_by(m.by_time[:], proc(a, b: i32) -> bool {
+		s := (^Song)(context.user_ptr)
+		ta, tb := s.notes.time[a], s.notes.time[b]
+		if ta != tb {
+			return ta < tb
+		}
+		return s.tracks[s.notes.track[a]].part < s.tracks[s.notes.track[b]].part
+	})
+	clear(&m.voices)
+	for t in m.tracks {
+		if !t.voice {
+			continue
+		}
+		for i in t.notes.first ..< base.span_end(t.notes) {
+			append(&m.voices, [2]f64{m.notes.time[i], m.notes.time[i] + m.notes.duration[i]})
+		}
+	}
+	slice.sort_by(m.voices[:], proc(a, b: [2]f64) -> bool {return a[0] < b[0]})
+}

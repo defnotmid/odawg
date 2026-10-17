@@ -1,0 +1,32 @@
+# Build output and renders.
+build/
+*.bin
+*.exe
+*.pdb
+*.dSYM/
+# The binary `odin test .` leaves in the working directory.
+/odawg
+# Output from the example commands in the README, run from the repo root.
+/out/
+/*.wav
+*.wav.tmp
+
+# Fetched sample libraries and third-party sources (fetched on demand).
+/.data/
+/third_party/
+
+# Videos are never committed.
+*.mp4
+*.webm
+*.mov
+
+# Editors and OS.
+.DS_Store
+*.swp
+.vscode/
+.idea/
+
+# Agent scratch and personal settings.
+.work/
+perf.data*
+.claude/settings.local.json

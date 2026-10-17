@@ -1,0 +1,20 @@
+{
+  "name": "score",
+  "description": "WORKFLOWS.md W1: a lo-fi intro under narration, a ramp into a house drop, a lighter explanation, an ambient outro.",
+  "key": "A minor",
+  "seed": 7,
+  "sections": [
+    { "name": "intro", "duration": 9.5, "bpm": 84, "style": "lofi", "energy": 0.3, "chords": "Am7 Fmaj7 C G" },
+    { "name": "build", "duration": "2m", "bpm": [84, 124] },
+    { "name": "drop", "duration": "8m", "flex": ["4m", "8m"], "bpm": 124, "style": "house", "energy": 1, "chords": "Am F C G" },
+    { "name": "explain", "duration": 8.2, "energy": 0.5 },
+    { "name": "outro", "duration": 6, "bpm": 70, "style": "ambient", "chords": "Fmaj7 Am7" }
+  ],
+  "parts": {
+    "lead": {
+      "instrument": "pluck",
+      "play": [ { "name": "drop@4m..", "notes": "E5 G5 A5 - G5 E5 D5 -", "subdivision": "8n" } ]
+    }
+  },
+  "markers": [ { "name": "logo", "at": "drop@2m" } ]
+}
