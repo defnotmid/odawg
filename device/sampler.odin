@@ -172,7 +172,8 @@ sampler_start :: proc(st: ^Sampler_State, p: ^Params, n: Note, seed: u64, env: ^
 	if st.loop_to > st.length || st.loop_to - st.loop_from < 2 {
 		st.loop_to = st.loop_from // not a usable loop
 	}
-	st.step = math.pow(2, f64(pitch - z.root) / 12)
+	// the pitch shift, and the recording's rate to RATE
+	st.step = math.pow(2, f64(pitch - z.root) / 12) * device_rate_ratio(bank.samples[z.sample])
 	st.cutoff = clamp(1 / st.step, 1.0 / SINC_MAX_STRETCH, 1)
 	st.taps = int(math.ceil(SINC_HALF / st.cutoff))
 	amp := z.gain * min(f32(velocity) / f32(max(z.hi_velocity, 1)), 1)
@@ -183,6 +184,10 @@ sampler_start :: proc(st: ^Sampler_State, p: ^Params, n: Note, seed: u64, env: ^
 	st.release_tc = math.ln(st.release + 1) / math.ln(f64(200))
 	st.gate = z.one_shot ? -1 : i64(math.round(max(n.duration, 0) * RATE))
 }
+
+// Sample frames per output sample at the root pitch (1: recorded at RATE).
+@(private = "file")
+device_rate_ratio :: proc "contextless" (s: Sample) -> f64 {return sample_rate(s) / RATE}
 
 // The envelope at output sample k (done: silent from here on).
 @(private = "file")

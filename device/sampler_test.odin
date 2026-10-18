@@ -229,3 +229,29 @@ test_sampler_pads :: proc(t: ^testing.T) {
 	testing.expect(t, abs(frequency(l3[100:]) - 600) < 2)
 	testing.expect(t, tail_sampler(nil, {pad = .Kick}) == SAMPLER_ONE_SHOT_TAIL)
 }
+
+// A sample recorded at 44.1 kHz plays in tune at RATE: its rate is part of
+// the step, nothing resampled when it loads.
+@(test)
+test_sampler_file_rate :: proc(t: ^testing.T) {
+	b: Bank
+	defer bank_destroy(&b)
+	// 441 Hz recorded at 44.1 kHz: 100 frames a cycle there
+	n := 44100
+	frames := make([]f32, 2 * n)
+	for i in 0 ..< n {
+		v := 0.5 * f32(math.sin(2 * math.PI * 441 * f64(i) / 44100))
+		frames[2 * i], frames[2 * i + 1] = v, v
+	}
+	append(&b.f32s, frames)
+	append(&b.owned, Chunk{.F32, i32(len(b.f32s) - 1)})
+	append(&b.samples, Sample{chunk = i32(len(b.f32s) - 1), frames = i64(n), channels = 2, format = .F32, rate = 44100})
+	set := add_set(&b, "rate", {{sample = i32(len(b.samples) - 1), lo_key = 0, hi_key = 127, root = 69, hi_velocity = 127, gain = 1}})
+	l, _, _ := play(&b, set, {duration = 0.5, pitch = 69, velocity = 1}, RATE / 2)
+	hz := frequency(l[2000:])
+	testing.expectf(t, abs(hz - 441) < 0.5, "a 44.1 kHz sample at its root plays %f Hz", hz)
+	// an octave up is twice that
+	l2, _, _ := play(&b, set, {duration = 0.5, pitch = 81, velocity = 1}, RATE / 2)
+	hz2 := frequency(l2[2000:])
+	testing.expectf(t, abs(hz2 - 882) < 1, "an octave up plays %f Hz", hz2)
+}

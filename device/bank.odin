@@ -7,9 +7,10 @@ import base "../base"
 // root, its round-robin place), samples (a run of frames in a chunk), and the
 // chunks: blocks of audio that never move once made, recordings as 16-bit
 // PCM in their own channel count (a mono piano note stays mono: a quarter of
-// float stereo), clips as float stereo. A load is one chunk sized exactly; a
-// host's own audio is lent as a chunk (bank_borrow), not copied; another
-// bank's rows can be viewed over the same chunks (bank_view). All at RATE. The assets layer fills it from the
+// float stereo) at the rate they were recorded (a Sampler reads them at
+// RATE), clips as float stereo at RATE. A file loaded is a chunk sized
+// exactly; a host's own audio is lent as a chunk (bank_borrow), not copied;
+// another bank's rows can be viewed over the same chunks (bank_view). The assets layer fills it from the
 // register (downloading a set the first time a song uses it); dsp only
 // reads it. A `.Asset` param holds a set's index here.
 
@@ -69,7 +70,11 @@ Sample :: struct {
 	frames:   i64,
 	channels: u8, // 1 or 2
 	format:   Sample_Format,
+	rate:     i32, // its frames per second as recorded (0: RATE); a Sampler plays it at RATE
 }
+
+// A sample's rate (RATE when it was made at it).
+sample_rate :: #force_inline proc "contextless" (s: Sample) -> f64 {return s.rate > 0 ? f64(s.rate) : RATE}
 
 // A sample's values (interleaved by its channels).
 sample_f32 :: proc(b: ^Bank, s: Sample) -> []f32 {return b.f32s[s.chunk][s.at:][:s.frames * i64(s.channels)]}

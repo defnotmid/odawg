@@ -1,5 +1,6 @@
 package odawg_assets
 
+import "base:runtime"
 import base "../base"
 import device "../device"
 import "core:encoding/endian"
@@ -8,6 +9,7 @@ import "core:math"
 import "core:mem/virtual"
 import "core:os"
 import "core:strings"
+import "core:thread"
 
 // Loading: a set's files decoded (WAV here, FLAC by odecs: a row per
 // extension), made
@@ -199,31 +201,6 @@ gcd :: proc(a, b: int) -> int {
 	return a
 }
 
-// The decoded file at device.RATE as 16-bit PCM in its own channels (more
-// than two: the first two), its loop moved with it.
-pcm_at_rate :: proc(d: Decoded, allocator := context.allocator) -> (pcm: []i16, channels: int, loop_from, loop_to: i64) {
-	channels = clamp(d.channels, 1, 2)
-	n := len(d.samples) / max(d.channels, 1)
-	src := make([]f32, channels * n, context.temp_allocator)
-	for i in 0 ..< n {
-		for c in 0 ..< channels {
-			src[channels * i + c] = d.samples[i * d.channels + c]
-		}
-	}
-	at_rate := src
-	loop_from, loop_to = d.loop_from, d.loop_to
-	if d.rate != device.RATE {
-		at_rate = resample(src, channels, d.rate, context.temp_allocator)
-		loop_from = i64(math.round(f64(d.loop_from) * device.RATE / f64(d.rate)))
-		loop_to = i64(math.round(f64(d.loop_to) * device.RATE / f64(d.rate)))
-	}
-	pcm = make([]i16, len(at_rate), allocator)
-	for v, i in at_rate {
-		pcm[i] = i16(clamp(math.round(f64(v) * 32768), -32768, 32767))
-	}
-	return
-}
-
 // Frames of `channels` interleaved values at `rate` to device.RATE: output
 // frame j reads the input at j * rate / RATE through a windowed sinc
 // low-passed below the lower of the two Nyquists, one precomputed filter per
@@ -342,10 +319,11 @@ bank_declare :: proc(bank: ^device.Bank, names: []string, findings: ^base.Findin
 
 // Loads what a song plays: the zones of each need's set answering its keys
 // (every velocity layer and round robin of them), each file downloaded first
-// if it isn't on disk yet (on first use, only these files), its header read
-// to size the bank's slab once, then decoded into it at RATE in its own
-// channels as 16-bit PCM. A file that can't be had is a finding; the rest
-// load. True when every needed zone is loaded.
+// if it isn't on disk yet (on first use, only these files), then read once
+// and decoded, the files side by side on every core, as 16-bit PCM in its
+// own channels at its own rate (a Sampler reads it at RATE). A file that
+// can't be had is a finding; the rest load. True when every needed zone is
+// loaded.
 bank_load :: proc(bank: ^device.Bank, needs: []device.Sample_Need, findings: ^base.Findings, progress: Progress = progress_stderr) -> bool {
 	root, rerr := data_dir(context.temp_allocator)
 	if rerr != nil {
@@ -400,15 +378,7 @@ bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Ne
 	if len(wanted) == 0 {
 		return true
 	}
-	// fetch what isn't on disk, then size the slab from the headers (each
-	// file read in a scratch arena of its own)
-	scratch: virtual.Arena
-	if virtual.arena_init_growing(&scratch) != nil {
-		return false
-	}
-	defer virtual.arena_destroy(&scratch)
 	ok := true
-	total := 0
 	// what can't be had is one finding per set: how many of its files, and why
 	Missing :: struct {
 		set:   i32,
@@ -429,77 +399,110 @@ bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Ne
 		name := bank.sets[m.set].name
 		base.report(findings, "asset_unavailable", .Error, name, "%s: %d of its files can't be had (%s); they play once they can be", name, m.count, m.why)
 	}
+	// fetched first where they aren't on disk (on first use)
 	for &w in wanted {
-		f := &FILE_TABLE[w.file]
-		if err := trust_disk ? nil : ensure_file(root, f); err != nil {
+		if err := trust_disk ? nil : ensure_file(root, &FILE_TABLE[w.file]); err != nil {
 			miss(&missing, w.set, err.?)
 			w.file, ok = -1, false
-			continue
 		}
-		frames, channels, rate, read := 0, 0, 0, false
-		{
-			context.temp_allocator = virtual.arena_allocator(&scratch)
-			defer virtual.arena_free_all(&scratch)
-			data, err := os.read_entire_file(file_path(root, f, context.temp_allocator), context.temp_allocator)
-			if row, has := format_from_path(f.path); err == nil && has {
-				frames, channels, rate, read = row.info(data)
-			}
-		}
-		if !read {
-			miss(&missing, w.set, fmt.tprintf("%s can't be read", f.path))
-			w.file, ok = -1, false
-			continue
-		}
-		total += clamp(channels, 1, 2) * frames_at_rate(frames, rate)
 	}
-	chunk, slab := device.bank_chunk_i16(bank, total)
-	used := 0
-	for w in wanted {
+	// each file read once and decoded, side by side, into PCM of its own
+	// (at its own rate: a Sampler reads it at RATE), then each a chunk of the
+	// bank, in order
+	jobs := make([]Decode_Job, len(wanted), context.temp_allocator)
+	for w, k in wanted {
+		jobs[k] = {file = w.file, root = root}
+	}
+	decode_all(jobs)
+	for &j, k in jobs {
+		w := wanted[k]
 		if w.file < 0 {
 			continue
 		}
-		f := &FILE_TABLE[w.file]
-		context.allocator = virtual.arena_allocator(&scratch)
-		context.temp_allocator = virtual.arena_allocator(&scratch)
-		defer virtual.arena_free_all(&scratch)
-		data, rerr := os.read_entire_file(file_path(root, f, context.allocator), context.allocator)
-		d: Decoded
-		derr: Error
-		if rerr == nil {
-			d, derr = decode(f.path, data)
-		}
-		if rerr != nil || derr != nil {
-			miss(&missing, w.set, fmt.tprintf("%s can't be decoded", f.path))
+		if j.err != "" {
+			miss(&missing, w.set, j.err)
 			ok = false
 			continue
 		}
-		pcm, channels, loop_from, loop_to := pcm_at_rate(d)
-		if used + len(pcm) > len(slab) {
-			miss(&missing, w.set, fmt.tprintf("%s decodes longer than its header says", f.path))
-			ok = false
-			continue
-		}
-		copy(slab[used:], pcm)
+		chunk, values := device.bank_chunk_i16(bank, len(j.pcm))
+		copy(values, j.pcm)
+		delete(j.pcm, runtime.heap_allocator())
 		sample := i32(len(bank.samples))
-		append(&bank.samples, device.Sample{chunk = chunk, at = i64(used), frames = i64(len(pcm) / channels), channels = u8(channels), format = .I16})
-		used += len(pcm)
+		append(&bank.samples, device.Sample{chunk = chunk, frames = i64(len(values) / j.channels), channels = u8(j.channels), format = .I16, rate = i32(j.rate)})
 		for zi in w.zones {
 			z := &bank.zones[zi]
-			z.sample, z.loop_from, z.loop_to = sample, i32(loop_from), i32(loop_to)
+			z.sample, z.loop_from, z.loop_to = sample, i32(j.loop_from), i32(j.loop_to)
 		}
 	}
 	return ok
 }
 
-// Frames a file of `frames` at `rate` has at device.RATE (resample's count).
+// One file to decode: what it is, and what came of it (16-bit PCM in at
+// most two channels on the heap, at its own rate, its loop; or why not).
 @(private = "file")
-frames_at_rate :: proc(frames, rate: int) -> int {
-	if rate == device.RATE || rate <= 0 {
-		return frames
+Decode_Job :: struct {
+	file:                i32, // into FILE_TABLE (-1: not to decode)
+	root:                string,
+	pcm:                 []i16,
+	channels, rate:      int,
+	loop_from, loop_to:  i64,
+	err:                 string,
+}
+
+// Decodes the jobs on every core (a scratch arena each for the file and its
+// float samples).
+@(private = "file")
+decode_all :: proc(jobs: []Decode_Job) {
+	run :: proc(j: ^Decode_Job) {
+		if j.file < 0 {
+			return
+		}
+		scratch: virtual.Arena
+		if virtual.arena_init_growing(&scratch) != nil {
+			j.err = "out of memory"
+			return
+		}
+		defer virtual.arena_destroy(&scratch)
+		context.allocator = virtual.arena_allocator(&scratch)
+		context.temp_allocator = virtual.arena_allocator(&scratch)
+		f := &FILE_TABLE[j.file]
+		data, rerr := os.read_entire_file(file_path(j.root, f), context.allocator)
+		if rerr != nil {
+			j.err = fmt.aprintf("%s can't be read", f.path, allocator = runtime.heap_allocator())
+			return
+		}
+		d, derr := decode(f.path, data)
+		if derr != nil {
+			j.err = fmt.aprintf("%s can't be decoded", f.path, allocator = runtime.heap_allocator())
+			return
+		}
+		j.channels = clamp(d.channels, 1, 2)
+		j.rate = d.rate > 0 ? d.rate : device.RATE
+		j.loop_from, j.loop_to = d.loop_from, d.loop_to
+		n := len(d.samples) / max(d.channels, 1)
+		j.pcm = make([]i16, j.channels * n, runtime.heap_allocator())
+		for i in 0 ..< n {
+			for c in 0 ..< j.channels {
+				j.pcm[j.channels * i + c] = i16(clamp(math.round(d.samples[i * d.channels + c] * 32768), -32768, 32767))
+			}
+		}
 	}
-	g := gcd(rate, device.RATE)
-	up, down := device.RATE / g, rate / g
-	return int((i64(frames) * i64(up) + i64(down) - 1) / i64(down))
+	workers := min(len(jobs), max(1, os.get_processor_core_count()))
+	if workers <= 1 {
+		for &j in jobs {
+			run(&j)
+		}
+		return
+	}
+	heap := runtime.heap_allocator()
+	pool: thread.Pool
+	thread.pool_init(&pool, heap, workers)
+	for &j in jobs {
+		thread.pool_add_task(&pool, heap, proc(t: thread.Task) {run((^Decode_Job)(t.data))}, &j)
+	}
+	thread.pool_start(&pool)
+	thread.pool_finish(&pool)
+	thread.pool_destroy(&pool)
 }
 
 // Declares the named sets and loads all of them (every key): for listening

@@ -327,7 +327,9 @@ test_load_set :: proc(t: ^testing.T) {
 	testing.expect_value(t, int(bank.sets[0].zones.count), int(s.zones.count))
 	testing.expect_value(t, len(bank.samples), int(s.zones.count)) // a file each
 	for smp in bank.samples {
-		testing.expect_value(t, int(smp.frames), 2400) // 50 ms at 48 kHz
+		// 50 ms as recorded, at the file's rate (a Sampler reads it at RATE)
+		testing.expect_value(t, int(smp.frames), 2205)
+		testing.expect_value(t, int(smp.rate), 44100)
 	}
 	// rr1 and rr2 of a note and layer: one group, places 0 and 1
 	sequences := [2]int{}

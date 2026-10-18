@@ -485,9 +485,11 @@ run_bench :: proc(a: ^Args) -> bool {
 		one := Args{positional = make([dynamic]string, context.temp_allocator)}
 		append(&one.positional, path)
 		l: Loaded
+		load_began := time.tick_now()
 		if !load(&one, &l) {
 			return false
 		}
+		load_ms := time.duration_milliseconds(time.tick_since(load_began))
 		s := &l.song
 		frames := render.frames_from_song(s)
 		Sink :: struct {
@@ -521,7 +523,7 @@ run_bench :: proc(a: ^Args) -> bool {
 		}
 		seek_ms := time.duration_milliseconds(time.tick_since(seek_began)) / SEEKS
 		render.engine_destroy(&e)
-		fmt.printfln("%-40s %.1fs of sound in %.2fs: %.1fx realtime; an exact seek %.1f ms", filepath.base(path), sound, cpu, sound / cpu, seek_ms)
+		fmt.printfln("%-40s loaded in %.0f ms; %.1fs of sound in %.2fs: %.1fx realtime; an exact seek %.1f ms", filepath.base(path), load_ms, sound, cpu, sound / cpu, seek_ms)
 		if a.out != "" {
 			if err := os.write_entire_file(a.out, slice.to_bytes(out[:])); err != nil {
 				fmt.eprintfln("odawg bench: can't write %s", a.out)
