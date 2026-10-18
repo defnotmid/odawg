@@ -177,6 +177,12 @@ Song :: struct {
 	sends:    [dynamic]Send,
 	returns:  [dynamic]Return,
 	regions:  [dynamic]Region, // by part, then start
+	// The routing (graph.odin): the spec's buses and routes, the nodes, the
+	// edges.
+	buses:    [dynamic]Bus,
+	routes:   [dynamic]Route,
+	nodes:    [dynamic]Node,
+	edges:    [dynamic]Edge, // by `to`, then `from`
 	notes:    #soa[dynamic]Note_Row, // by track, then time
 	by_time:  [dynamic]i32, // notes in time order
 	room:     [dynamic][2]f64, // song seconds
@@ -246,5 +252,6 @@ song_from_spec :: proc(s: ^spec.Spec, out: ^Song, bank: ^device.Bank = nil) -> b
 	add_transitions(out, &work)
 	index_notes(out, &work)
 	sort_regions(out)
+	graph_build(out)
 	return true
 }

@@ -50,6 +50,7 @@ Field_Kind :: enum u8 {
 	Markers, // the spec: markers
 	Room, // the spec: room spans
 	Styles, // the spec: its own styles by name
+	Buses, // the spec: its buses by name
 }
 
 Field_Row :: struct {
@@ -87,6 +88,7 @@ FIELD_READERS := [Field_Kind]Field_Reader {
 	.Markers   = read_markers_field,
 	.Room      = read_room_field,
 	.Styles    = read_styles_field,
+	.Buses     = read_buses_field,
 }
 
 SPEC_FIELDS := []Field_Row {
@@ -110,6 +112,7 @@ SPEC_FIELDS := []Field_Row {
 	{"markers", .Markers, 0},
 	{"room", .Room, 0},
 	{"styles", .Styles, 0},
+	{"buses", .Buses, 0},
 	{"description", .Ignore, 0},
 }
 
@@ -138,6 +141,8 @@ PART_FIELDS := []Field_Row {
 	{"sends", .Sends, offset_of(Part_Spec, sends)},
 	{"sidechain", .Sidechain, offset_of(Part_Spec, sidechain)},
 	{"mute", .Ranges, offset_of(Part_Spec, mute)},
+	{"to", .String, offset_of(Part_Spec, to)},
+	{"key", .String, offset_of(Part_Spec, key)},
 	{"play", .Ignore, 0}, // read by read_parts_field, so plays stay contiguous per part
 }
 
@@ -181,6 +186,11 @@ EVENT_FIELDS := []Field_Row {
 MARKER_FIELDS := []Field_Row {
 	{"name", .String, offset_of(Marker_Spec, name)},
 	{"at", .Time, offset_of(Marker_Spec, at)},
+}
+
+BUS_FIELDS := []Field_Row {
+	{"effects", .Chain, offset_of(Bus_Spec, chain)},
+	{"to", .String, offset_of(Bus_Spec, to)},
 }
 
 SIDECHAIN_FIELDS := []Field_Row {
@@ -229,7 +239,7 @@ spec_init :: proc(s: ^Spec, allocator := context.allocator) {
 	s.events.allocator, s.ranges.allocator, s.devices.allocator = allocator, allocator, allocator
 	s.values.allocator, s.chain.allocator, s.sends.allocator = allocator, allocator, allocator
 	s.returns.allocator, s.markers.allocator, s.room.allocator = allocator, allocator, allocator
-	s.strings.allocator, s.styles.allocator = allocator, allocator
+	s.strings.allocator, s.styles.allocator, s.buses.allocator = allocator, allocator, allocator
 }
 
 // Reads a spec from a value; context.allocator holds it (give it an arena).
@@ -746,6 +756,26 @@ read_markers_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr)
 			append(&r.spec.markers, m)
 		} else if m.name == "" {
 			base.report(r.findings, "bad_value", .Error, mp, "%s: a marker needs a name", mp)
+		}
+	}
+}
+
+@(private = "file")
+read_buses_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
+	o, ok := v.(json.Object)
+	if !ok {
+		bad(r, path, "{ name = { effects, to } } per bus")
+		return
+	}
+	names := make([dynamic]string, context.temp_allocator)
+	for k in o {
+		append(&names, k)
+	}
+	slice.sort(names[:])
+	for name in names {
+		b := Bus_Spec{name = strings.clone(name)}
+		if read_record(r, o[name], base.path_join(path, name), BUS_FIELDS, &b) {
+			append(&r.spec.buses, b)
 		}
 	}
 }

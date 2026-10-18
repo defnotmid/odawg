@@ -83,6 +83,19 @@ append_song :: proc(m: ^Song, s: ^Song, at: f64, prefix: string, gain_db: f64 = 
 	for r in s.regions {
 		append(&m.regions, Region{r.part + part0, r.start + at, r.stop + at, r.source})
 	}
+	// its buses and routes, named under the prefix ("score/glue"); what went
+	// to its master goes to the mix's
+	for b in s.buses {
+		append(&m.buses, Bus{strings.concatenate({prefix, "/", b.name}), shift(b.chain, chain0)})
+	}
+	for rt in s.routes {
+		x := rt
+		x.from = strings.concatenate({prefix, "/", rt.from})
+		if rt.to != "master" {
+			x.to = strings.concatenate({prefix, "/", rt.to})
+		}
+		append(&m.routes, x)
+	}
 	m.duration = max(m.duration, at + s.duration)
 }
 
@@ -144,6 +157,7 @@ duck_under_voice :: proc(depth_db, attack, hold, release, merge: f64) -> Sidecha
 // when it ducks).
 mix_end :: proc(m: ^Song) {
 	sort_regions(m)
+	graph_build(m)
 	clear(&m.by_time)
 	for i in 0 ..< len(m.notes) {
 		append(&m.by_time, i32(i))

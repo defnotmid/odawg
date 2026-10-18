@@ -49,6 +49,7 @@ Spec :: struct {
 	room_from:         string, // or a sound the host places, by name ("voice"): its spans
 	strings:           [dynamic]string, // an `.Asset` param's name ("vcsl/upright_piano"): its value is the index here
 	styles:            [dynamic]Style_Spec, // the song's own, beside the ones odawg ships
+	buses:             [dynamic]Bus_Spec,
 }
 
 // A style the song brings: a partial spec like the shipped ones (its parts,
@@ -86,6 +87,15 @@ Part_Spec :: struct {
 	sidechain:  Sidechain_Spec,
 	mute:       Span, // into ranges
 	plays:      Span,
+	to:         string, // the bus it goes into ("": the master)
+	key:        string, // the part, return or bus its effects' sidechain hears ("": itself)
+}
+
+// A bus the spec names: its effects, and where it goes ("": the master).
+Bus_Spec :: struct {
+	name:  string,
+	chain: Span,
+	to:    string,
 }
 
 Sidechain_Spec :: struct {

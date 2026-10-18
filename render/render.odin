@@ -30,7 +30,7 @@ Options :: struct {
 	to:      f64, // song seconds; <= from: the song's end and its tail
 	threads: int, // 0: one per core
 	segment: f64, // seconds a time segment covers (0: from the length and the cores); each costs a pre-roll
-	stems:   bool, // hand each part's sound (before the master) to the sink too
+	stems:   bool, // hand each stem (stem_count: the parts, the returns, the buses; what the master sums) to the sink too
 }
 
 // What an export hands on, a segment at a time and in order: `at` is the
@@ -72,17 +72,6 @@ preroll_from_song :: proc(s: ^song.Song) -> f64 {
 		longest = max(longest, chain_tail(s, t.chain) + ret)
 	}
 	return min(longest + 0.5, 8)
-}
-
-// Seconds a track's exact seek renders before its target: its own effects'
-// memory (its chain and its returns), and a margin; 0 for a dry track.
-preroll_from_track :: proc(s: ^song.Song, t: song.Track) -> f64 {
-	ret := 0.0
-	for snd in s.sends[t.sends.first:base.span_end(t.sends)] {
-		ret = max(ret, chain_tail(s, s.returns[snd.ret].chain))
-	}
-	memory := chain_tail(s, t.chain) + ret
-	return memory > 0 ? min(memory + 0.5, 8) : 0
 }
 
 chain_tail :: proc(s: ^song.Song, c: base.Span) -> f64 {
@@ -133,7 +122,7 @@ export_song :: proc(s: ^song.Song, opts: Options, sink: Sink) -> Master_Stats {
 	lm := has_master ? master_latency_from_song(s) : 0
 	total := frames + lm // the master looks this far ahead
 	segments := (total + segment - 1) / segment
-	parts := opts.stems ? len(s.parts) : 0
+	parts := opts.stems ? stem_count(s) : 0
 	// a wave's buffers: per job its mix (2 x segment) and stems, one slab,
 	// as many jobs at once as the cores and the budget allow
 	per_job := 2 * segment * (1 + parts)
@@ -247,8 +236,9 @@ run_job :: proc(j: ^Job) {
 
 // ---- into memory -----------------------------------------------------------------------
 
-// The rendered range in memory: the mix and (when asked) a stem per part, in
-// song.parts order, before the master. Only what was asked is held.
+// The rendered range in memory: the mix and (when asked) the stems (the
+// parts in song.parts order, then the returns, then the buses: what the
+// master sums). Only what was asked is held.
 Output :: struct {
 	from:        f64,
 	frames:      int,
@@ -263,7 +253,7 @@ output_from_song :: proc(s: ^song.Song, opts: Options, allocator := context.allo
 	to := opts.to > opts.from ? opts.to : s.duration + tail_from_song(s)
 	out.from = f64(first) / RATE
 	out.frames = max(0, int(math.round(to * RATE)) - int(first))
-	parts := opts.stems ? len(s.parts) : 0
+	parts := opts.stems ? stem_count(s) : 0
 	out.slab = make([]f32, 2 * out.frames * (1 + parts), allocator)
 	out.left, out.right = out.slab[:out.frames], out.slab[out.frames:][:out.frames]
 	out.stems = make([][2][]f32, parts, allocator)
@@ -286,7 +276,8 @@ output_from_song :: proc(s: ^song.Song, opts: Options, allocator := context.allo
 }
 
 // Exports [opts.from, opts.to) into buffers the caller holds: the mix into
-// `mix`, each part's stem into `parts` (song.parts order; none: no stems),
+// `mix`, the stems into `parts` (stem_count's order, part p first at p;
+// shorter: the rest left out; none: no stems),
 // each from the range's first sample and as long as it is (the song is cut
 // there). Every core renders; each segment is copied in once, in order.
 export_into :: proc(s: ^song.Song, opts: Options, mix: [2][]f32, parts: [][2][]f32 = nil) -> Master_Stats {

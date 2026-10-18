@@ -10,13 +10,18 @@ import device "../device"
 import song "../song"
 
 // The engine streams a song: any block of samples, in order, from wherever
-// it was put. Its state is tables sized once from the song: per track a pool
-// of voice slots (as many as the track ever has sounding at once, one for a
-// mono device), a cursor into the track's notes, and the state bytes of its
-// effect instances (its chain, and each send's own copy of the return's
-// chain). Nothing is allocated while it plays, and the samples never depend
-// on the block sizes it is asked for, so a render is the stream from 0 and
-// a preview, a scrub and a final render hear the same song.
+// it was put. It walks the song's routing (song.nodes, song.edges) in an
+// order computed once, every node after everything feeding it: a track
+// renders its voices and chain, a part, a return or a bus sums its inputs
+// and runs its chain, the master sums its inputs and masters them. Its
+// state is tables sized once from the song: per track a pool of voice
+// slots (as many as the track ever has sounding at once, one for a mono
+// device) and a cursor into its notes; per node its effect instances, a
+// block, its lead and latency; per edge a delay line where paths of
+// different latency meet. Nothing is allocated while it plays, and the
+// samples never depend on the block sizes it is asked for, so a render is
+// the stream from 0 and a preview, a scrub and a final render hear the
+// same song.
 
 BLOCK :: 1024 // what a track processes at a time (any size gives the same samples)
 // An engine's scratch (its tracks take turns with it): a track's block, its
@@ -39,18 +44,57 @@ Engine :: struct {
 	slot_choke: []i32, // samples left of a choked note's fade (0: not choked)
 	fx:        []Fx_Run,
 	fx_bytes:  []u8,
-	sends:     []Send_Run,
-	scratch:   []f32, // per track: its block (2 x BLOCK), its send (2 x BLOCK), a discard (2 x BLOCK)
+	scratch:   []f32, // shared by the tracks: a discard (2 x BLOCK) at 4 x BLOCK, a choked note's at 6 x BLOCK
+	// The routing: a run per node (song.nodes), the order they render in,
+	// their blocks (2 x BLOCK each) and whether each holds sound, and per
+	// edge (song.edges) its delay line (empty: none).
+	nodes:     []Node_Run,
+	order:     []i32,
+	blocks:    []f32,
+	dirty:     []bool,
+	edges:     []Edge_Run,
+	rings:     []f32,
+	cursor:    i64, // the song sample of the next output
+	// The key the node being rendered hears (its key edges summed; nil:
+	// none), and its block.
+	key_l, key_r: []f32,
+	keys:      []f32, // 2 x BLOCK
 	// The master: its chain's instances (into fx) and lookahead, what it has
-	// measured, and a block of the mix going into it.
+	// measured.
 	master:    base.Span,
 	master_latency: i64,
 	stats:     Master_Stats,
-	mix:       []f32, // 2 x BLOCK
-	parts:     []f32, // a block per part (2 x BLOCK each): tracks sum into their part, parts into the mix, in table order
-	part_dirty: []bool, // a part some track wrote to this block
 	no_master: bool, // an export's segment: the owner runs the master over the segments in order
 	arena:     virtual.Arena,
+}
+
+// A node as the engine runs it. Its output runs `lead` samples ahead of the
+// song cursor (what the lookahead of everything after it needs), its input
+// `latency` more (its own chain's lookahead). An exact seek starts it `pre`
+// samples early: its own effects' memory and that of everything after it.
+Node_Run :: struct {
+	chain:   base.Span, // into fx
+	inputs:  base.Span, // into song.edges: what feeds it
+	lead:    i64,
+	latency: i64,
+	pre:     i64,
+	started: bool, // during an exact seek: rendering yet
+	// A bus's or a return's chain sleeps once its input has been silent for
+	// its tail (an input sample: past it, the chain does no work and puts out
+	// silence) and wakes, reset, on the first sample of sound: both edges
+	// from the sound itself, never from where a block falls.
+	awake_until: i64,
+	tail:    i64,
+}
+
+// An edge whose paths' latencies differ: the source's output delayed to its
+// destination's time (a ring per channel in `rings`).
+Edge_Run :: struct {
+	looped: bool, // it closes a loop: left out
+	delay: i64,
+	ring:  base.Span, // into rings: left, then right, each ring.count / 2 (a power of two)
+	pos:   i64, // the source sample the ring's next write is
+	sound: i64, // the source sample of the last sound written (the ring holds sound until it is read)
 }
 
 // What the master saw: the mix after its gain, before its chain, and the
@@ -66,8 +110,6 @@ Track_Run :: struct {
 	latency:   i64, // its chain's lookahead: its input runs this far ahead
 	slots:     base.Span, // into voices
 	next_note: i32, // into song.notes: the next to start
-	chain:     base.Span, // into fx
-	sends:     base.Span, // into sends
 	stolen:    int, // notes that found no free slot (a finding)
 	seed:      u64,
 	// Dormancy: past `awake_until` (an input sample: every started note's
@@ -76,12 +118,7 @@ Track_Run :: struct {
 	// effects reset. Both edges come from the notes, never from where a block
 	// falls, so the samples don't depend on block size.
 	awake_until: i64,
-	tail:      i64, // samples its effects (chain, returns) ring after their input
-}
-
-Send_Run :: struct {
-	gain:  f32,
-	chain: base.Span, // into fx
+	tail:      i64, // samples its chain rings after its input
 }
 
 Fx_Run :: struct {
@@ -97,23 +134,20 @@ engine_init :: proc(e: ^Engine, s: ^song.Song) -> bool {
 		return false
 	}
 	context.allocator = virtual.arena_allocator(&e.arena)
+	if len(s.nodes) == 0 {
+		song.graph_build(s) // a song built by hand
+	}
 	e.tracks = make([]Track_Run, len(s.tracks))
-	slots_total, fx_total, sends_total := 0, int(s.master.count), 0
+	slots_total, fx_total := 0, 0
 	for t, ti in s.tracks {
 		run := &e.tracks[ti]
 		run.slots = {i32(slots_total), i32(polyphony_from_track(s, t))}
 		slots_total += int(run.slots.count)
-		fx_total += int(t.chain.count)
-		for snd in s.sends[t.sends.first:base.span_end(t.sends)] {
-			fx_total += int(s.returns[snd.ret].chain.count)
-		}
-		sends_total += int(t.sends.count)
 		run.seed = base.hash_combine(s.seed, base.hash_combine(base.hash_string(s.parts[t.part]), base.hash_string(t.variant)))
-		ret := 0.0
-		for snd in s.sends[t.sends.first:base.span_end(t.sends)] {
-			ret = max(ret, chain_tail(s, s.returns[snd.ret].chain))
-		}
-		run.tail = i64(math.ceil((chain_tail(s, t.chain) + ret) * RATE)) + DORMANT_MARGIN
+		run.tail = i64(math.ceil(chain_tail(s, t.chain) * RATE)) + DORMANT_MARGIN
+	}
+	for _, k in s.nodes {
+		fx_total += int(song.node_chain(s, k).count)
 	}
 	bytes_total := 0
 	for t, ti in s.tracks {
@@ -135,47 +169,99 @@ engine_init :: proc(e: ^Engine, s: ^song.Song) -> bool {
 	e.slot_at = make([]i64, slots_total)
 	e.slot_choke = make([]i32, slots_total)
 	e.fx = make([]Fx_Run, fx_total)
-	e.sends = make([]Send_Run, sends_total)
-	// the effect instances and their state bytes, 16-aligned each
-	bytes, fi, si := 0, 0, 0
-	add :: proc(e: ^Engine, s: ^song.Song, c: base.Span, fi, bytes: ^int) -> base.Span {
-		first := fi^
+	// each node's effect instances and their state bytes, 16-aligned each
+	e.nodes = make([]Node_Run, len(s.nodes))
+	bytes, fi := 0, 0
+	for _, k in s.nodes {
+		run := &e.nodes[k]
+		first := fi
+		c := song.node_chain(s, k)
 		for d in s.chain[c.first:base.span_end(c)] {
 			p := s.params[d]
 			size := (device.DEVICE_TABLE[s.devices[d]].effect_size(&p) + 15) &~ 15
-			e.fx[fi^] = {d, {i32(bytes^), i32(size)}}
-			bytes^ += size
-			fi^ += 1
-		}
-		return {i32(first), i32(fi^ - first)}
-	}
-	for t, ti in s.tracks {
-		run := &e.tracks[ti]
-		run.chain = add(e, s, t.chain, &fi, &bytes)
-		for d in s.chain[t.chain.first:base.span_end(t.chain)] {
-			p := s.params[d]
+			e.fx[fi] = {d, {i32(bytes), i32(size)}}
+			bytes += size
+			fi += 1
 			if lat := device.DEVICE_TABLE[s.devices[d]].effect_latency; lat != nil {
 				run.latency += i64(lat(&p))
 			}
 		}
-		run.sends = {i32(si), t.sends.count}
-		for snd in s.sends[t.sends.first:base.span_end(t.sends)] {
-			e.sends[si] = {snd.gain, add(e, s, s.returns[snd.ret].chain, &fi, &bytes)}
-			si += 1
-		}
-	}
-	e.master = add(e, s, s.master, &fi, &bytes)
-	for d in s.chain[s.master.first:base.span_end(s.master)] {
-		p := s.params[d]
-		if lat := device.DEVICE_TABLE[s.devices[d]].effect_latency; lat != nil {
-			e.master_latency += i64(lat(&p))
-		}
+		run.chain = {i32(first), i32(fi - first)}
 	}
 	e.fx_bytes = make([]u8, bytes)
-	e.mix = make([]f32, 2 * BLOCK)
-	e.parts = make([]f32, 2 * BLOCK * max(len(s.parts), 1))
+	master := int(song.master_node(s))
+	e.master = e.nodes[master].chain
+	e.master_latency = e.nodes[master].latency
+	for ti in 0 ..< len(s.tracks) {
+		e.tracks[ti].latency = e.nodes[ti].latency
+	}
+	// the order, each node's inputs (the edges are sorted by where they go)
+	loops: [dynamic]int
+	e.order, loops = song.graph_order(s)
+	looped := make([]bool, len(s.edges), context.temp_allocator)
+	for i in loops {
+		looped[i] = true
+		x := s.edges[i]
+		base.report(&s.findings, "routing_loop", .Error, "routing", "routing: %s into %s closes a loop; that path is left out", song.node_name(s, x.from), song.node_name(s, x.to))
+	}
+	for x, i in s.edges {
+		if looped[i] {
+			continue
+		}
+		inputs := &e.nodes[x.to].inputs
+		if inputs.count == 0 {
+			inputs.first = i32(i)
+		}
+		inputs.count = i32(i) - inputs.first + 1
+	}
+	// leads (backwards: each after everything it feeds), then each edge's
+	// delay, where its source runs further ahead than its destination needs;
+	// the master's own lookahead is primed at a seek, not led
+	at_input := proc(e: ^Engine, s: ^song.Song, k: i32) -> i64 {
+		return e.nodes[k].lead + (s.nodes[k].kind == .Master ? 0 : e.nodes[k].latency)
+	}
+	#reverse for k in e.order {
+		for x, i in s.edges {
+			if x.from == k && !looped[i] {
+				e.nodes[k].lead = max(e.nodes[k].lead, at_input(e, s, x.to))
+			}
+		}
+	}
+	e.edges = make([]Edge_Run, len(s.edges))
+	ring_total := 0
+	for x, i in s.edges {
+		if looped[i] {
+			e.edges[i].looped = true
+			continue
+		}
+		if d := e.nodes[x.from].lead - at_input(e, s, x.to); d > 0 {
+			size := 1
+			for size < int(d) + BLOCK {
+				size *= 2
+			}
+			e.edges[i] = {delay = d, ring = {i32(ring_total), i32(2 * size)}}
+			ring_total += 2 * size
+		}
+	}
+	e.rings = make([]f32, ring_total)
+	// an exact seek's start per node: its effects' memory, and the most that
+	// anything after it needs
+	#reverse for k in e.order {
+		after: i64
+		for x, i in s.edges {
+			if x.from == k && !looped[i] {
+				after = max(after, e.nodes[x.to].pre)
+			}
+		}
+		memory := s.nodes[k].kind == .Master ? 0 : chain_tail(s, song.node_chain(s, int(k)))
+		own := memory > 0 ? i64(math.round(min(memory + 0.5, 8) * RATE)) : 0
+		e.nodes[k].pre = min(own + after, 12 * RATE)
+		e.nodes[k].tail = i64(math.ceil(memory * RATE)) + DORMANT_MARGIN
+	}
+	e.blocks = make([]f32, 2 * BLOCK * len(s.nodes))
+	e.keys = make([]f32, 2 * BLOCK)
+	e.dirty = make([]bool, len(s.nodes))
 	e.scratch = make([]f32, SCRATCH)
-	e.part_dirty = make([]bool, max(len(s.parts), 1))
 	engine_seek(e, 0, false)
 	return true
 }
@@ -208,23 +294,84 @@ polyphony_from_track :: proc(s: ^song.Song, t: song.Track) -> int {
 	return clamp(most, 1, MAX_POLYPHONY)
 }
 
-// Puts every track at song sample `at`: notes sounding there are started
-// and played up to it (chased), effects reset to that moment. Exact: the
-// effects' tails are rendered first too (from `at` minus the pre-roll), so
-// what follows is what a stream from 0 would play; a scrub can skip that.
+// Puts the song at sample `at`: every track's notes sounding there are
+// started and played up to it (chased), every node's effects reset to that
+// moment. Exact: each node starts as far back as its effects' memory and
+// that of everything after it need (a return as long as its reverb rings,
+// the tracks feeding it that much earlier), and the song is walked from
+// there, so what follows is what a stream from 0 would play; a scrub can
+// skip that.
 engine_seek :: proc(e: ^Engine, at: i64, exact: bool) {
-	for ti in 0 ..< len(e.tracks) {
-		track_seek(e, ti, at, exact)
+	from := at
+	if exact {
+		most: i64
+		for nd in e.nodes {
+			most = max(most, nd.pre)
+		}
+		from = max(at - most, 0)
+	}
+	e.cursor = from
+	for &nd in e.nodes {
+		nd.started = false
+	}
+	if from == at {
+		for k in 0 ..< len(e.nodes) {
+			node_start(e, k)
+		}
+	} else {
+		// the walk to `at`, each node joining at the block its start falls in
+		for e.cursor < at {
+			n := int(min(at - e.cursor, BLOCK))
+			for k in 0 ..< len(e.nodes) {
+				if !e.nodes[k].started && e.cursor + i64(n) > at - e.nodes[k].pre {
+					node_start(e, k)
+				}
+			}
+			walk_block(e, n, false)
+		}
+		// what needs no pre-roll joins at `at` itself
+		for k in 0 ..< len(e.nodes) {
+			if !e.nodes[k].started {
+				node_start(e, k)
+			}
+		}
 	}
 	// the master takes the mix `master_latency` ahead of what it puts out:
 	// prime its lookahead with that much (its output then is its delay)
 	master_reset(e, at)
 	for left := e.no_master ? 0 : e.master_latency; left > 0; {
 		n := int(min(left, BLOCK))
-		mix_block(e, n)
+		walk_block(e, n, true)
 		left -= i64(n)
 	}
+	e.cursor = at
 	e.stats = {}
+}
+
+// Starts node `k` at the cursor: a track's notes chased there, a node's
+// effects and its inputs' delay lines reset to its time.
+@(private = "file")
+node_start :: proc(e: ^Engine, k: int) {
+	s := e.song
+	nd := &e.nodes[k]
+	nd.started = true
+	e.dirty[k] = false
+	at := e.cursor + nd.lead
+	switch s.nodes[k].kind {
+	case .Track:
+		track_seek(e, k, at, false)
+	case .Part, .Return, .Bus, .Master:
+		for f in e.fx[nd.chain.first:base.span_end(nd.chain)] {
+			reset_fx(e, f, at + nd.latency)
+		}
+		nd.awake_until = at + nd.latency // asleep until sound comes
+	}
+	for i in nd.inputs.first ..< base.span_end(nd.inputs) {
+		x := &e.edges[i]
+		slice.zero(e.rings[x.ring.first:base.span_end(x.ring)])
+		x.pos = e.cursor + e.nodes[s.edges[i].from].lead
+		x.sound = min(i64) / 2
+	}
 }
 
 // Puts the master's chain at song sample `at`, its measurements cleared.
@@ -235,51 +382,185 @@ master_reset :: proc(e: ^Engine, at: i64) {
 	e.stats = {}
 }
 
-// The tracks' next `n` samples summed the one way every path sums them:
-// each track into its part (in track order), the parts into the mix (in
-// part order). The parts' blocks stay in e.parts for stems.
+// The song's next `n` samples: every started node in order into its block
+// (a track its voices and chain, a bus its inputs and chain), the master's
+// last (mastered unless `no_master`; `master` false: only the nodes before
+// it, a seek's walk). Returns the master's block.
 @(private = "file")
-sum_block :: proc(e: ^Engine, n: int) -> ([]f32, []f32) {
-	for p in 0 ..< len(e.song.parts) {
-		if e.part_dirty[p] {
-			slice.zero(e.parts[2 * BLOCK * p:][:2 * BLOCK])
-			e.part_dirty[p] = false
-		}
-	}
-	for ti in 0 ..< len(e.tracks) {
-		if e.song.tracks[ti].muted {
-			track_skip(e, ti, n)
+walk_block :: proc(e: ^Engine, n: int, master := true) -> ([]f32, []f32) {
+	s := e.song
+	for k in e.order {
+		nd := &e.nodes[k]
+		l, r := node_block(e, int(k), n)
+		if !nd.started {
+			e.dirty[k] = false
 			continue
 		}
-		p := int(e.song.tracks[ti].part)
-		if track_stream(e, ti, e.parts[2 * BLOCK * p:][:n], e.parts[2 * BLOCK * p + BLOCK:][:n], {}) {
-			e.part_dirty[p] = true
-		}
-	}
-	ml, mr := e.mix[:n], e.mix[BLOCK:][:n]
-	slice.zero(ml)
-	slice.zero(mr)
-	for p in 0 ..< len(e.song.parts) {
-		if !e.part_dirty[p] {
+		kind := s.nodes[k].kind
+		if kind == .Master && !master {
 			continue
 		}
-		pl, pr := e.parts[2 * BLOCK * p:][:n], e.parts[2 * BLOCK * p + BLOCK:][:n]
-		for i in 0 ..< n {
-			ml[i] += pl[i]
-		}
-		for i in 0 ..< n {
-			mr[i] += pr[i]
+		e.key_l, e.key_r = node_keys(e, int(k), n)
+		switch kind {
+		case .Track:
+			if s.tracks[k].muted {
+				track_skip(e, int(k), n)
+				e.dirty[k] = false
+			} else {
+				e.dirty[k] = track_block(e, int(k), l, r)
+			}
+		case .Part, .Return, .Bus, .Master:
+			e.dirty[k] = node_inputs(e, int(k), l, r)
+			if kind == .Master {
+				e.dirty[k] = true
+				if !e.no_master && (e.master.count > 0 || s.master_gain_db != 0) {
+					master_block(e, l, r)
+				}
+			} else if nd.chain.count > 0 {
+				e.dirty[k] = node_chain_run(e, int(k), l, r, e.dirty[k])
+			}
 		}
 	}
-	return ml, mr
+	e.cursor += i64(n)
+	return node_block(e, int(song.master_node(s)), n)
 }
 
-// The mix's next `n` samples through the master.
 @(private = "file")
-mix_block :: proc(e: ^Engine, n: int) -> ([]f32, []f32) {
-	ml, mr := sum_block(e, n)
-	master_block(e, ml, mr)
-	return ml, mr
+node_block :: #force_inline proc(e: ^Engine, k, n: int) -> ([]f32, []f32) {
+	return e.blocks[2 * BLOCK * k:][:n], e.blocks[2 * BLOCK * k + BLOCK:][:n]
+}
+
+// A bus's or a return's chain over its block (its input summed in place):
+// awake stretches run it, from the first sound after a silence (its effects
+// reset there) to its tail after the last; asleep, the block stays silent.
+// Whether it put out anything.
+@(private = "file")
+node_chain_run :: proc(e: ^Engine, k: int, l, r: []f32, heard: bool) -> (wrote: bool) {
+	nd := &e.nodes[k]
+	n := len(l)
+	start := e.cursor + nd.lead + nd.latency // its input's song sample at l[0]
+	if !heard && start >= nd.awake_until {
+		return false // asleep, nothing coming: its block is the input's silence
+	}
+	sound :: #force_inline proc(l, r: []f32, j: int) -> bool {return l[j] != 0 || r[j] != 0}
+	for i := 0; i < n; {
+		if start + i64(i) >= nd.awake_until {
+			// asleep: silent to the next sound, where it wakes fresh
+			j := i
+			for j < n && !sound(l, r, j) {
+				j += 1
+			}
+			if j == n {
+				break
+			}
+			for f in e.fx[nd.chain.first:base.span_end(nd.chain)] {
+				reset_fx(e, f, start + i64(j))
+			}
+			nd.awake_until = start + i64(j) + 1 + nd.tail
+			i = j
+		}
+		// awake: on until the input has been silent for its tail
+		j := i
+		for j < n && start + i64(j) < nd.awake_until {
+			if sound(l, r, j) {
+				nd.awake_until = start + i64(j) + 1 + nd.tail
+			}
+			j += 1
+		}
+		kl, kr := e.key_l, e.key_r
+		if kl != nil {
+			kl, kr = kl[i:j], kr[i:j]
+		}
+		run_fx(e, nd.chain, l[i:j], r[i:j], kl, kr)
+		wrote = true
+		i = j
+	}
+	return
+}
+
+// What a node's effects' sidechains hear: its key edges' sources summed
+// (nil: it has none, so they hear the node itself).
+@(private = "file")
+node_keys :: proc(e: ^Engine, k, n: int) -> ([]f32, []f32) {
+	s := e.song
+	kl, kr := e.keys[:n], e.keys[BLOCK:][:n]
+	found := false
+	inputs := e.nodes[k].inputs
+	for i in inputs.first ..< base.span_end(inputs) {
+		x := s.edges[i]
+		if x.kind != .Key || e.edges[i].looped {
+			continue
+		}
+		if !found {
+			slice.zero(kl)
+			slice.zero(kr)
+			found = true
+		}
+		if !e.dirty[x.from] {
+			continue
+		}
+		sl, sr := node_block(e, int(x.from), n)
+		for j in 0 ..< n {
+			kl[j] += sl[j] * x.gain
+			kr[j] += sr[j] * x.gain
+		}
+	}
+	if !found {
+		return nil, nil
+	}
+	return kl, kr
+}
+
+// A node's input: its edges' sources summed in edge order, each at its gain
+// (through its delay line where it has one). Whether any sound came in.
+@(private = "file")
+node_inputs :: proc(e: ^Engine, k: int, l, r: []f32) -> bool {
+	s := e.song
+	n := len(l)
+	slice.zero(l)
+	slice.zero(r)
+	heard := false
+	inputs := e.nodes[k].inputs
+	for i in inputs.first ..< base.span_end(inputs) {
+		x := s.edges[i]
+		run := &e.edges[i]
+		if x.kind != .Audio || run.looped {
+			continue
+		}
+		sl, sr := node_block(e, int(x.from), n)
+		if run.delay > 0 {
+			// written at the source's time, read `delay` behind it
+			size := i64(run.ring.count / 2)
+			mask := size - 1
+			rl := e.rings[run.ring.first:][:size]
+			rr := e.rings[i64(run.ring.first) + size:][:size]
+			if e.dirty[x.from] {
+				run.sound = run.pos + i64(n) - 1
+			}
+			for j in 0 ..< n {
+				t := run.pos + i64(j)
+				rl[t & mask] = e.dirty[x.from] ? sl[j] : 0
+				rr[t & mask] = e.dirty[x.from] ? sr[j] : 0
+				l[j] += rl[(t - run.delay) & mask] * x.gain
+				r[j] += rr[(t - run.delay) & mask] * x.gain
+			}
+			// heard while what it reads may still hold sound
+			heard ||= run.pos - run.delay <= run.sound
+			run.pos += i64(n)
+			continue
+		}
+		if !e.dirty[x.from] {
+			continue
+		}
+		for j in 0 ..< n {
+			l[j] += sl[j] * x.gain
+		}
+		for j in 0 ..< n {
+			r[j] += sr[j] * x.gain
+		}
+		heard = true
+	}
+	return heard
 }
 
 // The master over a block of the mix: its gain, what it measures, its chain.
@@ -309,19 +590,9 @@ master_block :: proc(e: ^Engine, l, r: []f32) {
 	}
 }
 
+// Puts track `ti`'s output at song sample `at` (its node's time): the notes
+// sounding there started and played up to it, its chain reset.
 track_seek :: proc(e: ^Engine, ti: int, at: i64, exact: bool) {
-	// exact: from as far back as its own effects remember (none: its notes
-	// chased are enough)
-	if pre := min(at, i64(math.round(preroll_from_track(e.song, e.song.tracks[ti]) * RATE))); exact && pre > 0 {
-		track_seek(e, ti, at - pre, false)
-		discard := track_scratch(e, ti)[4 * BLOCK:][:2 * BLOCK]
-		for left := pre; left > 0; {
-			n := int(min(left, BLOCK))
-			track_block(e, ti, discard[:n], discard[BLOCK:][:n])
-			left -= i64(n)
-		}
-		return
-	}
 	s := e.song
 	t := s.tracks[ti]
 	run := &e.tracks[ti]
@@ -379,29 +650,24 @@ track_scratch :: proc(e: ^Engine, ti: int) -> []f32 {
 	return e.scratch[:SCRATCH]
 }
 
-// Streams the next len(l) samples of the mix into l and r (and each part's
-// into stems, when given: one [2][]f32 per part, as long as l), all tracks
-// on the caller's thread: for a preview playing, or a frame.
+// Streams the next len(l) samples of the mix into l and r (and into stems,
+// when given: one [2][]f32 per stem (stem_count: the parts, then the
+// returns, then the buses), as long as l, what goes into the master), on
+// the caller's thread: for a preview playing, or a frame.
 engine_process :: proc(e: ^Engine, l, r: []f32, stems: [][2][]f32 = nil) {
-	slice.zero(l)
-	slice.zero(r)
-	for st in stems {
-		slice.zero(st[0])
-		slice.zero(st[1])
-	}
-	// stems are what goes into the master
-	has_master := !e.no_master && (e.master.count > 0 || e.song.master_gain_db != 0)
+	first := len(e.song.tracks)
 	for done := 0; done < len(l); {
 		n := min(len(l) - done, BLOCK)
-		ml, mr := sum_block(e, n)
+		ml, mr := walk_block(e, n)
 		for st, p in stems {
-			if e.part_dirty[p] {
-				copy(st[0][done:], e.parts[2 * BLOCK * p:][:n])
-				copy(st[1][done:], e.parts[2 * BLOCK * p + BLOCK:][:n])
+			if e.dirty[first + p] {
+				sl, sr := node_block(e, first + p, n)
+				copy(st[0][done:], sl)
+				copy(st[1][done:], sr)
+			} else {
+				slice.zero(st[0][done:][:n])
+				slice.zero(st[1][done:][:n])
 			}
-		}
-		if has_master {
-			master_block(e, ml, mr)
 		}
 		copy(l[done:], ml)
 		copy(r[done:], mr)
@@ -409,36 +675,13 @@ engine_process :: proc(e: ^Engine, l, r: []f32, stems: [][2][]f32 = nil) {
 	}
 }
 
-// Streams a track's next len(l) samples, adding them into l and r and into
-// its part's stem (when given). An engine's tracks share its scratch: they
-// stream one at a time (workers each run an engine of their own).
-track_stream :: proc(e: ^Engine, ti: int, l, r: []f32, stem: [2][]f32) -> (wrote: bool) {
-	sc := track_scratch(e, ti)
-	for done := 0; done < len(l); {
-		n := min(len(l) - done, BLOCK)
-		bl, br := sc[:n], sc[BLOCK:][:n]
-		if !track_block(e, ti, bl, br) {
-			done += n
-			continue
-		}
-		wrote = true
-		for i in 0 ..< n {
-			l[done + i] += bl[i]
-		}
-		for i in 0 ..< n {
-			r[done + i] += br[i]
-		}
-		if stem[0] != nil {
-			for i in 0 ..< n {
-				stem[0][done + i] += bl[i]
-			}
-			for i in 0 ..< n {
-				stem[1][done + i] += br[i]
-			}
-		}
-		done += n
+// The stems an export gives: every node between the tracks and the master
+// (the parts first, so part p is stem p, then the returns, then the buses).
+stem_count :: proc(s: ^song.Song) -> int {
+	if len(s.nodes) == 0 {
+		return len(s.parts) + len(s.returns) + len(s.buses)
 	}
-	return
+	return len(s.nodes) - len(s.tracks) - 1
 }
 
 // Moves a muted track on by `n` samples without hearing it (its state
@@ -628,7 +871,11 @@ track_block :: proc(e: ^Engine, ti: int, l, r: []f32) -> (wrote: bool) {
 			}
 		}
 		if pos > from {
-			finish_segment(e, ti, input + i64(from), l[from:pos], r[from:pos])
+			kl, kr := e.key_l, e.key_r
+			if kl != nil {
+				kl, kr = kl[from:pos], kr[from:pos]
+			}
+			finish_segment(e, ti, input + i64(from), l[from:pos], r[from:pos], kl, kr)
 			wrote = true
 		}
 	}
@@ -639,7 +886,7 @@ track_block :: proc(e: ^Engine, ti: int, l, r: []f32) -> (wrote: bool) {
 // What follows the voices on an awake stretch of a track (`at`: the song
 // sample of l[0]).
 @(private = "file")
-finish_segment :: proc(e: ^Engine, ti: int, at: i64, l, r: []f32) {
+finish_segment :: proc(e: ^Engine, ti: int, at: i64, l, r: []f32, key_l, key_r: []f32) {
 	s := e.song
 	t := s.tracks[ti]
 	run := &e.tracks[ti]
@@ -664,40 +911,14 @@ finish_segment :: proc(e: ^Engine, ti: int, at: i64, l, r: []f32) {
 	for i in 0 ..< n {
 		r[i] *= gr
 	}
-	run_fx(e, run.chain, l, r)
-	if run.sends.count == 0 {
-		return
-	}
-	sc := track_scratch(e, ti)
-	sl, sr := sc[2 * BLOCK:][:n], sc[3 * BLOCK:][:n]
-	for snd in e.sends[run.sends.first:base.span_end(run.sends)] {
-		for i in 0 ..< n {
-			sl[i] = l[i] * snd.gain
-		}
-		for i in 0 ..< n {
-			sr[i] = r[i] * snd.gain
-		}
-		run_fx(e, snd.chain, sl, sr)
-		for i in 0 ..< n {
-			l[i] += sl[i]
-		}
-		for i in 0 ..< n {
-			r[i] += sr[i]
-		}
-	}
+	run_fx(e, e.nodes[ti].chain, l, r, key_l, key_r)
 }
 
-// A track's effects (its chain and its returns' copies) put at `at`.
+// A track's chain put at `at`.
 @(private = "file")
 reset_track_fx :: proc(e: ^Engine, ti: int, at: i64) {
-	run := &e.tracks[ti]
-	for f in e.fx[run.chain.first:base.span_end(run.chain)] {
+	for f in e.fx[e.nodes[ti].chain.first:base.span_end(e.nodes[ti].chain)] {
 		reset_fx(e, f, at)
-	}
-	for snd in e.sends[run.sends.first:base.span_end(run.sends)] {
-		for f in e.fx[snd.chain.first:base.span_end(snd.chain)] {
-			reset_fx(e, f, at)
-		}
 	}
 }
 
@@ -729,11 +950,11 @@ apply_window :: proc(w: song.Window, at: i64, l, r: []f32) {
 }
 
 @(private = "file")
-run_fx :: proc(e: ^Engine, c: base.Span, l, r: []f32) {
+run_fx :: proc(e: ^Engine, c: base.Span, l, r: []f32, key_l: []f32 = nil, key_r: []f32 = nil) {
 	for f in e.fx[c.first:base.span_end(c)] {
 		p := e.song.params[f.device]
 		state := e.fx_bytes[f.state.first:base.span_end(f.state)]
-		device.DEVICE_TABLE[e.song.devices[f.device]].effect(state, &p, l, r, nil, nil)
+		device.DEVICE_TABLE[e.song.devices[f.device]].effect(state, &p, l, r, key_l, key_r)
 	}
 }
 

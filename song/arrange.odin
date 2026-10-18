@@ -162,6 +162,21 @@ arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 	for ret in s.returns {
 		add_return(song, s, ret)
 	}
+	// the spec's buses and where they go, its parts' routes
+	for b in s.buses {
+		append(&song.buses, Bus{b.name, chain_into_song(song, s, b.chain, 60 / song.sections[0].bpm0)})
+		if b.to != "" {
+			append(&song.routes, Route{from = b.name, to = b.to, gain = 1, moves = true})
+		}
+	}
+	for p in s.parts {
+		if p.to != "" {
+			append(&song.routes, Route{from = p.name, to = p.to, gain = 1, moves = true})
+		}
+		if p.key != "" {
+			append(&song.routes, Route{from = p.key, to = p.name, kind = .Key, gain = 1})
+		}
+	}
 
 	covered := make([]bool, len(song.sections), context.temp_allocator)
 	pending := make([dynamic]Note_Row, context.temp_allocator)
@@ -377,7 +392,17 @@ sends_into_song :: proc(song: ^Song, from: ^spec.Spec, sends: Span, before: Span
 			}
 		}
 		if ri < 0 {
-			base.report(&song.findings, "bad_value", .Error, base.path_join(path, "sends"), "%s/sends: there is no return %q", path, s.to)
+			// a send to a bus: a route from the part (its tracks summed)
+			for b in song.buses {
+				if b.name == s.to {
+					ri = -2
+				}
+			}
+			if ri == -2 {
+				append(&song.routes, Route{from = strings.trim_prefix(path, "parts/"), to = s.to, gain = f32(base.db_to_gain(s.gain_db))})
+				continue
+			}
+			base.report(&song.findings, "bad_value", .Error, base.path_join(path, "sends"), "%s/sends: there is no return or bus %q", path, s.to)
 			continue
 		}
 		g := f32(base.db_to_gain(s.gain_db))

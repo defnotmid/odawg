@@ -209,6 +209,40 @@ sections.
 
 `from = "score.odawg"` opens a project a GUI saved. Its sections still resize.
 
+### 3.6 Routing
+
+A song is a graph of nodes: each track (its voices and effects), each part (its tracks
+summed), each return, each bus the spec names, and the master. Edges carry sound from one
+node into another at a gain, or carry a key, which is what a node's compressor or gate
+listens to. Every node renders once per block, after everything that feeds it. A return
+hears all of its sends in one place, and a bus sums its inputs once.
+
+Without routing, the default graph applies. Each track goes into its part and its sends go
+into their returns, then the parts and the returns go into the master. Routing is data:
+
+```lua
+buses = { glue = { effects = { { "Compressor", threshold = -18, ratio = 3 } }, to = "master" } },
+parts = {
+  drums = { to = "glue" },                                -- into the bus instead of the master
+  keys  = { sends = { hall = -12, glue = -6 } },          -- a send goes to a return or a bus
+  pad   = { key = "drums",                                -- its compressor hears the drums
+            effects = { { "Compressor", threshold = -30, ratio = 8, attack = 0.001 } } },
+}
+```
+
+- `to` moves a part's or a bus's output off the master and onto a bus. Sends add a path at
+  a gain. `key` names the part, return or bus that a node's effects' sidechains hear.
+- Where paths with different latency meet, the shorter ones are delayed to match. A part
+  through a lookahead limiter still lines up with one going straight to the master.
+- A loop is reported as a `routing_loop` finding. The edge that closes it is left out and
+  the song still plays.
+- Stems are the master's inputs: the parts in `parts` order, then the returns, then the
+  buses (`render.stem_count`). A part's stem is its tracks summed. Its sends to a return
+  show up in that return's stem, the way a DAW draws them.
+- An exact seek starts each node as far back as its own effects and everything downstream
+  of it remember. A dry track feeding a reverb return pre-rolls the reverb's tail. A dry
+  track feeding a dry part pre-rolls nothing.
+
 ---
 
 ## 4. onimite's Lua API
@@ -303,6 +337,8 @@ render.export_song(&g, {from, to, stems}, sink)   // the stream on every core, t
 render.master_export(&g, opts, .Streaming, sink)  // measured, gained, limited, written
 song.mix_init(&mix); song.append_song(&mix, &g, at, "score", window = w, duck = d); song.append_clip(&mix, clip); song.mix_end(&mix)
 
+g.nodes, g.edges                                  // the routing: tracks, parts, returns, buses, master; edges by where they go
+song.graph_order(&g)                              // each node after everything feeding it (loops: their edges)
 g.regions                                         // where each part is triggered: { part, start, stop, source }
 t: render.Table                                   // what is read at random: peaks, energy, spectrum per step
 render.table_init(&t, &g, .Peaks, part, 256, 1)   // rows only where the part sounds (its regions and tails)
