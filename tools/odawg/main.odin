@@ -7,6 +7,7 @@
 //     odawg show song.json parts/bass | sections/drop | style/house
 //     odawg at song.json drop@1m
 //     odawg inspect song.json [--range drop]
+//     odawg analyze song.json [--master streaming] [--reference ref.wav] [--json]
 //     odawg styles
 package main
 
@@ -34,6 +35,7 @@ Args :: struct {
 	range:      string,
 	master:     string,
 	stems:      string,
+	reference:  string,
 	float:      bool,
 	json:       bool,
 	threads:    int,
@@ -52,6 +54,7 @@ COMMAND_TABLE := []Command_Row {
 	{"show", "show SPEC PATH [--json]", "one thing: sections/NAME, parts/NAME (its notes), style/NAME (its source)", run_show},
 	{"at", "at SPEC POSITION", "what plays at a position: the section and bar, the chord, the notes sounding", run_at},
 	{"inspect", "inspect SPEC [--range R]", "renders and reports: findings from the spec, the form and the sound", run_inspect},
+	{"analyze", "analyze SPEC [--master M] [--reference REF.wav] [--json]", "what the sound is made of, per section, for the mix and every stem: loudness, true peak, crest, stereo width, 31 third-octave bands, the parts crowding each other; beside a reference recording's", run_analyze},
 	{"styles", "styles", "the styles odawg ships", run_styles},
 	{"sets", "sets", "the sample sets in the register: what each is, its licence and size", run_sets},
 	{"fetch", "fetch [SET|SPEC ...] [--verify]", "downloads sample sets now (every set when none is named; songs fetch theirs on first use)", run_fetch},
@@ -80,6 +83,8 @@ main :: proc() {
 			a.master = next(argv, &i)
 		case "--stems":
 			a.stems = next(argv, &i)
+		case "--reference":
+			a.reference = next(argv, &i)
 		case "--threads":
 			a.threads = int(f64_from(next(argv, &i)))
 		case "--float":

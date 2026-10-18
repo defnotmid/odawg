@@ -28,6 +28,9 @@ Table_Kind :: enum u8 {
 	Peaks, // per step: the window's min and max over both sides
 	Energy, // per video frame: analyze's rms, peak, low, mid, high
 	Spectrum, // per video frame: `size / 2` magnitudes, `shape` windowed
+	Bands, // per step: the 31 third-octave levels (BAND_HZ), dB, of the mid channel
+	Stereo, // per step: width (side over mid, dB) and the sides' correlation
+	Crest, // per step: peak and RMS, dBFS (the crest is their difference)
 }
 
 Table_Kind_Row :: struct {
@@ -74,6 +77,25 @@ TABLE_KINDS := [Table_Kind]Table_Kind_Row {
 		whole = true,
 		fill = proc(t: ^Table, row: []f32, l, r: []f32) {analyze.spectrum_from_samples(l, r, 0, t.shape, row)},
 	},
+	.Bands = {
+		name = "bands",
+		window = proc(t: ^Table) -> int {return BANDS_FFT},
+		width = proc(t: ^Table) -> int {return len(BAND_HZ)},
+		whole = true,
+		fill = fill_bands,
+	},
+	.Stereo = {
+		name = "stereo",
+		window = proc(t: ^Table) -> int {return max(t.step_num / max(t.step_den, 1), 1)},
+		width = proc(t: ^Table) -> int {return 2},
+		fill = fill_stereo,
+	},
+	.Crest = {
+		name = "crest",
+		window = proc(t: ^Table) -> int {return max(t.step_num / max(t.step_den, 1), 1)},
+		width = proc(t: ^Table) -> int {return 2},
+		fill = fill_crest,
+	},
 }
 
 @(private = "file")
@@ -88,7 +110,7 @@ Table_Span :: struct {
 
 Table :: struct {
 	kind:               Table_Kind,
-	part:               i32, // into song.parts; -1: the mix
+	part:               i32, // a stem (stem_count's order: the parts, then the returns, then the buses); -1: the mix
 	// A row every step_num / step_den samples from the song's start (a video
 	// frame: RATE / fps; a peak bucket: n / 1), rounded down.
 	step_num, step_den: int,
@@ -97,7 +119,8 @@ Table :: struct {
 	frames:             int, // the song's samples (its tail included)
 	spans:              []Table_Span, // where it has rows, in order
 	width, rows:        int,
-	values:             []f32, // rows x width
+	values:             []f32, // rows x width (the caller's when it lent them)
+	lent:               bool, // values are the caller's: table_destroy leaves them
 	version:            u32, // its source's, when filled (0: never)
 }
 
@@ -108,7 +131,10 @@ frames_from_song :: proc(s: ^song.Song) -> int {
 
 // Sizes table `t` for song `s`: rows for the steps where its source sounds
 // (their values zero until built).
-table_init :: proc(t: ^Table, s: ^song.Song, kind: Table_Kind, part: i32, step_num, step_den: int, size := 0, shape := analyze.Window.None, allocator := context.allocator) {
+// `values`: memory of the caller's to fill (a GPU upload buffer a view
+// draws), at least rows x width (table_rows tells how many before); nil: its
+// own.
+table_init :: proc(t: ^Table, s: ^song.Song, kind: Table_Kind, part: i32, step_num, step_den: int, size := 0, shape := analyze.Window.None, allocator := context.allocator, values: []f32 = nil) {
 	t^ = {kind = kind, part = part, step_num = max(step_num, 1), step_den = max(step_den, 1), size = size, shape = shape}
 	t.frames = frames_from_song(s)
 	t.width = TABLE_KINDS[kind].width(t)
@@ -116,7 +142,13 @@ table_init :: proc(t: ^Table, s: ^song.Song, kind: Table_Kind, part: i32, step_n
 	// every step whose window meets a sounding span, inside the song
 	steps := (t.frames * t.step_den + t.step_num - 1) / t.step_num
 	spans := make([dynamic]Table_Span, 0, 8, allocator)
-	for x in sounding_from_song(s, part) {
+	sounding := sounding_from_song(s, part)
+	if part >= i32(len(s.parts)) {
+		// a return's or a bus's: as long as the song (it sounds where what
+		// feeds it does, and rings after)
+		sounding = {{0, f64(t.frames) / RATE}}
+	}
+	for x in sounding {
 		a := int(x[0] * RATE) - window
 		b := int(math.ceil(x[1] * RATE))
 		from := clamp((max(a, 0) * t.step_den) / t.step_num, 0, steps)
@@ -132,11 +164,27 @@ table_init :: proc(t: ^Table, s: ^song.Song, kind: Table_Kind, part: i32, step_n
 		t.rows += sp.to - sp.from
 	}
 	t.spans = spans[:]
-	t.values = make([]f32, t.rows * t.width, allocator)
+	if values != nil && len(values) >= t.rows * t.width {
+		t.values, t.lent = values[:t.rows * t.width], true
+	} else {
+		t.values = make([]f32, t.rows * t.width, allocator)
+	}
+}
+
+// How many values a table of `kind` over `part` holds (rows x width): what
+// a caller lending its memory sizes it to.
+table_size :: proc(s: ^song.Song, kind: Table_Kind, part: i32, step_num, step_den: int, size := 0) -> int {
+	t: Table
+	table_init(&t, s, kind, part, step_num, step_den, size, allocator = context.temp_allocator, values = []f32{0})
+	n := t.rows * t.width
+	delete(t.spans, context.temp_allocator)
+	return n
 }
 
 table_destroy :: proc(t: ^Table, allocator := context.allocator) {
-	delete(t.values, allocator)
+	if !t.lent {
+		delete(t.values, allocator)
+	}
 	delete(t.spans, allocator)
 	t^ = {}
 }
@@ -219,7 +267,8 @@ table_stale :: proc(s: ^song.Song, t: ^Table) -> bool {
 	return t.version != source_version(s, t.part)
 }
 
-// Fills `tables` from the song's samples the caller holds: `mix` (after
+// Fills `tables` from the song's samples the caller holds (s nil: a
+// recording's, its tables from table_init_frames): `mix` (after
 // the master) and `parts` (one stem per part, song.parts order; only the
 // parts a table reads), each from song sample 0 and as long as the caller
 // has them (past their end reads as silence, as past the song does). Each
@@ -250,7 +299,7 @@ tables_fill :: proc(s: ^song.Song, tables: []^Table, mix: [2][]f32, parts: [][2]
 				start := row_start(t, step)
 				end := min(start + w, j.frames)
 				if (row.whole && start + w > j.frames) || start >= have {
-					slice.zero(r)
+					row.fill(t, r, nil, nil) // the kind's silence (bands: FLOOR_DB, not 0 dB)
 					continue
 				}
 				// a window the caller's samples end inside reads silence past them
@@ -288,8 +337,20 @@ tables_fill :: proc(s: ^song.Song, tables: []^Table, mix: [2][]f32, parts: [][2]
 		thread.pool_destroy(&pool)
 	}
 	for t in tables {
-		t.version = source_version(s, t.part)
+		t.version = s != nil ? source_version(s, t.part) : 1
 	}
+}
+
+// Sizes table `t` over `frames` samples of a recording (no song: its rows
+// cover all of it), for tables_fill with a nil song.
+table_init_frames :: proc(t: ^Table, kind: Table_Kind, frames: int, step_num, step_den: int, size := 0, shape := analyze.Window.None, allocator := context.allocator) {
+	t^ = {kind = kind, part = -1, step_num = max(step_num, 1), step_den = max(step_den, 1), size = size, shape = shape, frames = frames}
+	t.width = TABLE_KINDS[kind].width(t)
+	t.rows = (frames * t.step_den + t.step_num - 1) / t.step_num
+	spans := make([]Table_Span, 1, allocator)
+	spans[0] = {0, t.rows, 0}
+	t.spans = spans
+	t.values = make([]f32, t.rows * t.width, allocator)
 }
 
 // Fills every table in `tables` from one streamed export of the song
@@ -317,7 +378,7 @@ tables_build :: proc(s: ^song.Song, tables: []^Table, threads := 0) {
 	for t in tables {
 		stems ||= t.part >= 0
 	}
-	b.held = make([][dynamic]f32, 2 * (1 + (stems ? len(s.parts) : 0)), context.temp_allocator)
+	b.held = make([][dynamic]f32, 2 * (1 + (stems ? stem_count(s) : 0)), context.temp_allocator)
 	for &h in b.held {
 		h = make([dynamic]f32, context.temp_allocator)
 	}
@@ -341,10 +402,13 @@ tables_build :: proc(s: ^song.Song, tables: []^Table, threads := 0) {
 					low = min(low, start)
 					break
 				}
-				// a window running past the song stays silent (row.whole)
-				if !(row.whole && start + w > frames) {
+				// a window running past the song is the kind's silence (row.whole)
+				r := t.values[b.next[k] * t.width:][:t.width]
+				if row.whole && start + w > frames {
+					row.fill(t, r, nil, nil)
+				} else {
 					a, z := start - b.held_first, end - b.held_first
-					row.fill(t, t.values[b.next[k] * t.width:][:t.width], b.held[src][a:z], b.held[src + 1][a:z])
+					row.fill(t, r, b.held[src][a:z], b.held[src + 1][a:z])
 				}
 				b.next[k] += 1
 			}
