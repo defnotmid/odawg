@@ -289,3 +289,25 @@ test_regions :: proc(t: ^testing.T) {
 		testing.expect(t, a.part < b.part || (a.part == b.part && a.start <= b.start))
 	}
 }
+
+// A section's fill rolls on the drums part, not on another drum machine
+// that happens to come first (a crash of its own).
+@(test)
+test_fill_on_drums :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	s := compose(t, `{ bpm: 120, sections: [ { name: "a", duration: "2m", energy: 0.6 }, { name: "b", duration: "2m", energy: 0.6 } ],
+		parts: {
+			crash: { instrument: { name: "DrumMachine", machine: "909" }, play: [ { name: "a..b", steps: { crash: "x..............." } } ] },
+			drums: { instrument: { name: "DrumMachine", machine: "909" }, play: [ { name: "a..b", steps: { kick: "x...x...x...x...", snare: "....x.......x..." } } ] } } }`, &arena)
+	rolls := [2]int{}
+	last := 8.0 - 1 // the beat before b
+	for tr in s.tracks {
+		for i in tr.notes.first ..< base.span_end(tr.notes) {
+			if s.notes.pad[i] == .Snare && s.notes.beat[i] >= last - 1e-9 && s.notes.beat[i] < 8 - 1e-9 {
+				rolls[0 if s.parts[tr.part] == "drums" else 1] += 1
+			}
+		}
+	}
+	testing.expectf(t, rolls[0] == 4 && rolls[1] == 0, "the roll's snares: %d on drums, %d elsewhere", rolls[0], rolls[1])
+}

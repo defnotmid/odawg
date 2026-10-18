@@ -131,13 +131,13 @@ Fx_Run :: struct {
 engine_init :: proc(e: ^Engine, s: ^song.Song) -> bool {
 	e.song = s
 	e.env.bank = s.bank
+	if len(s.nodes) == 0 {
+		return false // its routing is built when it is composed (song_from_spec, mix_end)
+	}
 	if virtual.arena_init_growing(&e.arena) != nil {
 		return false
 	}
 	context.allocator = virtual.arena_allocator(&e.arena)
-	if len(s.nodes) == 0 {
-		song.graph_build(s) // a song built by hand
-	}
 	e.tracks = make([]Track_Run, len(s.tracks))
 	slots_total, fx_total := 0, 0
 	for t, ti in s.tracks {
@@ -201,9 +201,7 @@ engine_init :: proc(e: ^Engine, s: ^song.Song) -> bool {
 	e.order, loops = song.graph_order(s)
 	looped := make([]bool, len(s.edges), context.temp_allocator)
 	for i in loops {
-		looped[i] = true
-		x := s.edges[i]
-		base.report(&s.findings, "routing_loop", .Error, "routing", "routing: %s into %s closes a loop; that path is left out", song.node_name(s, x.from), song.node_name(s, x.to))
+		looped[i] = true // reported when the routing was built
 	}
 	for x, i in s.edges {
 		if looped[i] {

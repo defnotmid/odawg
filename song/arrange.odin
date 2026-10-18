@@ -968,10 +968,25 @@ add_transitions :: proc(song: ^Song, work: ^Work) {
 				append(&song.regions, Region{song.tracks[ti].part, at, at + 2.5, source})
 			}
 		case .Fill:
-			// a snare roll over the last beat, on the outgoing groove's kit: its
-			// first track of a fill instrument that plays pads there
+			// a snare roll over the last beat, on the outgoing groove's kit: the
+			// drums part's track of a fill instrument that plays pads there, else
+			// the first such track (a crash on a drum machine of its own isn't
+			// the kit)
+			kit := -1
 			for t, ti in song.tracks {
 				if song.devices[t.instrument] not_in FILL_INSTRUMENTS || t.variant != prev.style || !plays_pads(work.notes[ti][:]) {
+					continue
+				}
+				if song.parts[t.part] == "drums" {
+					kit = ti
+					break
+				}
+				if kit < 0 {
+					kit = ti
+				}
+			}
+			for t, ti in song.tracks {
+				if ti != kit {
 					continue
 				}
 				last := next.beat - 1

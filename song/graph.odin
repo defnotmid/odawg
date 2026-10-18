@@ -132,6 +132,13 @@ graph_build :: proc(s: ^Song) {
 		}
 	}
 	graph_sort_edges(s)
+	// a loop is reported once, here, where the routing is made (the engines
+	// that walk it only read the song)
+	_, loops := graph_order(s, context.temp_allocator)
+	for i in loops {
+		x := s.edges[i]
+		base.report(&s.findings, "routing_loop", .Error, "routing", "routing: %s into %s closes a loop; that path is left out", node_name(s, x.from), node_name(s, x.to))
+	}
 }
 
 // The node a route names: a bus, a return or a part by name (in that
