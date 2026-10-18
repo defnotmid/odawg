@@ -7,6 +7,7 @@ import "core:strings"
 import base "../base"
 import device "../device"
 import tempo "../tempo"
+import theory "../theory"
 
 // Reading a spec is one walk driven by tables: each record type is a table
 // of fields (its key, how its value is read, where it lands), and each way
@@ -51,6 +52,8 @@ Field_Kind :: enum u8 {
 	Room, // the spec: room spans
 	Styles, // the spec: its own styles by name
 	Buses, // the spec: its buses by name
+	Sets, // the spec: its sample sets by name
+	Note, // f64 MIDI: "C3", "F#2" or a number
 }
 
 Field_Row :: struct {
@@ -89,6 +92,8 @@ FIELD_READERS := [Field_Kind]Field_Reader {
 	.Room      = read_room_field,
 	.Styles    = read_styles_field,
 	.Buses     = read_buses_field,
+	.Sets      = read_sets_field,
+	.Note      = read_note_field,
 }
 
 SPEC_FIELDS := []Field_Row {
@@ -113,6 +118,7 @@ SPEC_FIELDS := []Field_Row {
 	{"room", .Room, 0},
 	{"styles", .Styles, 0},
 	{"buses", .Buses, 0},
+	{"sets", .Sets, 0},
 	{"description", .Ignore, 0},
 }
 
@@ -188,6 +194,27 @@ MARKER_FIELDS := []Field_Row {
 	{"at", .Time, offset_of(Marker_Spec, at)},
 }
 
+SET_FIELDS := []Field_Row {
+	{"gain_db", .Number, offset_of(Set_Spec, gain_db)},
+	{"credit", .String, offset_of(Set_Spec, credit)},
+	{"loop", .Bool, offset_of(Set_Spec, loop)},
+	{"pads", .Ignore, 0}, // read by read_sets_field, so a set's zones stay contiguous
+	{"zones", .Ignore, 0},
+}
+
+SET_ZONE_FIELDS := []Field_Row {
+	{"name", .String, offset_of(Set_Zone_Spec, file)},
+	{"file", .String, offset_of(Set_Zone_Spec, file)},
+	{"root", .Note, offset_of(Set_Zone_Spec, root)},
+	{"lo", .Note, offset_of(Set_Zone_Spec, lo)},
+	{"hi", .Note, offset_of(Set_Zone_Spec, hi)},
+	{"lo_velocity", .Number, offset_of(Set_Zone_Spec, lo_velocity)},
+	{"hi_velocity", .Number, offset_of(Set_Zone_Spec, hi_velocity)},
+	{"gain_db", .Number, offset_of(Set_Zone_Spec, gain_db)},
+	{"one_shot", .Number, offset_of(Set_Zone_Spec, one_shot)},
+	{"offset", .Number, offset_of(Set_Zone_Spec, offset)},
+}
+
 BUS_FIELDS := []Field_Row {
 	{"effects", .Chain, offset_of(Bus_Spec, chain)},
 	{"to", .String, offset_of(Bus_Spec, to)},
@@ -240,6 +267,7 @@ spec_init :: proc(s: ^Spec, allocator := context.allocator) {
 	s.values.allocator, s.chain.allocator, s.sends.allocator = allocator, allocator, allocator
 	s.returns.allocator, s.markers.allocator, s.room.allocator = allocator, allocator, allocator
 	s.strings.allocator, s.styles.allocator, s.buses.allocator = allocator, allocator, allocator
+	s.sets.allocator, s.set_zones.allocator = allocator, allocator
 }
 
 // Reads a spec from a value; context.allocator holds it (give it an arena).
@@ -758,6 +786,105 @@ read_markers_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr)
 			base.report(r.findings, "bad_value", .Error, mp, "%s: a marker needs a name", mp)
 		}
 	}
+}
+
+// sets = { name = { pads = { kick = "kick.wav", snare = { "snare.wav", gain_db = -2 } },
+// zones = { { "C3.wav", root = "C3" }, ... }, gain_db, credit, loop } }
+@(private = "file")
+read_sets_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
+	o, ok := v.(json.Object)
+	if !ok {
+		bad(r, path, "{ name = { pads or zones } } per set")
+		return
+	}
+	names := make([dynamic]string, context.temp_allocator)
+	for k in o {
+		append(&names, k)
+	}
+	slice.sort(names[:])
+	zone :: proc() -> Set_Zone_Spec {
+		return {root = UNSET, lo = UNSET, hi = UNSET, lo_velocity = 0, hi_velocity = 127, one_shot = UNSET}
+	}
+	for name in names {
+		sp := base.path_join(path, name, context.allocator)
+		set := Set_Spec{name = strings.clone(name)}
+		if !read_record(r, o[name], sp, SET_FIELDS, &set) {
+			continue
+		}
+		set.zones.first = i32(len(r.spec.set_zones))
+		so := o[name].(json.Object)
+		// pads: a file (or a zone's record) per drum pad
+		if pads, has := so["pads"]; has {
+			po, is_object := pads.(json.Object)
+			if !is_object {
+				bad(r, base.path_join(sp, "pads"), "{ kick = \"kick.wav\", ... }")
+			}
+			keys := make([dynamic]string, context.temp_allocator)
+			for k in po {
+				append(&keys, k)
+			}
+			slice.sort(keys[:])
+			for k in keys {
+				zp := base.path_join(base.path_join(sp, "pads"), k)
+				pad, is_pad := device.pad_from_name(k)
+				if !is_pad || pad == .None {
+					base.report(r.findings, "bad_value", .Error, zp, "%s: %q is not a drum pad", zp, k)
+					continue
+				}
+				z := zone()
+				z.pad = pad
+				if f, is_file := po[k].(json.String); is_file {
+					z.file = strings.clone(f)
+				} else if !read_record(r, po[k], zp, SET_ZONE_FIELDS, &z) {
+					continue
+				}
+				append(&r.spec.set_zones, z)
+			}
+		}
+		// zones: a file per key range and velocity range
+		if zones, has := so["zones"]; has {
+			za, is_list := zones.(json.Array)
+			if !is_list {
+				bad(r, base.path_join(sp, "zones"), "a list of { file, root, lo, hi, ... }")
+			}
+			for x, i in za {
+				zp := base.path_index(base.path_join(sp, "zones"), i + 1)
+				z := zone()
+				if f, is_file := x.(json.String); is_file {
+					z.file = strings.clone(f)
+				} else if !read_record(r, x, zp, SET_ZONE_FIELDS, &z) {
+					continue
+				}
+				append(&r.spec.set_zones, z)
+			}
+		}
+		set.zones.count = i32(len(r.spec.set_zones)) - set.zones.first
+		for z in r.spec.set_zones[set.zones.first:] {
+			if z.file == "" {
+				base.report(r.findings, "bad_value", .Error, sp, "%s: a zone needs its file", sp)
+			}
+		}
+		if set.zones.count == 0 {
+			base.report(r.findings, "bad_value", .Error, sp, "%s: a set needs pads or zones", sp)
+			continue
+		}
+		append(&r.spec.sets, set)
+	}
+}
+
+@(private = "file")
+read_note_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
+	if n, ok := number_from_value(v); ok {
+		(^f64)(dst)^ = n
+		return
+	}
+	if s, ok := v.(json.String); ok {
+		if p, is_pitch := theory.pitch_from_string(s); is_pitch {
+			(^f64)(dst)^ = f64(p)
+			return
+		}
+	}
+	bad(r, path, "a note (\"C3\", \"F#2\") or a MIDI number")
 }
 
 @(private = "file")

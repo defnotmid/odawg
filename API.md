@@ -123,7 +123,7 @@ song { "score",
   bpm = 120, time_signature = 4, key = "A minor", seed = 1, swing = 0,
   duration = nil,                    -- optional target length in seconds (§3.2)
   gain_db = -10,                     -- the whole song's level, headroom for a mix: replaces -10, isn't added to it
-  from = nil,                        -- "track.mp3" | "score.odawg": a song from a file (§3.5)
+  from = nil,                        -- "track.mp3" | "score.odawg": a song from a file (§3.6)
 
   sections = {
     { "intro", duration = "8m", bpm = 84, style = "lofi", energy = 0.3, chords = "Am7 Fmaj7 C G" },
@@ -200,7 +200,53 @@ parts, returns, swing } }` join the shipped ones by name (a name of its own wins
 shipped set: `acid_house`, `ambient`, `booty_house`, `chicago_house`, `house`, `lofi`,
 `synthwave`.
 
-### 3.5 From a file
+A style can also be a file: a section's `style = "styles/french_disco.json"` (a name with a
+`/` or ending in `.json`) is read from the song's folder, in the same shape as odawg's
+`styles/*.json`. `spec.style_files` lists the ones a song names, and the host hands each
+one's text back with `spec.spec_add_style_text` before composing. A style the song defines
+itself under `styles` wins over a file of the same name.
+
+### 3.5 Sample sets of your own
+
+A Sampler's `set` names a set from one of three places, tried in this order:
+
+| source | written as | its zones |
+| --- | --- | --- |
+| the song's own | `sets = { my_kit = { ... } }` | pads and zones, as written |
+| an SFZ file | `set = "piano/piano.sfz"` | the file's regions |
+| the register | `set = "vcsl/upright_piano"` | pinned, fetched on first use |
+
+```lua
+sets = {
+  kit  = { pads = { kick = "kit/kick.wav", snare = "kit/snare.wav", hat = "kit/hat.wav" },
+           credit = "my kit (CC0)" },
+  keys = { zones = { { file = "keys/c3.wav", root = "C3" },
+                     { file = "keys/c4.wav", root = "C4", hi_velocity = 90 },
+                     { file = "keys/c4_hard.wav", root = "C4", lo_velocity = 91, gain_db = -2 } },
+           loop = true },                                  -- the files' own loops sustain
+},
+parts = { drums = { instrument = { "Sampler", set = "kit" } },
+          piano = { instrument = { "Sampler", set = "keys" } } },
+```
+
+- A pad sits at its General MIDI key and plays as a one-shot. A zone answers the keys
+  around its `root`: without `lo` and `hi`, each zone's keys run halfway to the next root
+  above and below, within its velocity range. Zones also take `gain_db`, `one_shot` and
+  `offset` (frames into the file).
+- Files are read at their own rate and played at the right pitch. Nothing is resampled
+  when it loads.
+- SFZ reads the opcodes that place and play a sample. These are `sample`, `key`, `lokey`,
+  `hikey`, `pitch_keycenter`, `lovel`, `hivel`, `volume`, `tune`, `offset`, the loop modes
+  and points, and `seq_position` (zones that answer the same keys and velocities take
+  turns). Headers inherit as SFZ has it, from `<global>` down to `<region>`, and paths
+  come after `default_path`. Any other opcode is an `unsupported_opcode` info finding.
+  Release-triggered regions are left out, and the rest of the file still plays.
+- A set is keyed by its content. When a file changes, its set is declared again, and the
+  song's `files` list (from `bank_declare_spec`) is what a host watches.
+- The samples are yours: odawg never commits, fetches or redistributes them. `credit` is
+  what `odawg credits` prints.
+
+### 3.6 From a file
 
 `from = "track.mp3"` builds a song from audio. Tempo, beats and energy come from analysis,
 and `sections = { { "verse", at = 0 }, { "chorus", at = "16m" } }` names spans in the file's
@@ -209,7 +255,7 @@ sections.
 
 `from = "score.odawg"` opens a project a GUI saved. Its sections still resize.
 
-### 3.6 Routing
+### 3.7 Routing
 
 A song is a graph of nodes: each track (its voices and effects), each part (its tracks
 summed), each return, each bus the spec names, and the master. Edges carry sound from one
@@ -320,14 +366,19 @@ import device "deps:odawg/device"
 
 s: spec.Spec
 spec.spec_from_json(text, &s, &findings)          // onimite: spec.spec_from_value(lua_table_as_json, ...)
-names: [dynamic]string
-spec.asset_names(&s, &names)
-assets.bank_declare(&bank, names[:], &findings)   // sample sets: rows only, nothing read
+styles: [dynamic]string
+spec.style_files(&s, &styles)                     // style files the song names: read each, then
+spec.spec_add_style_text(&s, name, text, &findings)
+host := assets.Bank_Host{root = folder}           // where the song's own files are; or the host's
+                                                  // read (decoded, lent), text and stamp procs
+files: [dynamic]string
+assets.bank_declare_spec(&bank, &s, &findings, &host, &files)   // every set the Samplers name:
+                                                  // the song's own, SFZ, the register's (rows only)
 g: song.Song
 song.song_from_spec(&s, &g, &bank)                // the form, the arrangement, the note table
 needs: [dynamic]device.Sample_Need
 song.sample_needs(&g, &needs)
-assets.bank_load(&bank, needs[:], &findings)      // only the zones the notes reach (fetched on first use)
+assets.bank_load(&bank, needs[:], &findings, host = &host)   // only the zones the notes reach
 song.seconds_from_position(&g, "drop@1m")         // the time grammar; beat_from_position, beats_from_range
 song.pulse_from_seconds(&g, t, {part = "drums", note = "kick"}, 8)
 song.notes_from_filter(&g, {part = "drums", note = "clap", range = "drop"}, &out)

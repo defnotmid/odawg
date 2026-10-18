@@ -511,7 +511,7 @@ voice_pluck_synth :: proc(s: ^Voice_State, p: ^Params, n: Note, seed: u64, at: i
 
 // PluckSynth's tail: the burst, then the string ringing until the release
 // has taken its feedback away or it has fallen 80 dB.
-tail_pluck_synth :: proc(p: ^Params, n: Note) -> f64 {
+tail_pluck_synth :: proc(p: ^Params, n: Note, env: ^Voice_Env) -> f64 {
 	period := 1 / note_hz(.Pluck_Synth, n)
 	res := f64(p[.Resonance])
 	ring := 30.0

@@ -261,7 +261,8 @@ declare_set :: proc(bank: ^device.Bank, s: ^Set_Row) -> Error {
 	zones := set_zones(s)
 	first_zone := i32(len(bank.zones))
 	for &z in zones {
-		file, ok := file_index_from_path(s.source, z.path)
+		register, ok := file_index_from_path(s.source, z.path)
+		file := bank_file_register(bank, register)
 		if !ok {
 			resize(&bank.zones, int(first_zone))
 			resize(&bank.zone_file, int(first_zone))
@@ -287,6 +288,7 @@ declare_set :: proc(bank: ^device.Bank, s: ^Set_Row) -> Error {
 			sequence = sequence,
 			gain = f32(base.db_to_gain(f64(z.gain_db + s.gain_db + s.level_db))),
 			one_shot = z.one_shot,
+			loop_to = device.LOOP_FROM_FILE,
 		})
 		append(&bank.zone_file, file)
 	}
@@ -324,18 +326,18 @@ bank_declare :: proc(bank: ^device.Bank, names: []string, findings: ^base.Findin
 // own channels at its own rate (a Sampler reads it at RATE). A file that
 // can't be had is a finding; the rest load. True when every needed zone is
 // loaded.
-bank_load :: proc(bank: ^device.Bank, needs: []device.Sample_Need, findings: ^base.Findings, progress: Progress = progress_stderr) -> bool {
+bank_load :: proc(bank: ^device.Bank, needs: []device.Sample_Need, findings: ^base.Findings, progress: Progress = progress_stderr, host: ^Bank_Host = nil) -> bool {
 	root, rerr := data_dir(context.temp_allocator)
 	if rerr != nil {
 		base.report(findings, "asset_unavailable", .Error, "", "no data folder for sample sets: %s", rerr.?)
 		return false
 	}
-	return bank_load_at(bank, root, needs, findings, progress)
+	return bank_load_at(bank, root, needs, findings, progress, host = host)
 }
 
 // bank_load with the files under `root`; trust_disk: use the files there as
 // they are, unverified and never fetched (a test's own stand-ins).
-bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Need, findings: ^base.Findings, progress: Progress = progress_stderr, trust_disk := false) -> bool {
+bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Need, findings: ^base.Findings, progress: Progress = progress_stderr, trust_disk := false, host: ^Bank_Host = nil) -> bool {
 	init_tables(bank)
 	// the files the needs reach, once each, with the zones that play them
 	Wanted :: struct {
@@ -399,9 +401,13 @@ bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Ne
 		name := bank.sets[m.set].name
 		base.report(findings, "asset_unavailable", .Error, name, "%s: %d of its files can't be had (%s); they play once they can be", name, m.count, m.why)
 	}
-	// fetched first where they aren't on disk (on first use)
+	// the register's fetched first where they aren't on disk (on first use)
 	for &w in wanted {
-		if err := trust_disk ? nil : ensure_file(root, &FILE_TABLE[w.file]); err != nil {
+		bf := bank.files[w.file]
+		if bf.register < 0 {
+			continue
+		}
+		if err := trust_disk ? nil : ensure_file(root, &FILE_TABLE[bf.register]); err != nil {
 			miss(&missing, w.set, err.?)
 			w.file, ok = -1, false
 		}
@@ -411,7 +417,18 @@ bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Ne
 	// bank, in order
 	jobs := make([]Decode_Job, len(wanted), context.temp_allocator)
 	for w, k in wanted {
-		jobs[k] = {file = w.file, root = root}
+		jobs[k] = {file = -1, host = host}
+		if w.file < 0 {
+			continue
+		}
+		bf := bank.files[w.file]
+		jobs[k].file = w.file
+		if bf.register >= 0 {
+			f := &FILE_TABLE[bf.register]
+			jobs[k].path, jobs[k].name = file_path(root, f), f.path
+		} else {
+			jobs[k].path, jobs[k].name, jobs[k].hosted = host_path(host, bf.path), bf.path, host != nil && host.read != nil
+		}
 	}
 	decode_all(jobs)
 	for &j, k in jobs {
@@ -424,14 +441,23 @@ bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Ne
 			ok = false
 			continue
 		}
-		chunk, values := device.bank_chunk_i16(bank, len(j.pcm))
-		copy(values, j.pcm)
-		delete(j.pcm, runtime.heap_allocator())
 		sample := i32(len(bank.samples))
-		append(&bank.samples, device.Sample{chunk = chunk, frames = i64(len(values) / j.channels), channels = u8(j.channels), format = .I16, rate = i32(j.rate)})
+		if j.hosted {
+			// the host's own decode, lent: not copied, not ours to free
+			append(&bank.f32s, j.lent)
+			append(&bank.samples, device.Sample{chunk = i32(len(bank.f32s) - 1), frames = i64(len(j.lent) / j.channels), channels = u8(min(j.channels, 255)), format = .F32, rate = i32(j.rate)})
+		} else {
+			chunk, values := device.bank_chunk_i16(bank, len(j.pcm))
+			copy(values, j.pcm)
+			delete(j.pcm, runtime.heap_allocator())
+			append(&bank.samples, device.Sample{chunk = chunk, frames = i64(len(values) / j.channels), channels = u8(j.channels), format = .I16, rate = i32(j.rate)})
+		}
 		for zi in w.zones {
 			z := &bank.zones[zi]
-			z.sample, z.loop_from, z.loop_to = sample, i32(j.loop_from), i32(j.loop_to)
+			z.sample = sample
+			if z.loop_to == device.LOOP_FROM_FILE {
+				z.loop_from, z.loop_to = i32(j.loop_from), i32(j.loop_to)
+			}
 		}
 	}
 	return ok
@@ -441,9 +467,13 @@ bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Ne
 // most two channels on the heap, at its own rate, its loop; or why not).
 @(private = "file")
 Decode_Job :: struct {
-	file:                i32, // into FILE_TABLE (-1: not to decode)
-	root:                string,
+	file:                i32, // into the bank's files (-1: not to decode)
+	path:                string, // where to read it
+	name:                string, // what a finding calls it
+	host:                ^Bank_Host,
+	hosted:              bool, // the host decodes it (lent)
 	pcm:                 []i16,
+	lent:                []f32,
 	channels, rate:      int,
 	loop_from, loop_to:  i64,
 	err:                 string,
@@ -465,15 +495,24 @@ decode_all :: proc(jobs: []Decode_Job) {
 		defer virtual.arena_destroy(&scratch)
 		context.allocator = virtual.arena_allocator(&scratch)
 		context.temp_allocator = virtual.arena_allocator(&scratch)
-		f := &FILE_TABLE[j.file]
-		data, rerr := os.read_entire_file(file_path(j.root, f), context.allocator)
-		if rerr != nil {
-			j.err = fmt.aprintf("%s can't be read", f.path, allocator = runtime.heap_allocator())
+		if j.hosted {
+			got, read_ok := j.host.read(j.host.data, j.name)
+			if !read_ok || got.channels <= 0 || len(got.samples) == 0 {
+				j.err = fmt.aprintf("%s can't be read", j.name, allocator = runtime.heap_allocator())
+				return
+			}
+			j.lent, j.channels, j.rate = got.samples, got.channels, got.rate > 0 ? got.rate : device.RATE
+			j.loop_from, j.loop_to = got.loop_from, got.loop_to
 			return
 		}
-		d, derr := decode(f.path, data)
+		data, rerr := os.read_entire_file(j.path, context.allocator)
+		if rerr != nil {
+			j.err = fmt.aprintf("%s can't be read", j.name, allocator = runtime.heap_allocator())
+			return
+		}
+		d, derr := decode(j.path, data)
 		if derr != nil {
-			j.err = fmt.aprintf("%s can't be decoded", f.path, allocator = runtime.heap_allocator())
+			j.err = fmt.aprintf("%s can't be decoded", j.name, allocator = runtime.heap_allocator())
 			return
 		}
 		j.channels = clamp(d.channels, 1, 2)
@@ -519,7 +558,7 @@ bank_from_names :: proc(bank: ^device.Bank, names: []string, findings: ^base.Fin
 }
 
 // The bank's tables keep the caller's allocator; decoding happens in scratch.
-@(private = "file")
+@(private)
 init_tables :: proc(bank: ^device.Bank) {
 	if bank.f32s.allocator.procedure == nil {
 		bank.f32s.allocator = context.allocator
@@ -541,6 +580,9 @@ init_tables :: proc(bank: ^device.Bank) {
 	}
 	if bank.sets.allocator.procedure == nil {
 		bank.sets.allocator = context.allocator
+	}
+	if bank.files.allocator.procedure == nil {
+		bank.files.allocator = context.allocator
 	}
 }
 

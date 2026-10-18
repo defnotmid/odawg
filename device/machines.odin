@@ -396,7 +396,7 @@ row_longest :: proc "contextless" (row: ^Circuit_Row) -> (longest: f32, last_sta
 	return longest, f32(max(row.bursts - 1, 0)) * row.spacing * (1 + DRIFT_SPACING)
 }
 
-tail_drum_machine :: proc(p: ^Params, n: Note) -> f64 {
+tail_drum_machine :: proc(p: ^Params, n: Note, env: ^Voice_Env) -> f64 {
 	row := drum_row(p, n)
 	longest, start := row_longest(row)
 	// 8 time constants: -70 dB
@@ -421,7 +421,7 @@ drum_start :: proc(s: ^Drum_State, p: ^Params, n: Note, seed: u64) {
 	s.dscale = knob_or(p[.Decay], 1) * f32(decay_drift)
 	s.tone = clamp(p[.Tone], 0, 1) - 0.5
 	s.gain = row.level * n.velocity * f32(level_drift)
-	s.length = i64(math.ceil(tail_drum_machine(p, n) * RATE))
+	s.length = i64(math.ceil(tail_drum_machine(p, n, nil) * RATE))
 
 	for i in 0 ..< 6 {
 		s.amp[i] = 1
@@ -682,7 +682,7 @@ Acid_State :: struct {
 
 #assert(size_of(Acid_State) <= VOICE_STATE_SIZE)
 
-tail_acid_synth :: proc(p: ^Params, n: Note) -> f64 {
+tail_acid_synth :: proc(p: ^Params, n: Note, env: ^Voice_Env) -> f64 {
 	// the gate, the release to -100 dB, the ladder's ring
 	return max(n.duration, 0) + 12 * ACID_RELEASE + 0.02
 }

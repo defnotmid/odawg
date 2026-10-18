@@ -332,7 +332,7 @@ voice_stab :: proc(s: ^Voice_State, p: ^Params, n: Note, seed: u64, at: i64, env
 	return chord(st, at, l, r)
 }
 
-tail_chord :: proc(p: ^Params, n: Note) -> f64 {return n.duration}
+tail_chord :: proc(p: ^Params, n: Note, env: ^Voice_Env) -> f64 {return n.duration}
 
 // A low-passed square pluck for arps.
 voice_pluck :: proc(s: ^Voice_State, p: ^Params, n: Note, seed: u64, at: i64, env: ^Voice_Env, l, r: []f32) -> bool {
@@ -415,7 +415,7 @@ voice_bell :: proc(s: ^Voice_State, p: ^Params, n: Note, seed: u64, at: i64, env
 	return more
 }
 
-tail_bell :: proc(p: ^Params, n: Note) -> f64 {return min(4, 8 / knob(p, .Decay, 2.5))}
+tail_bell :: proc(p: ^Params, n: Note, env: ^Voice_Env) -> f64 {return min(4, 8 / knob(p, .Decay, 2.5))}
 
 // Noise through a low-pass opening from cutoff (300 Hz) to cutoff2 (9300)
 // and a rising sine at `tone`, swelling over the note.
@@ -781,7 +781,7 @@ voice_sub_bass :: proc(s: ^Voice_State, p: ^Params, n: Note, seed: u64, at: i64,
 	return more
 }
 
-tail_sub_bass :: proc(p: ^Params, n: Note) -> f64 {return n.duration + SUB_BASS_RELEASE}
+tail_sub_bass :: proc(p: ^Params, n: Note, env: ^Voice_Env) -> f64 {return n.duration + SUB_BASS_RELEASE}
 
 // ---- the drum kit ------------------------------------------------------------------
 
@@ -1001,13 +1001,13 @@ voice_drum_kit :: proc(s: ^Voice_State, p: ^Params, n: Note, seed: u64, at: i64,
 	return alive
 }
 
-tail_drum_kit :: proc(p: ^Params, n: Note) -> f64 {
+tail_drum_kit :: proc(p: ^Params, n: Note, env: ^Voice_Env) -> f64 {
 	layers := &KIT_TABLE[Kit(u8(p[.Kit]))][note_pad(n)]
 	tail: f64
 	for i in 0 ..< len(layers) {
 		if layers[i].gain != 0 {
 			lp, ln := layer_setup(layers, i, n)
-			tail = max(tail, note_tail(layers[i].kind, &lp, ln))
+			tail = max(tail, note_tail(layers[i].kind, &lp, ln, env))
 		}
 	}
 	return tail

@@ -152,18 +152,27 @@ load :: proc(a: ^Args, l: ^Loaded) -> bool {
 		print_findings(l.findings[:])
 		return false
 	}
-	// sample sets: declared before composing (names to indices), then only
-	// the zones the notes reach loaded (fetched on first use)
-	names := make([dynamic]string)
-	spec.asset_names(&l.spec, &names)
-	if len(names) > 0 {
-		assets.bank_declare(&l.bank, names[:], &l.findings)
+	// the song's own files are from its folder: style files read in first,
+	// then its sample sets declared (names to indices: the register's, its
+	// own, SFZ files), then only the zones the notes reach loaded (the
+	// register's fetched on first use)
+	host := assets.Bank_Host{root = filepath.dir(path)}
+	styles := make([dynamic]string)
+	spec.style_files(&l.spec, &styles)
+	for name in styles {
+		text, rerr := os.read_entire_file(assets.host_path(&host, name), context.allocator)
+		if rerr != nil {
+			base.report(&l.findings, "missing_file", .Error, name, "style file %s can't be read", name)
+			continue
+		}
+		spec.spec_add_style_text(&l.spec, name, string(text), &l.findings)
 	}
+	assets.bank_declare_spec(&l.bank, &l.spec, &l.findings, &host)
 	ok := song.song_from_spec(&l.spec, &l.song, &l.bank)
-	if ok && len(names) > 0 {
+	if ok && len(l.bank.sets) > 0 {
 		needs := make([dynamic]device.Sample_Need)
 		song.sample_needs(&l.song, &needs)
-		assets.bank_load(&l.bank, needs[:], &l.findings)
+		assets.bank_load(&l.bank, needs[:], &l.findings, host = &host)
 	}
 	append(&l.findings, ..l.song.findings[:])
 	return ok
@@ -426,13 +435,14 @@ run_at :: proc(a: ^Args) -> bool {
 	}
 	b := tempo.beat_from_seconds(&s.tempo, t)
 	fmt.printfln("%.3fs  section %s bar %d beat %.2f (%.0f%% through)  %.1f bpm  chord %s", t, place.name, place.bar + 1, place.beat + 1, place.progress * 100, tempo.bpm_from_beat(&s.tempo, b), chord_name(song.chord_from_beat(s, b)))
+	env := device.Voice_Env{bank = s.bank}
 	for tr in s.tracks {
 		kind := s.devices[tr.instrument]
 		p := s.params[tr.instrument]
 		for i in tr.notes.first ..< base.span_end(tr.notes) {
 			n := s.notes[i]
 			note := device.Note{n.time, n.duration, n.pitch, n.velocity, n.pad}
-			if n.time <= t && t < n.time + device.note_tail(kind, &p, note) {
+			if n.time <= t && t < n.time + device.note_tail(kind, &p, note, &env) {
 				what := n.pad != .None ? device.PAD_NAMES[n.pad] : theory.string_from_pitch(n.pitch)
 				state := t < n.time + n.duration ? "held" : "ringing"
 				fmt.printfln("  %-10s %-8s from %.3fs  %s", s.parts[tr.part], what, n.time, state)

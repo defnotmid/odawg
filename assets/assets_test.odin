@@ -363,6 +363,7 @@ test_bank_offline :: proc(t: ^testing.T) {
 	os.set_env("HTTPS_PROXY", "http://127.0.0.1:9")
 	findings := make(base.Findings, context.temp_allocator)
 	bank: device.Bank
+	defer device.bank_destroy(&bank)
 	quiet :: proc(message: string) {}
 	ok := bank_from_names(&bank, {"vcsl/upright_piano", "no/such_set"}, &findings, quiet)
 	testing.expect(t, !ok)

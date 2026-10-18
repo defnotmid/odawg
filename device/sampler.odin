@@ -27,9 +27,8 @@ SINC_STEPS :: 512
 // The widest a kernel gets, shifting up: two octaves (beyond, it aliases).
 SINC_MAX_STRETCH :: 4
 
-// Seconds a drum note (a one-shot) may ring: the engine can't ask the bank
-// how long the sample is, so the note's tail is this and the voice ends it
-// when its sample does.
+// Seconds a drum note may ring before its samples are loaded (then, their
+// own length).
 SAMPLER_ONE_SHOT_TAIL :: 8.0
 
 // The shortest release, so a cut never clicks: 3 ms.
@@ -89,6 +88,7 @@ Sampler_State :: struct {
 	length:    i64, // its frames
 	loop_from: i64,
 	loop_to:   i64, // <= loop_from: no loop
+	offset:    i64, // the frame a note starts at
 	step:      f64, // sample frames per output sample
 	cutoff:    f64, // the kernel's, relative to the sample's Nyquist
 	taps:      int, // on each side
@@ -120,18 +120,7 @@ zone_for :: proc(bank: ^Bank, set: int, key, velocity: int, seed: u64) -> i32 {
 		return -1
 	}
 	span := bank.sets[set].zones
-	best_key, best_vel, count := max(int), max(int), 0
-	for i in span.first ..< base.span_end(span) {
-		z := &bank.zones[i]
-		dk := range_distance(key, int(z.lo_key), int(z.hi_key))
-		dv := range_distance(velocity, int(z.lo_velocity), int(z.hi_velocity))
-		switch {
-		case dk < best_key || (dk == best_key && dv < best_vel):
-			best_key, best_vel, count = dk, dv, 1
-		case dk == best_key && dv == best_vel:
-			count += 1
-		}
-	}
+	best_key, best_vel, count := zone_nearest(bank, set, key, velocity)
 	if count == 0 {
 		return -1
 	}
@@ -146,6 +135,26 @@ zone_for :: proc(bank: ^Bank, set: int, key, velocity: int, seed: u64) -> i32 {
 		}
 	}
 	return -1
+}
+
+// How near the zones of `set` nearest a note come (keys, then velocities
+// away), and how many are that near: the ones zone_for picks among.
+@(private = "file")
+zone_nearest :: proc(bank: ^Bank, set: int, key, velocity: int) -> (best_key, best_vel, count: int) {
+	best_key, best_vel = max(int), max(int)
+	span := bank.sets[set].zones
+	for i in span.first ..< base.span_end(span) {
+		z := &bank.zones[i]
+		dk := range_distance(key, int(z.lo_key), int(z.hi_key))
+		dv := range_distance(velocity, int(z.lo_velocity), int(z.hi_velocity))
+		switch {
+		case dk < best_key || (dk == best_key && dv < best_vel):
+			best_key, best_vel, count = dk, dv, 1
+		case dk == best_key && dv == best_vel:
+			count += 1
+		}
+	}
+	return
 }
 
 @(private = "file")
@@ -169,6 +178,7 @@ sampler_start :: proc(st: ^Sampler_State, p: ^Params, n: Note, seed: u64, env: ^
 	st.zone = zi
 	st.length = bank.samples[z.sample].frames
 	st.loop_from, st.loop_to = i64(z.loop_from), i64(z.loop_to)
+	st.offset = i64(max(z.offset, 0))
 	if st.loop_to > st.length || st.loop_to - st.loop_from < 2 {
 		st.loop_to = st.loop_from // not a usable loop
 	}
@@ -253,7 +263,7 @@ sampler_run :: proc(st: ^Sampler_State, data: []$T, channels: int, scale: f32, a
 		if done {
 			return false
 		}
-		pos := f64(k) * st.step
+		pos := f64(st.offset) + f64(k) * st.step
 		if looped && pos >= f64(st.loop_to) {
 			pos = f64(st.loop_from) + math.mod(pos - f64(st.loop_from), f64(loop_len))
 		}
@@ -296,12 +306,51 @@ sampler_run :: proc(st: ^Sampler_State, data: []$T, channels: int, scale: f32, a
 	return true
 }
 
-// A held note sounds for its gate and release; a drum note (whose zone is a
-// one-shot) for SAMPLER_ONE_SHOT_TAIL at most, the voice ending it with its
-// sample.
-tail_sampler :: proc(p: ^Params, n: Note) -> f64 {
-	if n.pad != .None {
-		return SAMPLER_ONE_SHOT_TAIL
+// What the zones the note can play make of it (of a round robin, the
+// longest): a one-shot to its sample's end, a held note its gate and
+// release, cut short by its sample's end unless it loops. Before the
+// samples are loaded: a drum note SAMPLER_ONE_SHOT_TAIL, a held one its
+// gate and release.
+tail_sampler :: proc(p: ^Params, n: Note, env: ^Voice_Env) -> f64 {
+	held := max(n.duration, 0) + max(f64(p[.Release]), SAMPLER_DECLICK)
+	guess := n.pad != .None ? SAMPLER_ONE_SHOT_TAIL : held
+	if env == nil || env.bank == nil {
+		return guess
 	}
-	return max(n.duration, 0) + max(f64(p[.Release]), SAMPLER_DECLICK)
+	set := int(p[.Sample_Set])
+	if set < 0 || set >= len(env.bank.sets) {
+		return guess
+	}
+	bank := env.bank
+	key := n.pad != .None ? note_from_pad(n.pad) : n.pitch
+	pitch := n.pitch > 0 ? n.pitch : key
+	k, velocity := int(math.round(key)), velocity_midi(n.velocity)
+	best_key, best_vel, _ := zone_nearest(bank, set, k, velocity)
+	span := bank.sets[set].zones
+	tail := 0.0
+	for i in span.first ..< base.span_end(span) {
+		z := &bank.zones[i]
+		if range_distance(k, int(z.lo_key), int(z.hi_key)) != best_key || range_distance(velocity, int(z.lo_velocity), int(z.hi_velocity)) != best_vel {
+			continue
+		}
+		if z.sample < 0 || int(z.sample) >= len(bank.samples) {
+			return guess
+		}
+		sm := bank.samples[z.sample]
+		step := math.pow(2, f64(pitch - z.root) / 12) * device_rate_ratio(sm)
+		// to its last frame, and the kernel's reach past it
+		left := (f64(sm.frames - i64(max(z.offset, 0))) / step + f64(SINC_HALF * SINC_MAX_STRETCH)) / RATE
+		loops := z.loop_to - z.loop_from >= 2 && i64(z.loop_to) <= sm.frames
+		switch {
+		case z.one_shot && loops:
+			tail = max(tail, 30) // rings until the song ends
+		case z.one_shot:
+			tail = max(tail, left)
+		case loops:
+			tail = max(tail, held)
+		case:
+			tail = max(tail, min(held, left))
+		}
+	}
+	return tail
 }

@@ -7,6 +7,8 @@
 package odawg_spec
 
 import "core:encoding/json"
+import "core:fmt"
+import "core:strings"
 import base "../base"
 import device "../device"
 
@@ -50,6 +52,11 @@ Spec :: struct {
 	strings:           [dynamic]string, // an `.Asset` param's name ("vcsl/upright_piano"): its value is the index here
 	styles:            [dynamic]Style_Spec, // the song's own, beside the ones odawg ships
 	buses:             [dynamic]Bus_Spec,
+	sets:              [dynamic]Set_Spec, // the song's own sample sets
+	set_zones:         [dynamic]Set_Zone_Spec,
+	// A style's: the song it is read for, whose sets its parts can name too
+	// (a set the style brings itself wins).
+	outer:             ^Spec,
 }
 
 // A style the song brings: a partial spec like the shipped ones (its parts,
@@ -89,6 +96,32 @@ Part_Spec :: struct {
 	plays:      Span,
 	to:         string, // the bus it goes into ("": the master)
 	key:        string, // the part, return or bus its effects' sidechain hears ("": itself)
+}
+
+// A sample set the song brings, played by a Sampler naming it (`set =
+// "my_kit"`): drum pads or keyed zones over sample files, by their paths as
+// the host resolves them (the CLI: from the spec's folder).
+Set_Spec :: struct {
+	name:    string,
+	zones:   Span, // into set_zones
+	gain_db: f64,
+	credit:  string, // what to credit, for odawg credits and a host's
+	loop:    bool, // its zones' files' loops play (a sustained instrument's)
+}
+
+// A file of a set and what it answers: a drum pad (its General MIDI key, a
+// one-shot) or a key range around its root (UNSET lo and hi: split with
+// the set's other roots at their midpoints), a velocity range.
+Set_Zone_Spec :: struct {
+	file:        string,
+	pad:         device.Pad,
+	root:        f64, // MIDI (UNSET: the pad's key, else 60)
+	lo, hi:      f64, // MIDI keys (UNSET: split)
+	lo_velocity: f64,
+	hi_velocity: f64,
+	gain_db:     f64,
+	one_shot:    f64, // 1 yes, 0 no (UNSET: a pad's is, a key's isn't)
+	offset:      f64, // frames into the file a note starts at
 }
 
 // A bus the spec names: its effects, and where it goes ("": the master).
@@ -200,9 +233,18 @@ Device_Spec :: struct {
 	path:   string,
 }
 
-// The sample sets a spec names (to load into a Bank before composing).
-asset_names :: proc(s: ^Spec, out: ^[dynamic]string) {
-	// the song's own styles play theirs too
+// A sample set a Sampler names, and the spec that says what it is (a set
+// of the song's own, or of one of its styles: nil when the name is the
+// register's or an SFZ file's).
+Asset_Ref :: struct {
+	name:  string,
+	owner: ^Spec,
+}
+
+// The sample sets the song's Samplers name, its own styles' included, each
+// once: what a host declares in its bank (assets.bank_declare_spec).
+// Styles' specs are read into temp memory.
+asset_refs :: proc(s: ^Spec, out: ^[dynamic]Asset_Ref) {
 	for st in s.styles {
 		own := new(Spec, context.temp_allocator)
 		findings := make(base.Findings, context.temp_allocator)
@@ -210,22 +252,109 @@ asset_names :: proc(s: ^Spec, out: ^[dynamic]string) {
 			context.allocator = context.temp_allocator
 			spec_from_value(st.value, own, &findings)
 		}
-		asset_names(own, out)
+		own.outer = s
+		asset_refs(own, out)
 	}
 	for d in s.devices {
 		for v in s.values[d.values.first:base.span_end(d.values)] {
-			if device.PARAM_TABLE[v.param].unit == .Asset {
-				name := s.strings[int(v.value)]
-				found := false
-				for x in out {
-					found ||= x == name
-				}
-				if !found {
-					append(out, name)
-				}
+			if device.PARAM_TABLE[v.param].unit != .Asset {
+				continue
+			}
+			name := s.strings[int(v.value)]
+			_, owner := set_from_name(s, name)
+			found := false
+			for x in out {
+				found ||= x.name == name && x.owner == owner
+			}
+			if !found {
+				append(out, Asset_Ref{name, owner})
 			}
 		}
 	}
+}
+
+// The names asset_refs finds (what bank_declare took before sets of a
+// song's own: the register's names, an SFZ's path).
+asset_names :: proc(s: ^Spec, out: ^[dynamic]string) {
+	refs := make([dynamic]Asset_Ref, context.temp_allocator)
+	asset_refs(s, &refs)
+	for x in refs {
+		append(out, x.name)
+	}
+}
+
+// The set named `name` that `s` reads: its own, else its outer song's
+// (nil: none), and the spec that defines it (its zones are in that spec).
+set_from_name :: proc(s: ^Spec, name: string) -> (set: ^Set_Spec, owner: ^Spec) {
+	for o := s; o != nil; o = o.outer {
+		for &x in o.sets {
+			if x.name == name {
+				return &x, o
+			}
+		}
+	}
+	return nil, nil
+}
+
+// What a Sampler's `set = name` is in the bank: a set of the song's own is
+// its name and a hash of what it is ("my_kit#5f1c09a2": two songs' sets of
+// one name, or a set edited, are different sets); the register's and an
+// SFZ file's, the name as written.
+asset_key :: proc(s: ^Spec, name: string, allocator := context.temp_allocator) -> string {
+	set, owner := set_from_name(s, name)
+	if set == nil {
+		return name
+	}
+	h := base.hash_string(set.name)
+	h = base.hash_combine(h, transmute(u64)set.gain_db)
+	h = base.hash_combine(h, base.hash_string(set.credit))
+	h = base.hash_combine(h, u64(set.loop))
+	for z in owner.set_zones[set.zones.first:base.span_end(set.zones)] {
+		h = base.hash_combine(h, base.hash_string(z.file))
+		h = base.hash_combine(h, u64(z.pad))
+		for x in ([?]f64{z.root, z.lo, z.hi, z.lo_velocity, z.hi_velocity, z.gain_db, z.one_shot, z.offset}) {
+			h = base.hash_combine(h, transmute(u64)x)
+		}
+	}
+	return fmt.aprintf("%s#%08x", name, u32(h ~ (h >> 32)), allocator = allocator)
+}
+
+// The styles the song names that are files ("styles/footwork.json": a name
+// with a / or ending in .json) and that it doesn't define itself: what a
+// host reads and hands back (spec_add_style_text) before composing.
+style_files :: proc(s: ^Spec, out: ^[dynamic]string) {
+	add :: proc(s: ^Spec, out: ^[dynamic]string, name: string) {
+		if name == "" || !(strings.contains(name, "/") || strings.has_suffix(name, ".json")) {
+			return
+		}
+		for st in s.styles {
+			if st.name == name {
+				return
+			}
+		}
+		for x in out {
+			if x == name {
+				return
+			}
+		}
+		append(out, name)
+	}
+	add(s, out, s.style)
+	for sec in s.sections {
+		add(s, out, sec.style)
+	}
+}
+
+// A style file's text, as style `name` of the song (a partial spec in the
+// shape of odawg's styles/*.json). False: not JSON (a finding).
+spec_add_style_text :: proc(s: ^Spec, name, text: string, findings: ^base.Findings) -> bool {
+	v, err := json.parse_string(text, .JSON5, true)
+	if err != nil {
+		base.report(findings, "bad_json", .Error, name, "style %s is not valid JSON (%v)", name, err)
+		return false
+	}
+	append(&s.styles, Style_Spec{strings.clone(name), v})
+	return true
 }
 
 // The device's values: its kind's defaults, then what the spec set, a
@@ -238,7 +367,7 @@ params_from_device :: proc(s: ^Spec, d: i32, beat_seconds: f64, bank: ^device.Ba
 	for v in s.values[dev.values.first:base.span_end(dev.values)] {
 		switch {
 		case device.PARAM_TABLE[v.param].unit == .Asset:
-			set, found := device.bank_set_from_name(bank, s.strings[int(v.value)])
+			set, found := device.bank_set_from_name(bank, asset_key(s, s.strings[int(v.value)]))
 			p[v.param] = f32(set)
 			ok &&= found
 		case v.param not_in dev.beats:

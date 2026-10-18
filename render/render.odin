@@ -44,6 +44,7 @@ Sink :: struct {
 // Seconds of sound past the last section: release tails and reverbs.
 tail_from_song :: proc(s: ^song.Song) -> f64 {
 	end := s.duration
+	env := device.Voice_Env{bank = s.bank}
 	for t in s.tracks {
 		fx := chain_tail(s, t.chain)
 		ret := 0.0
@@ -54,7 +55,7 @@ tail_from_song :: proc(s: ^song.Song) -> f64 {
 		p := s.params[t.instrument]
 		for i in t.notes.first ..< base.span_end(t.notes) {
 			n := note_from_row(s, int(i))
-			end = max(end, n.time + device.note_tail(kind, &p, n) + fx + ret)
+			end = max(end, n.time + device.note_tail(kind, &p, n, &env) + fx + ret)
 		}
 	}
 	return clamp(end - s.duration, 0, 12)

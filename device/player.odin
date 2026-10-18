@@ -79,7 +79,7 @@ player_run :: proc(st: ^Player_State, p: ^Params, n: Note, data: []$T, channels:
 	}
 }
 
-tail_player :: proc(p: ^Params, n: Note) -> f64 {return n.duration}
+tail_player :: proc(p: ^Params, n: Note, env: ^Voice_Env) -> f64 {return n.duration}
 
 // Gain 0..1 `k` samples into a fade of `length` samples.
 @(private = "file")

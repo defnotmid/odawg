@@ -17,11 +17,13 @@ import base "../base"
 Bank :: struct {
 	sets:    [dynamic]Sample_Set,
 	zones:   [dynamic]Zone, // declared with their sets; a zone's sample is -1 until loaded
-	zone_file: [dynamic]i32, // parallel to zones: the loader's id of the file a zone plays
+	zone_file: [dynamic]i32, // parallel to zones: the file a zone plays, into files (-1: none, a lent sample)
+	files:   [dynamic]Bank_File, // the files its zones play, once each
 	samples: [dynamic]Sample,
 	f32s:    [dynamic][]f32, // chunks of float samples, interleaved by their channels
 	i16s:    [dynamic][]i16, // chunks of 16-bit samples, full scale 32768
 	owned:   [dynamic]Chunk, // the chunks this bank made (and frees); the rest are lent or viewed
+	text:    [dynamic]string, // the names and paths it cloned (a register set's name is the register's)
 }
 
 Sample_Format :: enum u8 {
@@ -35,8 +37,18 @@ Chunk :: struct {
 }
 
 Sample_Set :: struct {
-	name:  string, // "vcsl/upright_piano"
+	name:  string, // "vcsl/upright_piano", an inline set's "my_kit#9f3c…", an SFZ's path
 	zones: base.Span, // into zones
+	stamp: u64, // its files' contents when declared (a changed file declares it again)
+}
+
+// A file a set plays: one of the register's (pinned, fetched on first use)
+// or a host's own, by its path as the spec wrote it (relative to the host's
+// root), with what its content was when declared.
+Bank_File :: struct {
+	register: i32, // into the register's files (-1: a path of the host's)
+	path:     string,
+	stamp:    u64,
 }
 
 // Which keys of a set a song plays (the zones answering them are loaded).
@@ -44,6 +56,9 @@ Sample_Need :: struct {
 	set:  i32,
 	keys: bit_set[0 ..< 128;u128],
 }
+
+// A zone's loop_to before loading: take the file's loop (a WAV's smpl).
+LOOP_FROM_FILE :: -2
 
 // A sample's place in its set: the keys and velocities it answers (MIDI,
 // inclusive), the key it was recorded at, and its round-robin group and
@@ -61,7 +76,8 @@ Zone :: struct {
 	pan:         f32, // -1..1
 	one_shot:    bool, // plays to its end whatever the gate (drums)
 	loop_from:   i32, // frames into the sample; loop_to <= loop_from: no loop
-	loop_to:     i32,
+	loop_to:     i32, // declared: LOOP_FROM_FILE (the loader takes the file's), else as given
+	offset:      i32, // frames into the sample a note starts at
 }
 
 Sample :: struct {
@@ -101,6 +117,11 @@ bank_destroy :: proc(b: ^Bank) {
 	delete(b.sets)
 	delete(b.zones)
 	delete(b.zone_file)
+	delete(b.files)
+	for s in b.text {
+		delete(s, b.sets.allocator)
+	}
+	delete(b.text)
 	delete(b.samples)
 	delete(b.f32s)
 	delete(b.i16s)
@@ -127,7 +148,8 @@ bank_view :: proc(dst, src: ^Bank) -> i32 {
 	f0, i0 := i32(len(dst.f32s)), i32(len(dst.i16s))
 	append(&dst.f32s, ..src.f32s[:])
 	append(&dst.i16s, ..src.i16s[:])
-	s0, z0, set0 := i32(len(dst.samples)), i32(len(dst.zones)), i32(len(dst.sets))
+	s0, z0, set0, file0 := i32(len(dst.samples)), i32(len(dst.zones)), i32(len(dst.sets)), i32(len(dst.files))
+	append(&dst.files, ..src.files[:])
 	for sm in src.samples {
 		x := sm
 		x.chunk += sm.format == .F32 ? f0 : i0
@@ -139,19 +161,22 @@ bank_view :: proc(dst, src: ^Bank) -> i32 {
 			x.sample += s0
 		}
 		append(&dst.zones, x)
-		append(&dst.zone_file, src.zone_file[i])
+		f := src.zone_file[i]
+		append(&dst.zone_file, f >= 0 ? f + file0 : f)
 	}
 	for set in src.sets {
-		append(&dst.sets, Sample_Set{set.name, {set.zones.first + z0, set.zones.count}})
+		append(&dst.sets, Sample_Set{set.name, {set.zones.first + z0, set.zones.count}, set.stamp})
 	}
 	return set0
 }
 
+// The set named `name`, its newest declaration (a set declared again when
+// its files changed: earlier songs keep the one they were composed with).
 bank_set_from_name :: proc(b: ^Bank, name: string) -> (i32, bool) {
 	if b == nil {
 		return -1, false
 	}
-	for s, i in b.sets {
+	#reverse for s, i in b.sets {
 		if s.name == name {
 			return i32(i), true
 		}

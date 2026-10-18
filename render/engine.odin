@@ -278,6 +278,7 @@ polyphony_from_track :: proc(s: ^song.Song, t: song.Track) -> int {
 		return 1
 	}
 	p := s.params[t.instrument]
+	env := device.Voice_Env{bank = s.bank}
 	ends := make([dynamic]f64, context.temp_allocator)
 	most := 0
 	for i in t.notes.first ..< base.span_end(t.notes) {
@@ -287,7 +288,7 @@ polyphony_from_track :: proc(s: ^song.Song, t: song.Track) -> int {
 				unordered_remove(&ends, k)
 			}
 		}
-		append(&ends, n.time + device.note_tail(kind, &p, n))
+		append(&ends, n.time + device.note_tail(kind, &p, n, &env))
 		most = max(most, len(ends))
 	}
 	return clamp(most, 1, MAX_POLYPHONY)
@@ -617,7 +618,7 @@ track_seek :: proc(e: ^Engine, ti: int, at: i64, exact: bool) {
 	for i := first; i < first + k; i += 1 {
 		n := note_from_row(s, i)
 		start := i64(math.round(n.time * RATE))
-		if f64(input - start) >= device.note_tail(kind, &p, n) * RATE {
+		if f64(input - start) >= device.note_tail(kind, &p, n, &e.env) * RATE {
 			continue
 		}
 		slot := start_note(e, ti, i32(i), mono, start)
@@ -721,7 +722,7 @@ start_note :: proc(e: ^Engine, ti: int, ni: i32, mono: bool, start: i64) -> int 
 	{
 		t := e.song.tracks[ti]
 		p := e.song.params[t.instrument]
-		tail := i64(math.ceil(device.note_tail(e.song.devices[t.instrument], &p, note_from_row(e.song, int(ni))) * RATE))
+		tail := i64(math.ceil(device.note_tail(e.song.devices[t.instrument], &p, note_from_row(e.song, int(ni)), &e.env) * RATE))
 		run.awake_until = max(run.awake_until, start + tail + run.tail)
 	}
 	first := int(run.slots.first)

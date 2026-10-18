@@ -318,7 +318,7 @@ Voice_Env :: struct {
 Voice_Proc :: #type proc(s: ^Voice_State, p: ^Params, n: Note, seed: u64, at: i64, env: ^Voice_Env, l, r: []f32) -> bool
 // Seconds the note sounds, when the row's rule (`length`, or the gate plus
 // `release`) is not enough.
-Tail_Proc :: #type proc(p: ^Params, n: Note) -> f64
+Tail_Proc :: #type proc(p: ^Params, n: Note, env: ^Voice_Env) -> f64
 // An effect instance's state is bytes the engine sizes once from the params
 // (its delay lines) and keeps. Reset clears its history and puts what moves
 // in time (an LFO, a reverb's drift) where it is at song sample `at`. The
@@ -571,12 +571,12 @@ voice_state_bytes :: proc(kind: Device_Kind) -> int {
 	return ((n > 0 ? n : VOICE_STATE_SIZE) + 15) &~ 15
 }
 
-note_tail :: proc(kind: Device_Kind, p: ^Params, n: Note) -> f64 {
+note_tail :: proc(kind: Device_Kind, p: ^Params, n: Note, env: ^Voice_Env = nil) -> f64 {
 	row := &DEVICE_TABLE[kind]
 	t: f64
 	switch {
 	case row.tail != nil:
-		t = row.tail(p, n)
+		t = row.tail(p, n, env)
 	case row.length > 0:
 		t = f64(row.length)
 	case:
@@ -591,4 +591,4 @@ effect_tail :: proc(kind: Device_Kind, p: ^Params) -> f64 {
 }
 
 // synth.lua's hat lasts its `dur` (the note's), 45 ms when none is given.
-tail_hat :: proc(p: ^Params, n: Note) -> f64 {return n.duration > 0 ? n.duration : 0.045}
+tail_hat :: proc(p: ^Params, n: Note, env: ^Voice_Env) -> f64 {return n.duration > 0 ? n.duration : 0.045}

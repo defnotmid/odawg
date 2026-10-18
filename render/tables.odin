@@ -220,6 +220,7 @@ table_row :: proc(t: ^Table, step: int) -> []f32 {
 // tails).
 sounding_from_song :: proc(s: ^song.Song, part: i32) -> [][2]f64 {
 	out := make([dynamic][2]f64, context.temp_allocator)
+	env := device.Voice_Env{bank = s.bank}
 	for r in s.regions {
 		if part >= 0 && r.part != part {
 			continue
@@ -239,7 +240,7 @@ sounding_from_song :: proc(s: ^song.Song, part: i32) -> [][2]f64 {
 			for i in t.notes.first ..< base.span_end(t.notes) {
 				n := note_from_row(s, int(i))
 				if n.time >= r.start - 1e-9 && n.time < r.stop - 1e-9 {
-					end = max(end, n.time + device.note_tail(kind, &p, n) + fx + ret)
+					end = max(end, n.time + device.note_tail(kind, &p, n, &env) + fx + ret)
 				}
 			}
 		}

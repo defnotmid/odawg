@@ -94,6 +94,7 @@ style_spec :: proc(src: ^Sources, name: string, findings: ^base.Findings) -> ^sp
 		if own.name == name {
 			st := new(spec.Spec)
 			spec.spec_from_value(own.value, st, findings)
+			st.outer = src.own
 			append(&src.styles, st)
 			return st
 		}
@@ -113,6 +114,7 @@ style_spec :: proc(src: ^Sources, name: string, findings: ^base.Findings) -> ^sp
 	}
 	st := new(spec.Spec)
 	spec.spec_from_json(text, st, findings)
+	st.outer = src.own
 	append(&src.styles, st)
 	return st
 }

@@ -227,7 +227,18 @@ test_sampler_pads :: proc(t: ^testing.T) {
 	// a pad with a pitch plays the pad's sample at that pitch
 	l3, _, _ := play(&b, set, {pad = .Snare, pitch = 50, velocity = 1, duration = 0.01}, RATE / 10)
 	testing.expect(t, abs(frequency(l3[100:]) - 600) < 2)
-	testing.expect(t, tail_sampler(nil, {pad = .Kick}) == SAMPLER_ONE_SHOT_TAIL)
+	params := params_from_kind(.Sampler)
+	testing.expect(t, tail_sampler(&params, {pad = .Kick}, nil) == SAMPLER_ONE_SHOT_TAIL) // not loaded: a guess
+	// loaded: the sample's own length (and the kernel's reach), and nothing after it
+	params[.Sample_Set] = f32(set)
+	env := Voice_Env{bank = &b}
+	kick_tail := tail_sampler(&params, {pad = .Kick, velocity = 1}, &env)
+	testing.expectf(t, kick_tail >= 0.2 && kick_tail < 0.21, "a 0.2 s kick's tail is %f", kick_tail)
+	l4, _, _ := play(&b, set, {pad = .Kick, velocity = 1, duration = 0.01}, RATE / 2)
+	testing.expect(t, rms(l4[int(math.ceil(kick_tail * RATE)):]) == 0)
+	// a held note on a sample that doesn't loop: cut by the sample's end
+	held := tail_sampler(&params, {pitch = 36, velocity = 1, duration = 2}, &env)
+	testing.expectf(t, abs(held - kick_tail) < 1e-9, "held %f", held)
 }
 
 // A sample recorded at 44.1 kHz plays in tune at RATE: its rate is part of

@@ -13,7 +13,8 @@ Styles: ambient, house, lofi, synthwave, chicago_house, booty_house,
 acid_house. Instruments: Tone.js's synths, circuit models of the TR-808 and
 TR-909 (`DrumMachine`) and a TB-303-style `AcidSynth` (accent, slide),
 onimite's synth.lua voices, a `Sampler` over licence-checked sample sets
-downloaded on first use, a `Player` for clips. Effects: Tone.js's, causal and
+downloaded on first use, or your own (a set the song writes out, or an SFZ
+file), a `Player` for clips. Styles can be your own files too. Effects: Tone.js's, causal and
 streaming (reverb, delays, chorus, compressor, true-peak limiter, EQ, ...). A sibling
 of ovg, o3d, oksl, odecs and ottis; onimite binds it for its videos. MIT
 licensed. [API.md](API.md) is the design; [WORKFLOWS.md](WORKFLOWS.md) walks
@@ -45,7 +46,7 @@ them by their directory names (`import song "deps:odawg/song"`).
 | `dsp` | signal primitives over slices: band-limited oscillators and unison, filters, envelopes, noise |
 | `device` | `PARAM_TABLE` and `DEVICE_TABLE` (tables.odin): every option, and every instrument, preset and effect as a row with its defaults and its procs; the voices, synth.lua's presets, the drum machines and acid synth (machines.odin), the Player, the Sampler, the effects, the sample Bank (chunks that never move; lent and viewed, not copied) |
 | `analyze` | loudness (EBU R128), true peak, loudness range (onimite's, ported) |
-| `assets` | the sample register (every set's source, pinned SHA-256, licence, credit), declaring sets and loading only the zones a song's notes reach (downloaded on first use into the user data folder), decoding (WAV; FLAC through odecs) |
+| `assets` | the sample register (every set's source, pinned SHA-256, licence, credit), a song's own sets and SFZ files (sets.odin, sfz.odin; read from its folder or through the host's `Bank_Host`), declaring sets and loading only the zones a song's notes reach (downloaded on first use into the user data folder), decoding (WAV; FLAC through odecs) |
 | `spec` | the spec's flat tables and the one table-driven reader (JSON, or a host's tables as json.Value) |
 | `song` | composing: the form, the arrangement (styles in `styles/*.json`), transitions; the note table and the questions; a mix of songs and clips on one timeline (a host's video); the sample keys a song needs |
 | `render` | the engine (a stream: voice pools, effect states, dormant tracks, the master), an export (the stream cut into time segments on every core, handed to a sink in order: a WAV written as it comes, memory), mastering to a target, WAV |
