@@ -37,10 +37,15 @@ file_path :: proc(root: string, f: ^File_Row, allocator := context.temp_allocato
 
 // The file's URL: its source's, then its path percent-encoded (the `/`s kept).
 file_url :: proc(f: ^File_Row, allocator := context.temp_allocator) -> string {
+	return url_join(SOURCE_TABLE[f.source].url, f.path, allocator)
+}
+
+// A folder's URL (ending /) and a path in it, percent-encoded (the `/`s kept).
+url_join :: proc(folder, path: string, allocator := context.temp_allocator) -> string {
 	b := strings.builder_make(allocator)
-	strings.write_string(&b, SOURCE_TABLE[f.source].url)
-	for i in 0 ..< len(f.path) {
-		c := f.path[i]
+	strings.write_string(&b, folder)
+	for i in 0 ..< len(path) {
+		c := path[i]
 		switch c {
 		case 'A' ..= 'Z', 'a' ..= 'z', '0' ..= '9', '-', '_', '.', '~', '/':
 			strings.write_byte(&b, c)
@@ -143,41 +148,56 @@ say :: proc(progress: Progress, format: string, args: ..any) {
 	}
 }
 
-// Makes the data directory hold the file's pinned bytes, downloading them
-// when it doesn't.
+// Makes the data directory hold the register file's pinned bytes,
+// downloading them when it doesn't.
 ensure_file :: proc(root: string, f: ^File_Row, verify := false) -> Error {
-	path := file_path(root, f)
-	if holds(path, f.sha256, f.size, verify) {
-		return nil
+	_, _, err := ensure_pinned(file_path(root, f), file_url(f), f.sha256, f.size, verify)
+	return err
+}
+
+// Makes `path` hold the bytes at `url` pinned by `sha256` and `size`,
+// downloading them when it doesn't. An empty pin (a file odawg pin is
+// pinning) takes what comes once, and gives its SHA-256 and size (in the
+// temp allocator) for the pins.
+ensure_pinned :: proc(path, url, sha256: string, size: i64, verify := false) -> (got: string, got_size: i64, err: Error) {
+	if sha256 != "" && holds(path, sha256, size, verify) {
+		return sha256, size, nil
 	}
-	if err := os.make_directory_all(filepath.dir(path)); err != nil && err != .Exist {
-		return fmt.tprintf("creating %s: %v", filepath.dir(path), err)
+	if sha256 == "" {
+		// fetched once already: what its stamp says it was
+		stamp, serr := os.read_entire_file(stamp_path(path), context.temp_allocator)
+		info, ierr := os.stat(path, context.temp_allocator)
+		if serr == nil && ierr == nil {
+			return strings.trim_space(string(stamp)), info.size, nil
+		}
+	}
+	if derr := os.make_directory_all(filepath.dir(path)); derr != nil && derr != .Exist {
+		return "", 0, fmt.tprintf("creating %s: %v", filepath.dir(path), derr)
 	}
 	part := strings.concatenate({path, ".part"}, context.temp_allocator)
-	file, err := os.create(part)
-	if err != nil {
-		return fmt.tprintf("creating %s: %v", part, err)
+	file, cerr := os.create(part)
+	if cerr != nil {
+		return "", 0, fmt.tprintf("creating %s: %v", part, cerr)
 	}
 	sink := Sink{file = file}
 	sha2.init_256(&sink.hash)
-	url := file_url(f)
 	get_err := http_get(url, &sink)
 	os.close(file)
 	if get_err != nil {
 		os.remove(part)
-		return get_err
+		return "", 0, get_err
 	}
-	got := hex_digest(&sink.hash)
-	if got != f.sha256 || sink.written != f.size {
+	got = hex_digest(&sink.hash)
+	if sha256 != "" && (got != sha256 || sink.written != size) {
 		os.remove(part)
-		return fmt.tprintf("%s: got %d bytes with SHA-256 %s, pinned %d bytes with %s", url, sink.written, got, f.size, f.sha256)
+		return "", 0, fmt.tprintf("%s: got %d bytes with SHA-256 %s, pinned %d bytes with %s", url, sink.written, got, size, sha256)
 	}
 	os.remove(path)
 	if rerr := os.rename(part, path); rerr != nil {
-		return fmt.tprintf("renaming %s: %v", part, rerr)
+		return "", 0, fmt.tprintf("renaming %s: %v", part, rerr)
 	}
-	_ = os.write_entire_file(stamp_path(path), f.sha256)
-	return nil
+	_ = os.write_entire_file(stamp_path(path), got)
+	return got, sink.written, nil
 }
 
 // The files a set's zones play, each once, in zone order.

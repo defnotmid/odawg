@@ -8,6 +8,7 @@ package odawg_spec
 
 import "core:encoding/json"
 import "core:fmt"
+import "core:path/filepath"
 import "core:strings"
 import base "../base"
 import device "../device"
@@ -54,9 +55,12 @@ Spec :: struct {
 	buses:             [dynamic]Bus_Spec,
 	sets:              [dynamic]Set_Spec, // the song's own sample sets
 	set_zones:         [dynamic]Set_Zone_Spec,
-	// A style's: the song it is read for, whose sets its parts can name too
-	// (a set the style brings itself wins).
+	sources:           [dynamic]Source_Spec, // where its sets' files are fetched from
+	// A style's: the song it is read for, whose sets and sources its parts
+	// can name too (its own win), and the folder its paths are relative to
+	// (a style file's own: its files travel with it; "": the song's).
 	outer:             ^Spec,
+	folder:            string,
 }
 
 // A style the song brings: a partial spec like the shipped ones (its parts,
@@ -124,11 +128,122 @@ Set_Zone_Spec :: struct {
 	offset:      f64, // frames into the file a note starts at
 }
 
-// A bus the spec names: its effects, and where it goes ("": the master).
+// Files fetched from elsewhere, pinned: a folder at `url` (raw files at a
+// pinned commit), each file a line of the `pins` file (`sha256 size path`,
+// written by odawg pin), fetched into the data directory the first time a
+// note reaches it. A path whose first part is the source's name is one of
+// its files ("fashionbass/notes/a1.wav"). Its licence must allow
+// commercial use (an SPDX id odawg registers: CC0-1.0, CC-BY-*), and its
+// credit is what odawg credits prints.
+Source_Spec :: struct {
+	name:    string,
+	url:     string, // ends with /
+	page:    string,
+	licence: string,
+	credit:  string,
+	pins:    string, // a path of the song's
+}
+
+// Where a path `s` writes is: a source's file as written (its first part
+// the source), else in s.folder.
+path_from :: proc(s: ^Spec, path: string, allocator := context.temp_allocator) -> string {
+	if s == nil || s.folder == "" || filepath.is_abs(path) {
+		return path
+	}
+	first := path
+	if slash := strings.index_byte(path, '/'); slash >= 0 {
+		first = path[:slash]
+	}
+	if src, _ := source_from_name(s, first); src != nil {
+		return path
+	}
+	p, _ := filepath.join({s.folder, path}, allocator)
+	return p
+}
+
+// Whether a path from shared data (a style's zones, an SFZ, pins) stays
+// where it is read from: relative, `/` separated, no `..` or `.` part, no
+// backslash, colon (a drive or a scheme) or control character.
+plain_path :: proc(path: string) -> bool {
+	if path == "" || path[0] == '/' {
+		return false
+	}
+	for c in transmute([]u8)path {
+		if c == '\\' || c == ':' || c < 0x20 || c == 0x7f {
+			return false
+		}
+	}
+	rest := path
+	for part in strings.split_iterator(&rest, "/") {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+// The folder a style's paths are relative to: a style file's (a name with
+// a / or ending .json), else the song's ("").
+style_folder :: proc(name: string) -> string {
+	if strings.contains(name, "/") || strings.has_suffix(name, ".json") {
+		return filepath.dir(name)
+	}
+	return ""
+}
+
+// The source named `name` that `s` reads: its own, else its outer song's,
+// and the spec that defines it (its pins are in that spec's folder).
+source_from_name :: proc(s: ^Spec, name: string) -> (src: ^Source_Spec, owner: ^Spec) {
+	for o := s; o != nil; o = o.outer {
+		for &x in o.sources {
+			if x.name == name {
+				return &x, o
+			}
+		}
+	}
+	return nil, nil
+}
+
+// A source a song reads (its own or a style's) and where its pins are.
+Source_Ref :: struct {
+	using source: Source_Spec,
+	pins_path:    string,
+}
+
+// Every source the song and its own styles define (styles' read into temp
+// memory), each once by name.
+source_refs :: proc(s: ^Spec, out: ^[dynamic]Source_Ref) {
+	add :: proc(s: ^Spec, out: ^[dynamic]Source_Ref) {
+		for x in s.sources {
+			seen := false
+			for y in out {
+				seen ||= y.name == x.name
+			}
+			if !seen {
+				append(out, Source_Ref{x, path_from(s, x.pins, context.allocator)})
+			}
+		}
+	}
+	add(s, out)
+	for st in s.styles {
+		own := new(Spec, context.temp_allocator)
+		findings := make(base.Findings, context.temp_allocator)
+		{
+			context.allocator = context.temp_allocator
+			spec_from_value(st.value, own, &findings)
+		}
+		own.outer, own.folder = s, style_folder(st.name)
+		add(own, out)
+	}
+}
+
+// A bus the spec names: its effects, where it goes ("": the master), and
+// what its effects' sidechains hear (a part, return or bus; "": itself).
 Bus_Spec :: struct {
 	name:  string,
 	chain: Span,
 	to:    string,
+	key:   string,
 }
 
 Sidechain_Spec :: struct {
@@ -239,6 +354,7 @@ Device_Spec :: struct {
 Asset_Ref :: struct {
 	name:  string,
 	owner: ^Spec,
+	from:  ^Spec, // the spec whose Sampler names it (its sources are what its paths can be in)
 }
 
 // The sample sets the song's Samplers name, its own styles' included, each
@@ -252,7 +368,7 @@ asset_refs :: proc(s: ^Spec, out: ^[dynamic]Asset_Ref) {
 			context.allocator = context.temp_allocator
 			spec_from_value(st.value, own, &findings)
 		}
-		own.outer = s
+		own.outer, own.folder = s, style_folder(st.name)
 		asset_refs(own, out)
 	}
 	for d in s.devices {
@@ -267,7 +383,7 @@ asset_refs :: proc(s: ^Spec, out: ^[dynamic]Asset_Ref) {
 				found ||= x.name == name && x.owner == owner
 			}
 			if !found {
-				append(out, Asset_Ref{name, owner})
+				append(out, Asset_Ref{name, owner, s})
 			}
 		}
 	}
@@ -303,7 +419,7 @@ set_from_name :: proc(s: ^Spec, name: string) -> (set: ^Set_Spec, owner: ^Spec) 
 asset_key :: proc(s: ^Spec, name: string, allocator := context.temp_allocator) -> string {
 	set, owner := set_from_name(s, name)
 	if set == nil {
-		return name
+		return path_from(s, name, allocator) // an SFZ file's path, in the spec's folder
 	}
 	h := base.hash_string(set.name)
 	h = base.hash_combine(h, transmute(u64)set.gain_db)

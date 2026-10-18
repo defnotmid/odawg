@@ -30,6 +30,8 @@ Sfz_Region :: struct {
 	loop_from:       i32,
 	loop_to:         i32,
 	sequence:        int,
+	release:         f32, // ampeg_release, seconds (0: the Sampler's)
+	alternates:      bool, // a round robin's (lorand, hirand or seq_position): SFZ plays one, not all
 	release_trigger: bool, // trigger=release: played on note off, which odawg doesn't
 }
 
@@ -61,7 +63,15 @@ SFZ_OPCODES := [?]struct {
 	{"loopstart", proc(r: ^Sfz_Region, v: string) {r.loop_from = i32(sfz_int(v, 0))}},
 	{"loop_end", proc(r: ^Sfz_Region, v: string) {r.loop_to = i32(sfz_int(v, -1)) + 1}},
 	{"loopend", proc(r: ^Sfz_Region, v: string) {r.loop_to = i32(sfz_int(v, -1)) + 1}},
-	{"seq_position", proc(r: ^Sfz_Region, v: string) {r.sequence = sfz_int(v, 0)}},
+	{"seq_position", proc(r: ^Sfz_Region, v: string) {r.sequence, r.alternates = sfz_int(v, 0), true}},
+	// lorand/hirand split a round robin by chance: the zones sharing keys and
+	// velocities are one, and a note's seed picks among them
+	{"lorand", proc(r: ^Sfz_Region, v: string) {r.alternates = true}},
+	{"hirand", proc(r: ^Sfz_Region, v: string) {r.alternates = true}},
+	{"ampeg_release", proc(r: ^Sfz_Region, v: string) {r.release = f32(sfz_f64(v, 0))}},
+	// amp_velcurve_N: a velocity's level; odawg's is linear to the zone's
+	// top velocity, which is what layered sets write (amp_velcurve_<hivel>=1)
+	{"amp_velcurve_", proc(r: ^Sfz_Region, v: string) {}},
 	{"seq_length", proc(r: ^Sfz_Region, v: string) {}}, // round robins are the zones sharing keys and velocities
 	{"trigger", proc(r: ^Sfz_Region, v: string) {r.release_trigger = v == "release"}},
 }
@@ -96,28 +106,50 @@ sfz_key :: proc(v: string, fallback: int) -> int {
 // An SFZ file's regions as zones of the bank, each region's sample a file
 // of the bank (relative to the SFZ's folder and its default_path).
 @(private = "package")
-declare_sfz :: proc(bank: ^device.Bank, ref: spec.Asset_Ref, findings: ^base.Findings, host: ^Bank_Host, files: ^[dynamic]string) -> bool {
-	text, ok := host_text(host, ref.name)
-	if !ok {
-		base.report(findings, "missing_file", .Error, ref.name, "%s can't be read", ref.name)
+declare_sfz :: proc(bank: ^device.Bank, ref: spec.Asset_Ref, d: ^Declaring) -> bool {
+	key := spec.asset_key(ref.from, ref.name) // its path, in the folder of the spec naming it
+	f, found := song_file(d, ref.from, key)
+	if !found {
 		return false
 	}
-	note_file(files, ref.name)
+	text, ok := song_file_text(bank, d, f, key)
+	if !ok {
+		base.report(d.findings, "missing_file", .Error, key, "%s can't be read", key)
+		return false
+	}
+	if f.url == "" {
+		note_file(d.files, key)
+	}
 	regions, default_path, unsupported := sfz_regions(text)
 	for name in unsupported {
-		base.report(findings, "unsupported_opcode", .Info, ref.name, "%s: %s is not read (its regions play without it)", ref.name, name)
+		base.report(d.findings, "unsupported_opcode", .Info, key, "%s: %s is not read (its regions play without it)", key, name)
 	}
-	folder := filepath.dir(ref.name)
-	paths := make([]string, len(regions), context.temp_allocator)
-	stamp := base.hash_combine(0x5f2, host_stamp(host, ref.name))
+	folder := filepath.dir(key)
+	// a source's SFZ plays that source's files only
+	inside := ""
+	if f.url != "" {
+		inside = key[:strings.index_byte(key, '/') + 1]
+	}
+	files := make([]Song_File, len(regions), context.temp_allocator)
+	stamp := base.hash_combine(0x5f2, song_file_stamp(d, f))
 	for r, i in regions {
 		sample, _ := strings.replace_all(r.sample, "\\", "/", context.temp_allocator)
 		p, _ := filepath.join({folder, default_path, sample}, context.temp_allocator)
-		paths[i] = p
-		note_file(files, p)
-		stamp = base.hash_combine(stamp, host_stamp(host, p))
+		if inside != "" && !strings.has_prefix(p, inside) {
+			base.report(d.findings, "bad_value", .Error, key, "%s: sample %s is outside its source; not fetched", key, r.sample)
+			return false
+		}
+		g, has := song_file(d, ref.from, p)
+		if !has {
+			return false
+		}
+		if g.url == "" {
+			note_file(d.files, p)
+		}
+		files[i] = g
+		stamp = base.hash_combine(stamp, song_file_stamp(d, g))
 	}
-	if declared_at(bank, ref.name, stamp) {
+	if declared_at(bank, key, stamp) {
 		return true
 	}
 	drafts := make([dynamic]Zone_Draft, context.temp_allocator)
@@ -127,8 +159,8 @@ declare_sfz :: proc(bank: ^device.Bank, ref: spec.Asset_Ref, findings: ^base.Fin
 			skipped += 1
 			continue
 		}
-		d := Zone_Draft {
-			file = bank_file_path(bank, paths[i], host_stamp(host, paths[i])),
+		z := Zone_Draft {
+			file = bank_file_song(bank, d, files[i]),
 			lo = r.lo,
 			hi = r.hi,
 			root = r.root - r.tune_cents / 100, // tuned up plays as if recorded lower
@@ -138,29 +170,47 @@ declare_sfz :: proc(bank: ^device.Bank, ref: spec.Asset_Ref, findings: ^base.Fin
 			one_shot = r.loop_mode == "one_shot",
 			offset = r.offset,
 			sequence = r.sequence,
+			release = r.release,
 		}
 		switch {
 		case r.loop_mode == "loop_continuous" || r.loop_mode == "loop_sustain":
 			if r.loop_to > r.loop_from {
-				d.loop_from, d.loop_to = r.loop_from, r.loop_to
+				z.loop_from, z.loop_to = r.loop_from, r.loop_to
 			} else {
-				d.loop_to = device.LOOP_FROM_FILE
+				z.loop_to = device.LOOP_FROM_FILE
 			}
 		case r.loop_mode == "":
-			d.loop_to = device.LOOP_FROM_FILE // SFZ's default: the file's own loop, if it has one
+			z.loop_to = device.LOOP_FROM_FILE // SFZ's default: the file's own loop, if it has one
 		case:
-			d.loop_to = -1
+			z.loop_to = -1
 		}
-		append(&drafts, d)
+		append(&drafts, z)
 	}
 	if skipped > 0 {
-		base.report(findings, "unsupported_opcode", .Info, ref.name, "%s: %d release-triggered regions are not played", ref.name, skipped)
+		base.report(d.findings, "unsupported_opcode", .Info, key, "%s: %d release-triggered regions are not played", key, skipped)
+	}
+	// regions answering the same notes with nothing to alternate them by are
+	// layers in SFZ (all sound); a zone plays alone here
+	layered := 0
+	for r, i in regions {
+		if r.alternates || r.release_trigger || r.sample == "" {
+			continue
+		}
+		for o, j in regions {
+			if j != i && !o.release_trigger && o.sample != "" && o.lo == r.lo && o.hi == r.hi && o.lo_velocity == r.lo_velocity && o.hi_velocity == r.hi_velocity {
+				layered += 1
+				break
+			}
+		}
+	}
+	if layered > 0 {
+		base.report(d.findings, "unsupported_opcode", .Info, key, "%s: %d regions are layers (all sound in SFZ); odawg plays one of them per note", key, layered)
 	}
 	if len(drafts) == 0 {
-		base.report(findings, "bad_zone", .Error, ref.name, "%s: no region with a sample", ref.name)
+		base.report(d.findings, "bad_zone", .Error, key, "%s: no region with a sample", key)
 		return false
 	}
-	append_set(bank, ref.name, stamp, drafts[:])
+	append_set(bank, key, stamp, drafts[:])
 	return true
 }
 
@@ -271,7 +321,8 @@ sfz_regions :: proc(text: string) -> (regions: [dynamic]Sfz_Region, default_path
 		}
 		set := false
 		for op in SFZ_OPCODES {
-			if op.name == key {
+			// a name ending _ is a family (amp_velcurve_40)
+			if op.name == key || (strings.has_suffix(op.name, "_") && strings.has_prefix(key, op.name)) {
 				op.set(&levels[header], value)
 				set = true
 				break

@@ -42,19 +42,27 @@ Sample_Set :: struct {
 	stamp: u64, // its files' contents when declared (a changed file declares it again)
 }
 
-// A file a set plays: one of the register's (pinned, fetched on first use)
-// or a host's own, by its path as the spec wrote it (relative to the host's
-// root), with what its content was when declared.
+// A file a set plays: one of the register's (pinned, fetched on first use),
+// one of a song's sources' (fetched from `url` into the data directory at
+// `path`, pinned by `sha256` and `size`), or a host's own, by its path as
+// the spec wrote it (relative to the host's root), with what its content
+// was when declared.
 Bank_File :: struct {
-	register: i32, // into the register's files (-1: a path of the host's)
+	register: i32, // into the register's files (-1: a source's or the host's)
 	path:     string,
 	stamp:    u64,
+	url:      string, // a source's file: where it is fetched from ("": the host's)
+	sha256:   string, // its pin ("": not pinned yet, fetched only by odawg pin)
+	size:     i64,
 }
 
-// Which keys of a set a song plays (the zones answering them are loaded).
+// Which keys of a set a song plays, and at which velocities (MIDI) each:
+// the zones a Sampler would pick for them are loaded (a key without
+// velocities: at any).
 Sample_Need :: struct {
-	set:  i32,
-	keys: bit_set[0 ..< 128;u128],
+	set:        i32,
+	keys:       bit_set[0 ..< 128;u128],
+	velocities: [128]bit_set[0 ..< 128;u128], // by key
 }
 
 // A zone's loop_to before loading: take the file's loop (a WAV's smpl).
@@ -78,6 +86,7 @@ Zone :: struct {
 	loop_from:   i32, // frames into the sample; loop_to <= loop_from: no loop
 	loop_to:     i32, // declared: LOOP_FROM_FILE (the loader takes the file's), else as given
 	offset:      i32, // frames into the sample a note starts at
+	release:     f32, // seconds its notes take to fade (0: the Sampler's .Release)
 }
 
 Sample :: struct {

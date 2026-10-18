@@ -247,6 +247,7 @@ Pad :: enum u8 {
 	Conga_High,
 	Clave,
 	Maracas,
+	Tambourine,
 }
 
 PAD_NAMES := [Pad]string {
@@ -269,6 +270,7 @@ PAD_NAMES := [Pad]string {
 	.Conga_High = "conga_high",
 	.Clave    = "clave",
 	.Maracas  = "maracas",
+	.Tambourine = "tambourine",
 }
 
 // A pad that cuts others on its track when it starts (a closed hat chokes

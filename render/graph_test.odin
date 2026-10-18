@@ -1,5 +1,6 @@
 package odawg_render
 
+import "core:math"
 import "core:mem/virtual"
 import "core:strings"
 import "core:testing"
@@ -226,4 +227,38 @@ test_stem_names :: proc(t: ^testing.T) {
 	testing.expect_value(t, names[song.part_index(s, "lead")], "lead")
 	testing.expect_value(t, names[len(s.parts)], "return-hall")
 	testing.expect_value(t, names[len(s.parts) + 1], "bus-glue")
+}
+
+// A bus keyed by a part: its compressor hears the kick, so what goes
+// through the bus ducks on every beat (the pump), and the kick itself
+// doesn't go through it.
+@(test)
+test_bus_key :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	s := compose_text(t, `{ bpm: 120, gain_db: 0, sections: [ { name: "a", duration: "2m" } ],
+		buses: { pump: { key: "kick", effects: [ { name: "Compressor", threshold: -40, ratio: 20, attack: 0.001, release: 0.05, knee: 0 } ] } },
+		parts: {
+			kick: { instrument: { name: "DrumMachine", machine: "909" }, play: [ { name: "a", steps: { kick: "x...x...x...x..." } } ] },
+			pad: { instrument: { name: "Synth", oscillator: { type: "sawtooth" }, envelope: { attack: 0.01, sustain: 1, release: 0.1 } }, to: "pump",
+				play: [ { name: "a", notes: "C4", subdivision: "1m" } ] } } }`, &arena)
+	testing.expect(t, !has_finding(s, "bad_value"))
+	kick, pump := song.part_node(s, song.part_index(s, "kick")), song.node_from_name(s, "pump")
+	testing.expect(t, pump >= 0 && has_edge(s, kick, pump, .Key))
+	testing.expect(t, !has_edge(s, kick, pump, .Audio))
+	out := output_from_song(s, {stems = true, threads = 1})
+	defer output_destroy(&out)
+	bus := out.stems[stem_count(s) - 1] // the buses come last
+	rms :: proc(x: []f32) -> f32 {
+		sum: f32
+		for v in x {
+			sum += v * v
+		}
+		return math.sqrt(sum / f32(len(x)))
+	}
+	// the second beat (0.5 s): ducked just after the kick, back up before the next
+	beat := RATE / 2
+	ducked := rms(bus[0][beat + RATE / 100:][:RATE / 50])
+	open := rms(bus[0][beat + RATE * 4 / 10:][:RATE / 50])
+	testing.expectf(t, ducked < 0.5 * open, "ducked %f, open %f", ducked, open)
 }

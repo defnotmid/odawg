@@ -131,6 +131,9 @@ test_machine_pads_render :: proc(t: ^testing.T) {
 	for m in Machine {
 		p := machine_params(m)
 		for pad in Pad {
+			if MACHINE_TABLE[m][pad].level == 0 {
+				continue // a pad the machine doesn't have (an empty row) is silent
+			}
 			n := Note{duration = 0.1, velocity = 1, pad = pad}
 			l, tail, done := play(.Drum_Machine, &p, n)
 			pk := peak_of(l)

@@ -828,6 +828,7 @@ KIT_TABLE := [Kit][Pad][3]Kit_Layer {
 		.Conga_High = {{kind = .Tom, gain = 0.6, pitch = 64}, {}, {}},
 		.Clave = {{kind = .Tick, gain = 0.8, pitch = 99.1}, {}, {}},
 		.Maracas = {{kind = .Open_Hat, gain = 0.3, set = {{.Decay, 60}, {.Envelope_Attack, 0.004}, {}, {}, {}, {}}}, {}, {}},
+		.Tambourine = {}, // no tambourine in the kit
 	},
 	.R808 = {
 		.None = {},
@@ -857,6 +858,7 @@ KIT_TABLE := [Kit][Pad][3]Kit_Layer {
 		.Conga_High = {{kind = .Membrane_Synth, gain = 0.7, pitch = 64, gate = 0.3, set = {{.Pitch_Decay, 0.02}, {.Octaves, 1.3}, {.Envelope_Decay, 0.3}, {.Envelope_Sustain, 0}, {.Envelope_Release, 0.1}, {}}}, {}, {}},
 		.Clave = {{kind = .Synth, gain = 0.6, pitch = 99.1, gate = 0.05, set = {{.Oscillator_Type, W_TRIANGLE}, {.Envelope_Attack, 0.0005}, {.Envelope_Decay, 0.04}, {.Envelope_Sustain, 0}, {.Envelope_Release, 0.02}, {}}}, {}, {}},
 		.Maracas = {{kind = .Open_Hat, gain = 0.35, set = {{.Decay, 70}, {.Envelope_Attack, 0.003}, {}, {}, {}, {}}}, {}, {}},
+		.Tambourine = {}, // no tambourine in the kit
 	},
 	.R909 = {
 		.None = {},
@@ -882,6 +884,7 @@ KIT_TABLE := [Kit][Pad][3]Kit_Layer {
 		.Conga_High = {{kind = .Tom, gain = 0.6, pitch = 65}, {}, {}},
 		.Clave = {{kind = .Synth, gain = 0.6, pitch = 99.1, gate = 0.05, set = {{.Oscillator_Type, W_TRIANGLE}, {.Envelope_Attack, 0.0005}, {.Envelope_Decay, 0.04}, {.Envelope_Sustain, 0}, {.Envelope_Release, 0.02}, {}}}, {}, {}},
 		.Maracas = {{kind = .Open_Hat, gain = 0.35, set = {{.Decay, 60}, {.Envelope_Attack, 0.004}, {}, {}, {}, {}}}, {}, {}},
+		.Tambourine = {}, // no tambourine in the kit
 	},
 }
 
@@ -895,7 +898,7 @@ GM_DRUMS := [?]struct {
 	{41, .Tom_Low}, {42, .Hat}, {43, .Tom_Low}, {44, .Hat}, {45, .Tom_Mid}, {46, .Open_Hat},
 	{47, .Tom_Mid}, {48, .Tom_High}, {49, .Crash}, {50, .Tom_High}, {51, .Ride}, {52, .Crash},
 	{53, .Ride}, {55, .Crash}, {56, .Cowbell}, {57, .Crash}, {59, .Ride}, {60, .Conga_High}, {61, .Conga_Mid},
-	{62, .Conga_High}, {63, .Conga_Mid}, {64, .Conga_Low}, {69, .Shaker}, {70, .Maracas}, {75, .Clave},
+	{62, .Conga_High}, {63, .Conga_Mid}, {64, .Conga_Low}, {54, .Tambourine}, {69, .Shaker}, {70, .Maracas}, {75, .Clave},
 	{76, .Clave}, {82, .Shaker},
 }
 
@@ -963,6 +966,7 @@ PAD_GM_NOTE := [Pad]f32 {
 	.Conga_High = 62,
 	.Clave      = 75,
 	.Maracas    = 70,
+	.Tambourine = 54,
 }
 
 note_from_pad :: proc(pad: Pad) -> f32 {return PAD_GM_NOTE[pad]}

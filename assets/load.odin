@@ -327,6 +327,9 @@ bank_declare :: proc(bank: ^device.Bank, names: []string, findings: ^base.Findin
 // can't be had is a finding; the rest load. True when every needed zone is
 // loaded.
 bank_load :: proc(bank: ^device.Bank, needs: []device.Sample_Need, findings: ^base.Findings, progress: Progress = progress_stderr, host: ^Bank_Host = nil) -> bool {
+	if host != nil && host.fetched != "" {
+		return bank_load_at(bank, host.fetched, needs, findings, progress, host = host)
+	}
 	root, rerr := data_dir(context.temp_allocator)
 	if rerr != nil {
 		base.report(findings, "asset_unavailable", .Error, "", "no data folder for sample sets: %s", rerr.?)
@@ -339,41 +342,43 @@ bank_load :: proc(bank: ^device.Bank, needs: []device.Sample_Need, findings: ^ba
 // they are, unverified and never fetched (a test's own stand-ins).
 bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Need, findings: ^base.Findings, progress: Progress = progress_stderr, trust_disk := false, host: ^Bank_Host = nil) -> bool {
 	init_tables(bank)
-	// the files the needs reach, once each, with the zones that play them
+	// the files the needs reach, once each (a finding names the set)
 	Wanted :: struct {
-		file:  i32,
-		set:   i32,
-		zones: [dynamic]i32,
+		file: i32,
+		set:  i32,
 	}
 	wanted := make([dynamic]Wanted, context.temp_allocator)
 	for need in needs {
 		if need.set < 0 || int(need.set) >= len(bank.sets) {
 			continue
 		}
+		// the zones a Sampler would pick for each key and velocity played (of
+		// a round robin, all of them)
 		zs := bank.sets[need.set].zones
+		reached := make([]bool, zs.count, context.temp_allocator)
+		for key in need.keys {
+			velocities := need.velocities[key]
+			if velocities == {} {
+				velocities = ~bit_set[0 ..< 128;u128]{}
+			}
+			for v in velocities {
+				best_key, best_vel, _ := device.zone_nearest(bank, int(need.set), key, v)
+				for zi in zs.first ..< base.span_end(zs) {
+					reached[zi - zs.first] ||= device.zone_is_nearest(&bank.zones[zi], key, v, best_key, best_vel)
+				}
+			}
+		}
 		for zi in zs.first ..< base.span_end(zs) {
 			z := bank.zones[zi]
-			if z.sample >= 0 || bank.zone_file[zi] < 0 {
-				continue
-			}
-			hit := false
-			for k in int(z.lo_key) ..= int(z.hi_key) {
-				hit ||= k in need.keys
-			}
-			if !hit {
+			if !reached[zi - zs.first] || z.sample >= 0 || bank.zone_file[zi] < 0 {
 				continue
 			}
 			found := false
-			for &w in wanted {
-				if w.file == bank.zone_file[zi] {
-					append(&w.zones, zi)
-					found = true
-				}
+			for w in wanted {
+				found ||= w.file == bank.zone_file[zi]
 			}
 			if !found {
-				w := Wanted{file = bank.zone_file[zi], set = need.set, zones = make([dynamic]i32, context.temp_allocator)}
-				append(&w.zones, zi)
-				append(&wanted, w)
+				append(&wanted, Wanted{file = bank.zone_file[zi], set = need.set})
 			}
 		}
 	}
@@ -412,6 +417,31 @@ bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Ne
 			w.file, ok = -1, false
 		}
 	}
+	// a song's sources' the same way, verified against their pins (odawg pin
+	// fetches the unpinned and keeps what it got for the pins it writes)
+	for &w in wanted {
+		if w.file < 0 || trust_disk {
+			continue
+		}
+		bf := &bank.files[w.file]
+		if bf.url == "" {
+			continue
+		}
+		if bf.sha256 == "" && !pinning(host) {
+			miss(&missing, w.set, fmt.tprintf("%s is not in its source's pins; odawg pin SPEC fetches and pins what the song plays", bf.url))
+			w.file, ok = -1, false
+			continue
+		}
+		got, size, err := ensure_pinned(bf.path, bf.url, bf.sha256, bf.size)
+		if err != nil {
+			miss(&missing, w.set, err.?)
+			w.file, ok = -1, false
+			continue
+		}
+		if bf.sha256 == "" {
+			bf.sha256, bf.size = bank_text(bank, got), size
+		}
+	}
 	// each file read once and decoded, side by side, into PCM of its own
 	// (at its own rate: a Sampler reads it at RATE), then each a chunk of the
 	// bank, in order
@@ -427,7 +457,8 @@ bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Ne
 			f := &FILE_TABLE[bf.register]
 			jobs[k].path, jobs[k].name = file_path(root, f), f.path
 		} else {
-			jobs[k].path, jobs[k].name, jobs[k].hosted = host_path(host, bf.path), bf.path, host != nil && host.read != nil
+			// a source's file is ours, in the data directory; the rest the host's
+			jobs[k].path, jobs[k].name, jobs[k].hosted = host_path(host, bf.path), bf.url != "" ? bf.url : bf.path, bf.url == "" && host != nil && host.read != nil
 		}
 	}
 	decode_all(jobs)
@@ -452,7 +483,11 @@ bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Ne
 			delete(j.pcm, runtime.heap_allocator())
 			append(&bank.samples, device.Sample{chunk = chunk, frames = i64(len(values) / j.channels), channels = u8(j.channels), format = .I16, rate = i32(j.rate)})
 		}
-		for zi in w.zones {
+		// every zone playing the file has it (one an earlier load didn't reach too)
+		for zi in 0 ..< len(bank.zones) {
+			if bank.zone_file[zi] != w.file || bank.zones[zi].sample >= 0 {
+				continue
+			}
 			z := &bank.zones[zi]
 			z.sample = sample
 			if z.loop_to == device.LOOP_FROM_FILE {
@@ -496,14 +531,18 @@ decode_all :: proc(jobs: []Decode_Job) {
 		context.allocator = virtual.arena_allocator(&scratch)
 		context.temp_allocator = virtual.arena_allocator(&scratch)
 		if j.hosted {
-			got, read_ok := j.host.read(j.host.data, j.name)
-			if !read_ok || got.channels <= 0 || len(got.samples) == 0 {
+			got, result := j.host.read(j.host.data, j.name)
+			switch {
+			case result == .Declined:
+				j.hosted = false // the loader's own, below
+			case result != .Read || got.channels <= 0 || len(got.samples) == 0:
 				j.err = fmt.aprintf("%s can't be read", j.name, allocator = runtime.heap_allocator())
 				return
+			case:
+				j.lent, j.channels, j.rate = got.samples, got.channels, got.rate > 0 ? got.rate : device.RATE
+				j.loop_from, j.loop_to = got.loop_from, got.loop_to
+				return
 			}
-			j.lent, j.channels, j.rate = got.samples, got.channels, got.rate > 0 ? got.rate : device.RATE
-			j.loop_from, j.loop_to = got.loop_from, got.loop_to
-			return
 		}
 		data, rerr := os.read_entire_file(j.path, context.allocator)
 		if rerr != nil {

@@ -130,7 +130,8 @@ test_every_voice_renders :: proc(t: ^testing.T) {
 	}
 	for kit in Kit {
 		for pad in Pad {
-			if pad != .None {
+			// every pad the kit has (a row without layers: one it doesn't)
+			if pad != .None && KIT_TABLE[kit][pad][0].gain != 0 {
 				expect_sound(t, fmt.tprintf("%v %v", kit, pad), render(.Drum_Kit, {duration = 0.1, pad = pad, velocity = 1}, p = kit_params(kit)))
 			}
 		}
@@ -168,7 +169,8 @@ test_split_invariance :: proc(t: ^testing.T) {
 	}
 	for kit in Kit {
 		for pad in Pad {
-			if pad != .None {
+			// every pad the kit has (a row without layers: one it doesn't)
+			if pad != .None && KIT_TABLE[kit][pad][0].gain != 0 {
 				check(t, fmt.tprintf("%v %v", kit, pad), .Drum_Kit, {duration = 0.1, pad = pad, velocity = 1}, kit_params(kit))
 			}
 		}

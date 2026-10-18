@@ -94,7 +94,7 @@ style_spec :: proc(src: ^Sources, name: string, findings: ^base.Findings) -> ^sp
 		if own.name == name {
 			st := new(spec.Spec)
 			spec.spec_from_value(own.value, st, findings)
-			st.outer = src.own
+			st.outer, st.folder = src.own, spec.style_folder(own.name)
 			append(&src.styles, st)
 			return st
 		}
@@ -169,6 +169,9 @@ arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 		append(&song.buses, Bus{b.name, chain_into_song(song, s, b.chain, 60 / song.sections[0].bpm0)})
 		if b.to != "" {
 			append(&song.routes, Route{from = b.name, to = b.to, gain = 1, moves = true})
+		}
+		if b.key != "" {
+			append(&song.routes, Route{from = b.key, to = b.name, kind = .Key, gain = 1})
 		}
 	}
 	for p in s.parts {

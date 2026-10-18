@@ -112,6 +112,12 @@ range_distance :: #force_inline proc "contextless" (x, lo, hi: int) -> int {
 	return x < lo ? lo - x : (x > hi ? x - hi : 0)
 }
 
+// Whether zone `z` is one a note at `key` and `velocity` can play, given
+// how near the nearest come (zone_nearest).
+zone_is_nearest :: proc(z: ^Zone, key, velocity, best_key, best_vel: int) -> bool {
+	return range_distance(key, int(z.lo_key), int(z.hi_key)) == best_key && range_distance(velocity, int(z.lo_velocity), int(z.hi_velocity)) == best_vel
+}
+
 // The zone of `set` a note at `key` and `velocity` (MIDI) plays: those
 // answering both, else the nearest key, then the nearest velocity; among
 // several (a round-robin group), the one `seed` picks. -1: the set has none.
@@ -139,7 +145,6 @@ zone_for :: proc(bank: ^Bank, set: int, key, velocity: int, seed: u64) -> i32 {
 
 // How near the zones of `set` nearest a note come (keys, then velocities
 // away), and how many are that near: the ones zone_for picks among.
-@(private = "file")
 zone_nearest :: proc(bank: ^Bank, set: int, key, velocity: int) -> (best_key, best_vel, count: int) {
 	best_key, best_vel = max(int), max(int)
 	span := bank.sets[set].zones
@@ -190,7 +195,7 @@ sampler_start :: proc(st: ^Sampler_State, p: ^Params, n: Note, seed: u64, env: ^
 	st.gain_l = amp * (z.pan > 0 ? 1 - z.pan : 1)
 	st.gain_r = amp * (z.pan < 0 ? 1 + z.pan : 1)
 	st.attack = max(f64(p[.Attack]), 0) * RATE
-	st.release = max(f64(p[.Release]), SAMPLER_DECLICK)
+	st.release = max(z.release > 0 ? f64(z.release) : f64(p[.Release]), SAMPLER_DECLICK)
 	st.release_tc = math.ln(st.release + 1) / math.ln(f64(200))
 	st.gate = z.one_shot ? -1 : i64(math.round(max(n.duration, 0) * RATE))
 }
@@ -338,6 +343,7 @@ tail_sampler :: proc(p: ^Params, n: Note, env: ^Voice_Env) -> f64 {
 		}
 		sm := bank.samples[z.sample]
 		step := math.pow(2, f64(pitch - z.root) / 12) * device_rate_ratio(sm)
+		held := z.release > 0 ? max(n.duration, 0) + max(f64(z.release), SAMPLER_DECLICK) : held
 		// to its last frame, and the kernel's reach past it
 		left := (f64(sm.frames - i64(max(z.offset, 0))) / step + f64(SINC_HALF * SINC_MAX_STRETCH)) / RATE
 		loops := z.loop_to - z.loop_from >= 2 && i64(z.loop_to) <= sm.frames

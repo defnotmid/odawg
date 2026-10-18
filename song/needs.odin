@@ -32,6 +32,7 @@ sample_needs :: proc(s: ^Song, out: ^[dynamic]device.Sample_Need) {
 			key := n.pad != .None ? int(device.note_from_pad(n.pad)) : int(math.round(n.pitch))
 			if key >= 0 && key < 128 {
 				need.keys += {key}
+				need.velocities[key] += {device.velocity_midi(n.velocity)}
 			}
 		}
 	}

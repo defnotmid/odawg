@@ -303,6 +303,7 @@ MACHINE_TABLE := [Machine][Pad]Circuit_Row {
 		.Conga_High = CONGA_HIGH_808,
 		.Clave      = CLAVE_808,
 		.Maracas    = MARACAS_808,
+		.Tambourine = {}, // neither machine has one: silent
 	},
 	.R909 = {
 		.None       = BASS_909,
@@ -324,6 +325,7 @@ MACHINE_TABLE := [Machine][Pad]Circuit_Row {
 		.Conga_High = CONGA_HIGH_808,
 		.Clave      = CLAVE_808,
 		.Maracas    = MARACAS_808,
+		.Tambourine = {}, // neither machine has one: silent
 	},
 }
 

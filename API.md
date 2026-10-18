@@ -243,8 +243,47 @@ parts = { drums = { instrument = { "Sampler", set = "kit" } },
   Release-triggered regions are left out, and the rest of the file still plays.
 - A set is keyed by its content. When a file changes, its set is declared again, and the
   song's `files` list (from `bank_declare_spec`) is what a host watches.
-- The samples are yours: odawg never commits, fetches or redistributes them. `credit` is
-  what `odawg credits` prints.
+- The samples are yours: odawg never commits or redistributes them. `credit` is what
+  `odawg credits` prints.
+- A path in a style file is relative to that file's folder, so a style travels with its
+  files.
+
+Samples that live elsewhere come from **sources**: a folder at a pinned URL, with each file
+pinned by SHA-256 and size. A path whose first part names a source is one of its files.
+
+```lua
+sources = {
+  fashionbass = { url = "https://raw.githubusercontent.com/sfzinstruments/karoryfer.fashionbass/0703973b.../",
+                  licence = "CC0-1.0", credit = "Fashionbass by Karoryfer Samples",
+                  page = "https://github.com/sfzinstruments/karoryfer.fashionbass",
+                  pins = "fashionbass.pins" },
+},
+parts = { bass = { instrument = { "Sampler", set = "fashionbass/fashionbass_clean.sfz" } } },
+```
+
+- A file is fetched into the data directory the first time a note reaches it, and only the
+  zones a note's key and velocity reach are loaded, round robins included. A bassline
+  fetches tens of megabytes of a library, not the whole of it.
+- Every fetched file is verified against its line in the pins file: `sha256 size path`.
+  A file the pins don't list is a `not_pinned` finding.
+- `odawg pin SPEC` fetches what the song plays and writes the pins. It trusts whatever
+  the URL serves the first time. Pin from the author's own published pins (or hashes)
+  when they have them, read the licence, and look over the new lines before committing
+  them.
+- Treat a song's or a style's `sources` like code you run: they decide what is downloaded
+  onto your machine. What odawg enforces:
+  - a source's url is `https://`;
+  - its name is a plain folder name (`a-z`, `0-9`, `_`, `-`);
+  - its pins are a plain path beside the spec;
+  - every file it names, in a zone, an SFZ or the pins, is a plain path inside the source
+    (no `..`, `.`, backslash, colon or leading `/`), and an SFZ fetched from a source plays
+    only that source's files.
+
+  Anything else is a `bad_value` finding, and nothing is fetched or written.
+- A licence must allow commercial use: CC0-1.0, CC-BY-3.0 or CC-BY-4.0. Anything else is a
+  `licence_not_allowed` finding, and nothing is fetched.
+- A style file can bring its own sources and sets, so a style, its mappings and its pins
+  can be shared as one folder.
 
 ### 3.6 From a file
 
@@ -370,10 +409,13 @@ styles: [dynamic]string
 spec.style_files(&s, &styles)                     // style files the song names: read each, then
 spec.spec_add_style_text(&s, name, text, &findings)
 host := assets.Bank_Host{root = folder}           // where the song's own files are; or the host's
-                                                  // read (decoded, lent), text and stamp procs
+                                                  // read (decoded, lent; .Declined: odawg reads it),
+                                                  // text and stamp procs
+assets.file_stamp(&host, path)                    // a file's identity, as sets are keyed by it
 files: [dynamic]string
 assets.bank_declare_spec(&bank, &s, &findings, &host, &files)   // every set the Samplers name:
-                                                  // the song's own, SFZ, the register's (rows only)
+                                                  // the song's own, SFZ, the register's (rows only);
+                                                  // a source's files fetched when bank_load reaches them
 g: song.Song
 song.song_from_spec(&s, &g, &bank)                // the form, the arrangement, the note table
 needs: [dynamic]device.Sample_Need

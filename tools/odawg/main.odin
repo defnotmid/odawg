@@ -58,7 +58,8 @@ COMMAND_TABLE := []Command_Row {
 	{"styles", "styles", "the styles odawg ships", run_styles},
 	{"sets", "sets", "the sample sets in the register: what each is, its licence and size", run_sets},
 	{"fetch", "fetch [SET|SPEC ...] [--verify]", "downloads sample sets now (every set when none is named; songs fetch theirs on first use)", run_fetch},
-	{"credits", "credits SPEC|SET ...", "what to credit for the sample sets a song plays", run_credits},
+	{"credits", "credits SPEC|SET ...", "what to credit for the sample sets and sources a song plays", run_credits},
+	{"pin", "pin SPEC", "fetches what the song plays from its sources and writes their pins (SHA-256 and size per file)", run_pin},
 	{"bench", "bench SPEC ... [-o OUT.f32]", "how fast songs render on one core (seconds of sound per CPU second), the mix written raw to compare", run_bench},
 }
 
@@ -132,7 +133,7 @@ Loaded :: struct {
 
 // Reads and composes the spec named by the first positional argument; the
 // findings so far go to stderr.
-load :: proc(a: ^Args, l: ^Loaded) -> bool {
+load :: proc(a: ^Args, l: ^Loaded, pinning := false) -> bool {
 	if len(a.positional) == 0 {
 		fmt.eprintln("odawg: give a spec (song.json)")
 		return false
@@ -156,17 +157,8 @@ load :: proc(a: ^Args, l: ^Loaded) -> bool {
 	// then its sample sets declared (names to indices: the register's, its
 	// own, SFZ files), then only the zones the notes reach loaded (the
 	// register's fetched on first use)
-	host := assets.Bank_Host{root = filepath.dir(path)}
-	styles := make([dynamic]string)
-	spec.style_files(&l.spec, &styles)
-	for name in styles {
-		text, rerr := os.read_entire_file(assets.host_path(&host, name), context.allocator)
-		if rerr != nil {
-			base.report(&l.findings, "missing_file", .Error, name, "style file %s can't be read", name)
-			continue
-		}
-		spec.spec_add_style_text(&l.spec, name, string(text), &l.findings)
-	}
+	host := assets.Bank_Host{root = filepath.dir(path), pinning = pinning}
+	read_style_files(&host, &l.spec, &l.findings)
 	assets.bank_declare_spec(&l.bank, &l.spec, &l.findings, &host)
 	ok := song.song_from_spec(&l.spec, &l.song, &l.bank)
 	if ok && len(l.bank.sets) > 0 {
@@ -176,6 +168,20 @@ load :: proc(a: ^Args, l: ^Loaded) -> bool {
 	}
 	append(&l.findings, ..l.song.findings[:])
 	return ok
+}
+
+// The style files a spec names, read from its folder into it.
+read_style_files :: proc(host: ^assets.Bank_Host, s: ^spec.Spec, findings: ^base.Findings) {
+	styles := make([dynamic]string, context.temp_allocator)
+	spec.style_files(s, &styles)
+	for name in styles {
+		text, rerr := os.read_entire_file(assets.host_path(host, name), context.allocator)
+		if rerr != nil {
+			base.report(findings, "missing_file", .Error, name, "style file %s can't be read", name)
+			continue
+		}
+		spec.spec_add_style_text(s, name, string(text), findings)
+	}
 }
 
 SEVERITY_NAMES := [base.Severity]string {

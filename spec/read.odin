@@ -53,6 +53,7 @@ Field_Kind :: enum u8 {
 	Styles, // the spec: its own styles by name
 	Buses, // the spec: its buses by name
 	Sets, // the spec: its sample sets by name
+	Sources, // the spec: the sources its files are fetched from, by name
 	Note, // f64 MIDI: "C3", "F#2" or a number
 }
 
@@ -93,6 +94,7 @@ FIELD_READERS := [Field_Kind]Field_Reader {
 	.Styles    = read_styles_field,
 	.Buses     = read_buses_field,
 	.Sets      = read_sets_field,
+	.Sources   = read_sources_field,
 	.Note      = read_note_field,
 }
 
@@ -119,6 +121,7 @@ SPEC_FIELDS := []Field_Row {
 	{"styles", .Styles, 0},
 	{"buses", .Buses, 0},
 	{"sets", .Sets, 0},
+	{"sources", .Sources, 0},
 	{"description", .Ignore, 0},
 }
 
@@ -215,9 +218,19 @@ SET_ZONE_FIELDS := []Field_Row {
 	{"offset", .Number, offset_of(Set_Zone_Spec, offset)},
 }
 
+SOURCE_FIELDS := []Field_Row {
+	{"url", .String, offset_of(Source_Spec, url)},
+	{"page", .String, offset_of(Source_Spec, page)},
+	{"licence", .String, offset_of(Source_Spec, licence)},
+	{"license", .String, offset_of(Source_Spec, licence)},
+	{"credit", .String, offset_of(Source_Spec, credit)},
+	{"pins", .String, offset_of(Source_Spec, pins)},
+}
+
 BUS_FIELDS := []Field_Row {
 	{"effects", .Chain, offset_of(Bus_Spec, chain)},
 	{"to", .String, offset_of(Bus_Spec, to)},
+	{"key", .String, offset_of(Bus_Spec, key)},
 }
 
 SIDECHAIN_FIELDS := []Field_Row {
@@ -267,7 +280,7 @@ spec_init :: proc(s: ^Spec, allocator := context.allocator) {
 	s.values.allocator, s.chain.allocator, s.sends.allocator = allocator, allocator, allocator
 	s.returns.allocator, s.markers.allocator, s.room.allocator = allocator, allocator, allocator
 	s.strings.allocator, s.styles.allocator, s.buses.allocator = allocator, allocator, allocator
-	s.sets.allocator, s.set_zones.allocator = allocator, allocator
+	s.sets.allocator, s.set_zones.allocator, s.sources.allocator = allocator, allocator, allocator
 }
 
 // Reads a spec from a value; context.allocator holds it (give it an arena).
@@ -831,14 +844,22 @@ read_sets_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
 					base.report(r.findings, "bad_value", .Error, zp, "%s: %q is not a drum pad", zp, k)
 					continue
 				}
-				z := zone()
-				z.pad = pad
-				if f, is_file := po[k].(json.String); is_file {
-					z.file = strings.clone(f)
-				} else if !read_record(r, po[k], zp, SET_ZONE_FIELDS, &z) {
-					continue
+				// a file or a zone's record, or a list of them: a round robin
+				entries := []json.Value{po[k]}
+				if list, is_list := po[k].(json.Array); is_list {
+					entries = list[:]
 				}
-				append(&r.spec.set_zones, z)
+				for e, i in entries {
+					ep := len(entries) > 1 ? base.path_index(zp, i + 1) : zp
+					z := zone()
+					z.pad = pad
+					if f, is_file := e.(json.String); is_file {
+						z.file = strings.clone(f)
+					} else if !read_record(r, e, ep, SET_ZONE_FIELDS, &z) {
+						continue
+					}
+					append(&r.spec.set_zones, z)
+				}
 			}
 		}
 		// zones: a file per key range and velocity range
@@ -888,6 +909,52 @@ read_note_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
 }
 
 @(private = "file")
+read_sources_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
+	o, ok := v.(json.Object)
+	if !ok {
+		bad(r, path, "{ name = { url, licence, credit, pins } } per source")
+		return
+	}
+	names := make([dynamic]string, context.temp_allocator)
+	for k in o {
+		append(&names, k)
+	}
+	slice.sort(names[:])
+	for name in names {
+		sp := base.path_join(path, name)
+		x := Source_Spec{name = strings.clone(name)}
+		if !read_record(r, o[name], sp, SOURCE_FIELDS, &x) {
+			continue
+		}
+		if x.url == "" || x.pins == "" || x.licence == "" {
+			base.report(r.findings, "bad_value", .Error, sp, "%s: a source needs its url, its pins file and its licence", sp)
+			continue
+		}
+		// its name is a folder of the data directory, its url fetched by curl
+		named := true
+		for c in transmute([]u8)name {
+			named &&= (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-'
+		}
+		if !named {
+			base.report(r.findings, "bad_value", .Error, sp, "%s: a source's name is lowercase letters, digits, _ and -", sp)
+			continue
+		}
+		if !strings.has_prefix(x.url, "https://") {
+			base.report(r.findings, "bad_value", .Error, sp, "%s: a source's url is https://", sp)
+			continue
+		}
+		// odawg pin writes the pins: beside the spec, never out of its folder
+		if !plain_path(x.pins) {
+			base.report(r.findings, "bad_value", .Error, sp, "%s: its pins are a plain path in the spec's folder (no .., \\, drive or leading /)", sp)
+			continue
+		}
+		if !strings.has_suffix(x.url, "/") {
+			x.url = strings.concatenate({x.url, "/"})
+		}
+		append(&r.spec.sources, x)
+	}
+}
+
 read_buses_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
 	o, ok := v.(json.Object)
 	if !ok {
