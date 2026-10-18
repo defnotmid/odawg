@@ -247,6 +247,8 @@ test_transition_part :: proc(t: ^testing.T) {
 		testing.expect_value(t, tr.sends.count, 1)
 		for i in tr.notes.first ..< base.span_end(tr.notes) {
 			testing.expect_value(t, s.notes.pitch[i], 53) // F3: the chord b lands on
+			// the riser at v0.0.7's 0.35, the impact at 0.8
+			testing.expect_value(t, s.notes.velocity[i], notes == 0 ? 0.35 : 0.8)
 			notes += 1
 		}
 	}
@@ -478,4 +480,30 @@ test_row_findings :: proc(t: ^testing.T) {
 		}
 		testing.expectf(t, found, "no %s at %s", w.code, w.path)
 	}
+}
+
+// A song's part over a style's part of the same name is changes over it:
+// what it doesn't set (its octave, instrument, level, sends) is the
+// style's, its own entries included; what it sets wins.
+@(test)
+test_part_over_style :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	s := compose(t, `{ key: "A minor", sections: [ { name: "a", duration: "2m", bpm: 120, style: "styles/house.json", energy: 0.8, chords: "Am" } ],
+		parts: { bass: { gain_db: 3, play: [ { name: "a", degrees: "1 . . ." } ] } } }`, &arena)
+	bass := part_index(s, "bass")
+	testing.expect(t, bass >= 0)
+	notes := 0
+	for tr in s.tracks {
+		if int(tr.part) != bass {
+			continue
+		}
+		testing.expect_value(t, tr.gain_db, 3 + s.gain_db) // its own level
+		testing.expect(t, tr.instrument >= 0 && s.labels[tr.instrument] == "bass") // the style's instrument
+		for i in tr.notes.first ..< base.span_end(tr.notes) {
+			testing.expectf(t, s.notes.pitch[i] == 45, "A in the style's octave 2 (45), not %v", s.notes.pitch[i])
+			notes += 1
+		}
+	}
+	testing.expect(t, notes > 0)
 }

@@ -12,11 +12,16 @@ EXAMPLE_FILES := [?]struct {
 	style:      bool,
 } {
 	{"styles/acid_house.json", #load("../examples/styles/acid_house.json", string), true},
+	{"styles/ambient.json", #load("../examples/styles/ambient.json", string), true},
+	{"styles/booty_house.json", #load("../examples/styles/booty_house.json", string), true},
+	{"styles/chicago_house.json", #load("../examples/styles/chicago_house.json", string), true},
 	{"styles/house.json", #load("../examples/styles/house.json", string), true},
 	{"styles/lofi.json", #load("../examples/styles/lofi.json", string), true},
+	{"styles/synthwave.json", #load("../examples/styles/synthwave.json", string), true},
 	{"instruments/classic.json", #load("../examples/instruments/classic.json", string), false},
 	{"instruments/tb303.json", #load("../examples/instruments/tb303.json", string), false},
 	{"instruments/808_bass.json", #load("../examples/instruments/808_bass.json", string), false},
+	{"instruments/909_bass.json", #load("../examples/instruments/909_bass.json", string), false},
 	{"machines/808.json", #load("../examples/machines/808.json", string), false},
 	{"machines/909.json", #load("../examples/machines/909.json", string), false},
 }
@@ -30,4 +35,16 @@ add_examples :: proc(s: ^spec.Spec, findings: ^base.Findings) {
 		}
 	}
 	append(&s.instrument_includes, "instruments/classic.json")
+}
+
+// The example songs, as their texts.
+EXAMPLE_SONGS := [?]struct {
+	name, text: string,
+} {
+	{"acid_house", #load("../examples/acid_house.json", string)},
+	{"booty_house", #load("../examples/booty_house.json", string)},
+	{"chicago_house", #load("../examples/chicago_house.json", string)},
+	{"explainer", #load("../examples/explainer.json", string)},
+	{"lofi_live", #load("../examples/lofi_live.json", string)},
+	{"pop", #load("../examples/pop.json", string)},
 }

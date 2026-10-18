@@ -285,3 +285,60 @@ test_positional_list :: proc(t: ^testing.T) {
 	testing.expect(t, len(fields) == 1 && fields[0] == "path")
 	testing.expect(t, spec.positional_list("parts/acid/instrument/options/decay", 2, true)) // { "meg/time", "hit/time" }
 }
+
+// The example songs and the styles, instruments and machines they use read
+// without a warning about their rows (an option reaching nothing, a key no
+// one reads), and no finding's message is garbled.
+@(test)
+test_examples_clean :: proc(t: ^testing.T) {
+	for ex in EXAMPLE_SONGS {
+		arena: virtual.Arena
+		_ = virtual.arena_init_growing(&arena)
+		context.allocator = virtual.arena_allocator(&arena)
+		sp := new(spec.Spec)
+		findings := make(base.Findings)
+		testing.expectf(t, spec.spec_from_json(ex.text, sp, &findings), "%s", ex.name)
+		add_examples(sp, &findings)
+		s := new(song.Song)
+		song.song_from_spec(sp, s)
+		append(&s.findings, ..findings[:])
+		for f in s.findings {
+			testing.expectf(t, f.code != "unknown_option_target" && f.code != "unknown_key" && f.code != "control_shadows_field", "%s: %s %s", ex.name, f.code, f.message)
+			testing.expectf(t, !strings.contains(f.message, "%!"), "%s: a garbled message: %s", ex.name, f.message)
+		}
+		virtual.arena_destroy(&arena)
+	}
+}
+
+// A row's own option values apply whatever order its keys are in (`bright`
+// sorts before `options`), and a finding naming a shape reads as written.
+@(test)
+test_row_option_order :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	_ = virtual.arena_init_growing(&arena)
+	context.allocator = virtual.arena_allocator(&arena)
+	sp := new(spec.Spec)
+	findings := make(base.Findings)
+	testing.expect(t, spec.spec_from_json(`{ bpm: 120, sections: [ { name: "a", duration: "1m" } ], parts: {
+		p: { instrument: { bright: 900, options: { bright: "f/frequency" }, nodes: { o: { class: "Osc" }, f: { class: "Filter", input: "o" }, out: { class: "Mix", input: "f" } } }, play: [ { name: "a", notes: "C4" } ] },
+		q: { instrument: { nodes: { out: { class: "Osc", amp: 0.15 } } }, play: [ { name: "a", notes: "C4" } ] } } }`, sp, &findings))
+	s := new(song.Song)
+	song.song_from_spec(sp, s)
+	amp_message := ""
+	for f in s.findings {
+		testing.expectf(t, f.code != "unknown_key", "%s", f.message)
+		if f.code == "bad_value" && strings.contains(f.path, "amp") {
+			amp_message = f.message
+		}
+	}
+	testing.expectf(t, strings.contains(amp_message, "{ by, depth }"), "the amp finding reads: %q", amp_message)
+	d := s.tracks[song.part_index(s, "p")].instrument
+	p := s.programs.programs[i32(s.params[d][.Program])]
+	for n in s.programs.nodes[p.nodes.first:base.span_end(p.nodes)] {
+		if n.name == base.name_id("f") {
+			_, slot, _ := device.node_field_from_name(n.kind, "frequency")
+			testing.expect_value(t, n.values[slot], 900)
+		}
+	}
+}

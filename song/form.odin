@@ -84,7 +84,7 @@ lay_out :: proc(s: ^spec.Spec, song: ^Song) -> bool {
 				l.flex = {max(1, int(math.round(lo.value / f64(bpb)))), max(1, int(math.round(hi.value / f64(bpb))))}
 				l.bars = clamp(l.bars, l.flex[0], l.flex[1])
 			} else {
-				base.report(&song.findings, "bad_value", .Error, base.path_join(path, "flex"), "section %s: flex is { \"4m\", \"8m\" }, the fewest and most bars", ss.name)
+				base.report(&song.findings, "bad_value", .Error, base.path_join(path, "flex"), "section %s: flex is {{ \"4m\", \"8m\" }}, the fewest and most bars", ss.name)
 			}
 		}
 		bpm = l.bpm1

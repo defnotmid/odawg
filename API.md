@@ -159,9 +159,14 @@ A section takes:
   and nudges tempi before it to land there.
 - `bpm`: a number, or `{ from, to }` for a ramp.
 - `time_signature`, `style`, `energy` (0..1), `chords`.
-- `transition`: `"riser" | "fill" | "impact" | "pause" | "filter" | "cut" | "none"`. The
-  default is picked from the change in energy. Risers and impacts play on the `fx` part,
-  with its `gain_db`, `effects` and `sends` when the spec has one.
+- `transition`: `"riser" | "fill" | "impact" | "pause" | "cut" | "none"` (the default:
+  none, whatever the energy does). A riser (one note over the last two bars before the
+  section, velocity 0.35), an impact (one note on its downbeat, 0.8) and a fill (a roll of a
+  pad over the beat before it) play on the section's `transition_part`: a part (`"fx"`), or
+  a part and its pad (`"drums/crash"`; a fill needs the pad), with that part's instrument,
+  octave, `gain_db`, `effects` and `sends`. Without one, a transition that needs a part is a
+  warning (`transition_needs_part`). To layer sounds (an impact with a crash), write play
+  entries on the parts at those beats.
 - `flex = { min, max }`, `optional`, `stretch = "tempo"`.
 
 Fields not given carry over from the section before. Changing one section moves everything

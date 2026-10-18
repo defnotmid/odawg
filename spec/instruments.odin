@@ -384,7 +384,7 @@ draft_read :: proc(c: ^Ctx, d: ^Draft, v: json.Value, path: string, owner: ^Spec
 		c.writer = writer
 		return true
 	}
-	report(c, "bad_value", .Error, path, "%s: an instrument: a name, or a row ({ nodes = { ... } })", path)
+	report(c, "bad_value", .Error, path, "%s: an instrument: a name, or a row ({{ nodes = {{ ... }} }})", path)
 	return false
 }
 
@@ -448,10 +448,24 @@ draft_base :: proc(c: ^Ctx, d: ^Draft, name, path: string, owner: ^Spec, depth: 
 }
 
 // A row's keys over d: its nodes, pads, out, length, note, mono,
-// portamento, velocity, options, and any of its options by their names.
+// portamento, velocity, options, and any of its options by their names
+// (in that order, whatever order they were written in).
 @(private = "file")
 draft_apply :: proc(c: ^Ctx, d: ^Draft, o: json.Object, path: string, owner: ^Spec) {
-	for k in sorted_keys(o) {
+	// its nodes and pads, then its options, then the rest (an option's
+	// value, written beside `options` in the same row, finds it declared)
+	keys := sorted_keys(o)
+	rank :: proc(k: string) -> int {
+		switch k {
+		case "nodes", "pads":
+			return 0
+		case "options":
+			return 1
+		}
+		return 2
+	}
+	slice.stable_sort_by(keys, proc(a, b: string) -> bool {return rank(a) < rank(b)})
+	for k in keys {
 		v := o[k]
 		at := base.path_join(path, k)
 		switch k {
@@ -460,7 +474,7 @@ draft_apply :: proc(c: ^Ctx, d: ^Draft, o: json.Object, path: string, owner: ^Sp
 			d.path = path
 			nodes, ok := v.(json.Object)
 			if !ok {
-				report(c, "bad_value", .Error, at, "%s: { name = { \"Kind\", ... } } per node", at)
+				report(c, "bad_value", .Error, at, "%s: {{ name = {{ \"Kind\", ... }} }} per node", at)
 				continue
 			}
 			for name in sorted_keys(nodes) {
@@ -470,7 +484,7 @@ draft_apply :: proc(c: ^Ctx, d: ^Draft, o: json.Object, path: string, owner: ^Sp
 			d.path = path
 			pads, ok := v.(json.Object)
 			if !ok {
-				report(c, "bad_value", .Error, at, "%s: { name = instrument } per pad", at)
+				report(c, "bad_value", .Error, at, "%s: {{ name = instrument }} per pad", at)
 				continue
 			}
 			for name in sorted_keys(pads) {
@@ -507,7 +521,7 @@ draft_apply :: proc(c: ^Ctx, d: ^Draft, o: json.Object, path: string, owner: ^Sp
 		case "options":
 			opts, ok := v.(json.Object)
 			if !ok {
-				report(c, "bad_value", .Error, at, "%s: { option = \"node/field\" }", at)
+				report(c, "bad_value", .Error, at, "%s: {{ option = \"node/field\" }}", at)
 				continue
 			}
 			for name in sorted_keys(opts) {
@@ -599,7 +613,7 @@ option_targets :: proc(c: ^Ctx, d: ^Draft, name: string, v: json.Value, path: st
 				return
 			}
 		}
-		report(c, "bad_value", .Error, path, "%s: a target: \"node/field\" or { \"node/field\", op = \"mul\", scale = 2 }", path)
+		report(c, "bad_value", .Error, path, "%s: a target: \"node/field\" or {{ \"node/field\", op = \"mul\", scale = 2 }}", path)
 	}
 	if list, is_list := v.(json.Array); is_list {
 		for y, i in list {
@@ -669,7 +683,7 @@ draft_node_named :: proc(d: ^Draft, name: string) -> ^Draft_Node {
 draft_node :: proc(c: ^Ctx, d: ^Draft, name: string, v: json.Value, path: string, owner: ^Spec) {
 	o, ok := v.(json.Object)
 	if !ok {
-		report(c, "bad_value", .Error, path, "%s: a node: { \"Kind\", ... }", path)
+		report(c, "bad_value", .Error, path, "%s: a node: {{ \"Kind\", ... }}", path)
 		return
 	}
 	if slice.contains(device.RESERVED_NAMES[:], name) {
@@ -698,7 +712,7 @@ draft_node :: proc(c: ^Ctx, d: ^Draft, name: string, v: json.Value, path: string
 		}
 	}
 	if node == nil {
-		report(c, "bad_value", .Error, path, "%s: a new node needs its kind ({ \"Osc\", ... })", path)
+		report(c, "bad_value", .Error, path, "%s: a new node needs its kind ({{ \"Osc\", ... }})", path)
 		return
 	}
 	node.owner, node.path = owner, path
@@ -771,7 +785,7 @@ draft_field :: proc(c: ^Ctx, node: ^Draft_Node, field: ^device.Node_Field, slot:
 		}
 	}
 	if is_amp {
-		report(c, "bad_value", .Error, path, "%s: the node it follows (amp = \"env\"), or { by, depth }", path)
+		report(c, "bad_value", .Error, path, "%s: the node it follows (amp = \"env\"), or {{ by, depth }}", path)
 		return
 	}
 	if n, is_number := number_from_value(v); is_number {
@@ -842,7 +856,7 @@ draft_moves :: proc(c: ^Ctx, node: ^Draft_Node, field: ^device.Node_Field, slot:
 		by, has_by := x["by"].(json.String)
 		if !has_by {
 			if _, has_base := x["base"]; !has_base {
-				report(c, "bad_value", .Error, path, "%s: what moves it: { by = \"node\", amount = 1 }", path)
+				report(c, "bad_value", .Error, path, "%s: what moves it: {{ by = \"node\", amount = 1 }}", path)
 			}
 			return
 		}
@@ -858,7 +872,7 @@ draft_moves :: proc(c: ^Ctx, node: ^Draft_Node, field: ^device.Node_Field, slot:
 			draft_moves(c, node, field, slot, y, base.path_index(path, i + 1), false)
 		}
 	case:
-		report(c, "bad_value", .Error, path, "%s: a modulator: { by = \"node\", ... }", path)
+		report(c, "bad_value", .Error, path, "%s: a modulator: {{ by = \"node\", ... }}", path)
 	}
 }
 

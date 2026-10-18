@@ -3,16 +3,9 @@
   "note": 32.029,
   "out": "drive",
   "options": {
-    "decay": [
-      { "path": "amp*/time", "op": "mul" }, { "path": "amp*/time/amount", "op": "mul" },
-      { "path": "env*/time", "op": "mul" }, { "path": "env*/time/amount", "op": "mul" }
-    ],
-    "tone": [
-      { "path": "band*/frequency", "op": "octaves", "scale": 2, "offset": -1 },
-      { "path": "noise/gain_db", "op": "mul", "offset": 0.5 },
-      { "path": "click/gain_db", "op": "mul", "offset": 0.5 }
-    ],
-    "tune": [ { "path": "tone*/tune", "op": "add" }, { "path": "tri*/tune", "op": "add" } ]
+    "decay": [ { "path": "amp*/time", "op": "mul" }, { "path": "amp*/time/amount", "op": "mul" } ],
+    "tone": [ { "path": "click/gain_db", "op": "mul", "offset": 0.5 } ],
+    "tune": [ { "path": "tone*/tune", "op": "add" } ]
   },
   "nodes": {
     "pitch": { "class": "Random" },

@@ -152,7 +152,14 @@ arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 							covered[i] = true
 						}
 					}
-					expand(song, s, name, own, nil, &pl, b0, b1, &pending)
+					// over the style of the section it starts in (what it inherits)
+					under: ^spec.Spec
+					if len(song.sections) > 0 {
+						if st := song.sections[section_from_beat(song, b0)].style; st != "" {
+							under = style_spec(&src, st, &song.findings)
+						}
+					}
+					expand(song, s, name, own, nil, under, &pl, b0, b1, &pending)
 					append(&triggers, Trigger{b0, b1, strings.trim_prefix(pl.path, "song/")})
 				}
 			}
@@ -169,7 +176,7 @@ arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 			}
 			for &pl in st.plays[sp.plays.first:base.span_end(sp.plays)] {
 				if in_band(sec.energy, pl.energy) {
-					expand(song, st, name, own, st, &pl, sec.beat, sec.beat + sec.beats, &pending)
+					expand(song, st, name, own, st, st, &pl, sec.beat, sec.beat + sec.beats, &pending)
 					append(&triggers, Trigger{sec.beat, sec.beat + sec.beats, strings.concatenate({"style/", sec.style, "/", strings.trim_prefix(pl.path, "song/")})})
 				}
 			}
@@ -442,7 +449,7 @@ track_for :: proc(song: ^Song, src: ^Sources, work: ^Work, pi: i32, name, varian
 	}
 	if instrument.from == nil {
 		path := part_in(src.own, name) != nil ? base.path_join("parts", name) : strings.concatenate({"style/", variant, "/parts/", name})
-		base.report(&song.findings, "no_instrument", .Warning, path, "%s: no instrument, so it doesn't play: give it one (`instrument = { \"Synth\", ... }`)", path)
+		base.report(&song.findings, "no_instrument", .Warning, path, "%s: no instrument, so it doesn't play: give it one (`instrument = {{ \"Synth\", ... }}`)", path)
 		return -1
 	}
 	t.instrument = device_into_song(song, instrument.from, instrument.d, beat_seconds)
@@ -554,9 +561,11 @@ EXPANDERS := [spec.Play_Kind]Expand_Proc {
 }
 
 @(private = "file")
-expand :: proc(song: ^Song, from_spec: ^spec.Spec, name: string, own: ^spec.Part_Spec, style: ^spec.Spec, pl: ^spec.Play_Spec, from, to: f64, out: ^[dynamic]Note_Row) {
+expand :: proc(song: ^Song, from_spec: ^spec.Spec, name: string, own: ^spec.Part_Spec, style, under: ^spec.Spec, pl: ^spec.Play_Spec, from, to: f64, out: ^[dynamic]Note_Row) {
+	// its octave: the entry's, the song's part's, else the part's in the
+	// style it plays over (`under`: a song's own entry inherits it too)
 	octave := PART_OCTAVE
-	if sp := part_in(style, name); sp != nil && !math.is_nan(sp.octave) {
+	if sp := part_in(under, name); sp != nil && !math.is_nan(sp.octave) {
 		octave = int(sp.octave)
 	}
 	if own != nil && !math.is_nan(own.octave) {
@@ -958,6 +967,9 @@ expand_chords :: proc(x: ^Expand) {
 // needs the pad): its track for the style the outgoing section plays, else
 // its first.
 add_transitions :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
+	// the levels v0.0.7's fx played them at (synth.lua's riser and impact)
+	RISER_VELOCITY :: 0.35
+	IMPACT_VELOCITY :: 0.8
 	note :: proc(song: ^Song, t0, duration: f64, pitch, velocity: f32, pad: u32 = 0) -> Note_Row {
 		return {time = t0, duration = duration, beat = tempo.beat_from_seconds(&song.tempo, t0), pitch = pitch, velocity = velocity, pad = pad}
 	}
@@ -994,9 +1006,13 @@ add_transitions :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 				continue
 			}
 		}
+		// its octave: the song's part's, else the part's in the style its
+		// track plays (as the part's own entries)
 		octave := PART_OCTAVE
-		for p in s.parts {
-			if p.name == part && !math.is_nan(p.octave) {
+		src := Sources{own = s}
+		under := ti >= 0 && song.tracks[ti].variant != "" ? style_spec(&src, song.tracks[ti].variant, &song.findings) : nil
+		for p in ([]^spec.Part_Spec{part_in(under, part), part_in(s, part)}) {
+			if p != nil && !math.is_nan(p.octave) {
 				octave = int(p.octave)
 			}
 		}
@@ -1006,11 +1022,11 @@ add_transitions :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 		case .Riser:
 			from_beat := max(prev.beat, next.beat - 2 * f64(prev.beats_per_bar))
 			t0 := tempo.seconds_from_beat(&song.tempo, from_beat)
-			append(&work.notes[ti], note(song, t0, at - t0, root, 0.8, pad))
+			append(&work.notes[ti], note(song, t0, at - t0, root, RISER_VELOCITY, pad))
 			append(&song.regions, Region{song.tracks[ti].part, t0, at, source})
 		case .Impact:
 			bar := tempo.seconds_from_beat(&song.tempo, next.beat + f64(next.beats_per_bar)) - at
-			append(&work.notes[ti], note(song, at, bar, root, 0.8, pad))
+			append(&work.notes[ti], note(song, at, bar, root, IMPACT_VELOCITY, pad))
 			append(&song.regions, Region{song.tracks[ti].part, at, at + bar, source})
 		case .Fill:
 			last := next.beat - 1
