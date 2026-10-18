@@ -68,6 +68,42 @@ tone_row_text :: proc(name: string, allocator := context.temp_allocator) -> (str
 Instrument_File :: struct {
 	path:  string,
 	value: json.Value,
+	text:  string, // an SFZ file's (or what one includes), as read
+}
+
+// An SFZ file's text (or a file it includes), as the assets layer read it
+// declaring the instrument's samples: what compiling it reads.
+spec_add_sfz_text :: proc(s: ^Spec, path, text: string) {
+	// the song's (a style's spec is read again where it plays)
+	s := s
+	for s.outer != nil {
+		s = s.outer
+	}
+	for &f in s.instrument_files {
+		if f.path == path {
+			f.text = strings.clone(text)
+			return
+		}
+	}
+	append(&s.instrument_files, Instrument_File{path = strings.clone(path), text = strings.clone(text)})
+}
+
+// The SFZ texts the spec (and its outer ones) were handed, by path.
+sfz_texts :: proc(s: ^Spec, allocator := context.temp_allocator) -> map[string]string {
+	texts := make(map[string]string, allocator)
+	for o := s; o != nil; o = o.outer {
+		for f in o.instrument_files {
+			if f.text != "" {
+				texts[f.path] = f.text
+			}
+		}
+	}
+	return texts
+}
+
+// Whether an instrument's name is an SFZ file's.
+is_sfz_name :: proc(name: string) -> bool {
+	return strings.has_suffix(strings.to_lower(name, context.temp_allocator), ".sfz")
 }
 
 // Whether an instrument's name is a file's path.
@@ -81,8 +117,8 @@ is_file_name :: proc(name: string) -> bool {
 // this lists none.
 instrument_files :: proc(s: ^Spec, out: ^[dynamic]string) {
 	add :: proc(s: ^Spec, from: ^Spec, out: ^[dynamic]string, name: string) {
-		if !is_file_name(name) {
-			return
+		if !is_file_name(name) || is_sfz_name(name) {
+			return // an SFZ file is read with its samples (the assets layer)
 		}
 		path := path_from(from, name, context.allocator)
 		for f in s.instrument_files {
@@ -106,6 +142,13 @@ instrument_files :: proc(s: ^Spec, out: ^[dynamic]string) {
 			if pads, has := x["pads"].(json.Object); has {
 				for _, p in pads {
 					walk(s, from, out, p)
+				}
+			}
+			if layers, has := x["layers"].(json.Array); has {
+				for l in layers {
+					if lo, is_table := l.(json.Object); is_table {
+						walk(s, from, out, lo["instrument"])
+					}
 				}
 			}
 		}
@@ -164,7 +207,7 @@ spec_add_instrument_text :: proc(s: ^Spec, path, text: string, findings: ^base.F
 		base.report(findings, "bad_json", .Error, path, "instrument file %s is not valid JSON (%v)", path, err)
 		return false
 	}
-	append(&s.instrument_files, Instrument_File{strings.clone(path), v})
+	append(&s.instrument_files, Instrument_File{path = strings.clone(path), value = v})
 	return true
 }
 
@@ -286,6 +329,15 @@ Draft_Node :: struct {
 	path:     string,
 }
 
+// A layer of a layered row: its conditions and its instrument.
+@(private = "file")
+Draft_Layer :: struct {
+	row:   device.Layer_Row,
+	value: json.Value, // its instrument
+	owner: ^Spec,
+	path:  string,
+}
+
 @(private = "file")
 Draft_Pad :: struct {
 	name:    string,
@@ -301,6 +353,13 @@ Draft_Pad :: struct {
 Draft :: struct {
 	nodes:        [dynamic]Draft_Node,
 	pads:         [dynamic]Draft_Pad,
+	layers:       [dynamic]Draft_Layer,
+	sw_lo, sw_hi, sw_default: u8, // 1 + the keys that switch its layers (0: none)
+	sfz_name:     string, // an SFZ instrument's file (as written; "": none)
+	sfz_owner:    ^Spec, // where it was named (its path is from that spec's folder)
+	sfz_cc:       [128]f32, // the CC values the row gave (ccN = v, or a label_ccN's name)
+	sfz_cc_given: bit_set[0 ..< 128;u128],
+	sfz_overrides: map[string]f64, // opcodes for every region (the Sampler form's attack, release)
 	out:          string,
 	length:       f64,
 	length_beats: bool,
@@ -337,6 +396,7 @@ draft_init :: proc(d: ^Draft) {
 	d^ = {}
 	d.nodes = make([dynamic]Draft_Node, context.temp_allocator)
 	d.pads = make([dynamic]Draft_Pad, context.temp_allocator)
+	d.layers = make([dynamic]Draft_Layer, context.temp_allocator)
 	d.controls = make([dynamic]Draft_Control, context.temp_allocator)
 	d.out = "out"
 	d.velocity = true
@@ -394,6 +454,12 @@ draft_base :: proc(c: ^Ctx, d: ^Draft, name, path: string, owner: ^Spec, depth: 
 	if depth > 8 {
 		report(c, "instrument_cycle", .Error, path, "%s: %q names itself (through other rows)", path, name)
 		return false
+	}
+	if is_sfz_name(name) {
+		// an SFZ instrument: compiled from its text when placed
+		d.sfz_name, d.sfz_owner = name, owner
+		d.path = path
+		return true
 	}
 	if is_file_name(name) {
 		v, file, found := file_value(owner, name)
@@ -457,7 +523,7 @@ draft_apply :: proc(c: ^Ctx, d: ^Draft, o: json.Object, path: string, owner: ^Sp
 	keys := sorted_keys(o)
 	rank :: proc(k: string) -> int {
 		switch k {
-		case "nodes", "pads":
+		case "nodes", "pads", "layers":
 			return 0
 		case "options":
 			return 1
@@ -490,6 +556,22 @@ draft_apply :: proc(c: ^Ctx, d: ^Draft, o: json.Object, path: string, owner: ^Sp
 			for name in sorted_keys(pads) {
 				draft_pad(c, d, name, pads[name], base.path_join(at, name), owner)
 			}
+		case "layers":
+			d.path = path
+			list, ok := v.(json.Array)
+			if !ok {
+				report(c, "bad_value", .Error, at, "%s: a list of layers: {{ instrument, lo_key, hi_key, lo_vel, ... }}", at)
+				continue
+			}
+			for x, i in list {
+				draft_layer(c, d, x, base.path_index(at, i + 1), owner)
+			}
+		case "sw_lo":
+			d.sw_lo = 1 + u8(clamp(note_value(c, v, at), 0, 127))
+		case "sw_hi":
+			d.sw_hi = 1 + u8(clamp(note_value(c, v, at), 0, 127))
+		case "sw_default":
+			d.sw_default = 1 + u8(clamp(note_value(c, v, at), 0, 127))
 		case "out":
 			if s, is_string := v.(json.String); is_string {
 				d.out = s
@@ -638,6 +720,21 @@ draft_option :: proc(c: ^Ctx, d: ^Draft, key: string, v: json.Value, path: strin
 		return nil
 	}
 	x := find(d, key)
+	if x == nil && d.sfz_name != "" {
+		// an SFZ instrument's options: its CCs (cc64 = 127, or by their label)
+		if cc, value, ok := sfz_cc_option(c, d, key, v); ok {
+			d.sfz_cc[cc], d.sfz_cc_given = value, d.sfz_cc_given + {cc}
+			return
+		}
+		// an SFZ opcode by its name: every region's value (ampeg_release = 0.8)
+		if n, is_number := number_from_value(v); is_number && sfz_name(key).row >= 0 {
+			if d.sfz_overrides == nil {
+				d.sfz_overrides = make(map[string]f64, context.temp_allocator)
+			}
+			d.sfz_overrides[key] = n
+			return
+		}
+	}
 	if x == nil {
 		if o, is_table := v.(json.Object); is_table {
 			for k in sorted_keys(o) {
@@ -948,6 +1045,106 @@ draft_pad :: proc(c: ^Ctx, d: ^Draft, name: string, v: json.Value, path: string,
 	append(&d.pads, pad)
 }
 
+// A layer: its instrument and the conditions a note meets for it to sound
+// (Layer_Row's fields, by their names; keys may be note names).
+@(private = "file")
+draft_layer :: proc(c: ^Ctx, d: ^Draft, v: json.Value, path: string, owner: ^Spec) {
+	o, ok := v.(json.Object)
+	if !ok {
+		report(c, "bad_value", .Error, path, "%s: a layer: {{ instrument, lo_key, hi_key, ... }}", path)
+		return
+	}
+	l := Draft_Layer{owner = owner, path = path}
+	l.row = {hi_key = 127, hi_vel = 127, hi_rand = 1, seq_length = 1, seq_position = 1, gain = 1}
+	for k in sorted_keys(o) {
+		x := o[k]
+		at := base.path_join(path, k)
+		n, is_number := number_from_value(x)
+		key :: proc(c: ^Ctx, v: json.Value, at: string) -> u8 {return u8(clamp(note_value(c, v, at), 0, 127))}
+		switch k {
+		case "instrument":
+			l.value = x
+		case "lo_key":
+			l.row.lo_key = key(c, x, at)
+		case "hi_key":
+			l.row.hi_key = key(c, x, at)
+		case "sw_last_lo":
+			l.row.sw_last_lo = 1 + key(c, x, at)
+		case "sw_last_hi":
+			l.row.sw_last_hi = 1 + key(c, x, at)
+		case "trigger":
+			s, _ := x.(json.String)
+			switch s {
+			case "attack":
+				l.row.trigger = .Attack
+			case "release":
+				l.row.trigger = .Release
+			case "first":
+				l.row.trigger = .First
+			case "legato":
+				l.row.trigger = .Legato
+			case:
+				report(c, "bad_value", .Error, at, "%s: attack, release, first or legato", at)
+			}
+		case "off_mode":
+			s, _ := x.(json.String)
+			switch s {
+			case "fast":
+				l.row.off_mode = .Fast
+			case "normal":
+				l.row.off_mode = .Normal
+			case "time":
+				l.row.off_mode = .Time
+			case:
+				report(c, "bad_value", .Error, at, "%s: fast, normal or time", at)
+			}
+		case "lo_vel", "hi_vel", "lo_rand", "hi_rand", "seq_length", "seq_position", "group", "off_by", "off_time", "polyphony", "note_polyphony", "rt_decay", "gain_db":
+			if !is_number {
+				report(c, "bad_value", .Error, at, "%s: a number", at)
+				continue
+			}
+			switch k {
+			case "lo_vel":
+				l.row.lo_vel = u8(clamp(n, 0, 127))
+			case "hi_vel":
+				l.row.hi_vel = u8(clamp(n, 0, 127))
+			case "lo_rand":
+				l.row.lo_rand = f32(n)
+			case "hi_rand":
+				l.row.hi_rand = f32(n)
+			case "seq_length":
+				l.row.seq_length = u16(max(n, 1))
+			case "seq_position":
+				l.row.seq_position = u16(max(n, 1))
+			case "group":
+				l.row.group = i32(n)
+			case "off_by":
+				l.row.off_by = i32(n)
+			case "off_time":
+				l.row.off_time = f32(n)
+			case "polyphony":
+				l.row.polyphony = u16(max(n, 0))
+			case "note_polyphony":
+				l.row.note_polyphony = u16(max(n, 0))
+			case "rt_decay":
+				l.row.rt_decay = f32(n)
+			case "gain_db":
+				l.row.gain = f32(base.db_to_gain(n))
+			}
+		case:
+			report(c, "unknown_key", .Warning, at, "%s: a layer reads instrument, lo_key, hi_key, lo_vel, hi_vel, lo_rand, hi_rand, seq_length, seq_position, trigger, sw_last_lo, sw_last_hi, group, off_by, off_mode, off_time, polyphony, note_polyphony, rt_decay, gain_db; not %q", at, k)
+		}
+	}
+	if l.row.sw_last_lo != 0 && l.row.sw_last_hi == 0 {
+		l.row.sw_last_hi = l.row.sw_last_lo
+	}
+	if l.value == nil {
+		report(c, "bad_value", .Error, path, "%s: a layer plays an instrument", path)
+		return
+	}
+	append(&d.layers, l)
+}
+
 @(private = "file")
 note_value :: proc(c: ^Ctx, v: json.Value, path: string) -> f32 {
 	if n, ok := number_from_value(v); ok {
@@ -970,6 +1167,31 @@ note_value :: proc(c: ^Ctx, v: json.Value, path: string) -> f32 {
 // the row gave them; a machine's pads each its own.
 @(private = "file")
 draft_desc :: proc(c: ^Ctx, d: ^Draft, written: string) -> ^device.Program_Desc {
+	// the Sampler over an SFZ file (v0.0.5's form) is that SFZ instrument
+	if d.sfz_name == "" && len(d.nodes) == 1 && d.nodes[0].kind == device.NODE_SAMPLER && is_sfz_name(d.nodes[0].set_name) {
+		d.sfz_name, d.sfz_owner = d.nodes[0].set_name, d.nodes[0].set_from
+		// the attack and release it gives: every region's amp envelope's
+		if d.sfz_overrides == nil {
+			d.sfz_overrides = make(map[string]f64, context.temp_allocator)
+		}
+		for x in d.controls {
+			if x.value == nil {
+				continue
+			}
+			n, is_number := number_from_value(x.value)
+			switch {
+			case !is_number:
+			case x.name == "attack":
+				d.sfz_overrides["ampeg_attack"] = n
+			case x.name == "release":
+				d.sfz_overrides["ampeg_release"] = n
+			}
+		}
+		report(c, "sfz_instrument", .Info, d.nodes[0].set_path, "%s: an SFZ file plays as an instrument: instrument = {{ %q, ampeg_attack = ..., ampeg_release = ... }} (its own envelopes and layers; a Sampler's attack and release are its ampeg's)", d.nodes[0].set_path, d.sfz_name)
+	}
+	if d.sfz_name != "" {
+		return sfz_desc(c, d, written)
+	}
 	desc := new(device.Program_Desc, context.temp_allocator)
 	desc^ = {
 		length     = f32(d.length * (d.length_beats ? c.beat_seconds : 1)),
@@ -1027,6 +1249,17 @@ draft_desc :: proc(c: ^Ctx, d: ^Draft, written: string) -> ^device.Program_Desc 
 		}
 	}
 	desc.pads = pads
+	layers := make([]device.Layer_Desc, len(d.layers), context.temp_allocator)
+	for &l, i in d.layers {
+		layers[i] = {row = l.row, path = l.path}
+		sub: Draft
+		draft_init(&sub)
+		if draft_read(c, &sub, l.value, l.path, l.owner, 0) {
+			layers[i].program = draft_desc(c, &sub, l.path)
+		}
+	}
+	desc.layers = layers
+	desc.sw_lo, desc.sw_hi, desc.sw_default = d.sw_lo, d.sw_hi, d.sw_default
 	controls := make([]device.Control_Desc, len(d.controls), context.temp_allocator)
 	for &x, i in d.controls {
 		controls[i] = {name = x.name, targets = x.targets[:], path = x.path}
@@ -1088,6 +1321,69 @@ target_field :: proc(d: ^Draft, path: string) -> ^device.Node_Field {
 	return nil
 }
 
+// An SFZ instrument's program: its text (and what it includes, as the
+// assets layer read them declaring its samples) read and compiled, its CCs
+// at the values the row gave, else its own.
+@(private = "file")
+sfz_desc :: proc(c: ^Ctx, d: ^Draft, written: string) -> ^device.Program_Desc {
+	owner := d.sfz_owner
+	key := asset_key(owner, d.sfz_name)
+	texts := sfz_texts(owner)
+	text, found := texts[key]
+	if !found {
+		report(c, "missing_file", .Error, written, "%s: SFZ file %s was not read (the assets layer reads it declaring its samples)", written, key)
+		return nil
+	}
+	s: Sfz
+	sfz_read(&s, key, text, texts, context.temp_allocator)
+	for m in s.missing {
+		report(c, "missing_file", .Error, written, "%s: %s includes %s, which was not read", written, key, m)
+	}
+	cc := s.cc
+	for k in d.sfz_cc_given {
+		cc[k] = d.sfz_cc[k]
+	}
+	set, found_set := device.bank_set_from_name(c.bank, key)
+	if !found_set {
+		report(c, "asset_unavailable", .Error, written, "%s: SFZ %q's samples are not declared (offline, or not read)", written, d.sfz_name)
+		set = -1
+	}
+	desc := sfz_program_desc(&s, i32(set), cc, written, c.findings, d.sfz_overrides)
+	if len(desc.layers) == 0 {
+		report(c, "sfz_silent", .Warning, written, "%s: no region of %s plays at its CCs' values (set them: cc64 = 127, or by their labels)", written, d.sfz_name)
+		return nil
+	}
+	return desc
+}
+
+// An SFZ instrument's option: a CC's value (cc64 = 127), or one by its
+// label_ccN's name (sustain = 127). False: neither.
+@(private = "file")
+sfz_cc_option :: proc(c: ^Ctx, d: ^Draft, key: string, v: json.Value) -> (cc: int, value: f32, ok: bool) {
+	n, is_number := number_from_value(v)
+	if !is_number {
+		return
+	}
+	if strings.has_prefix(key, "cc") {
+		if k, parsed := strconv.parse_int(key[2:]); parsed && k >= 0 && k < 128 {
+			return k, f32(n), true
+		}
+	}
+	owner := d.sfz_owner
+	texts := sfz_texts(owner)
+	path := asset_key(owner, d.sfz_name)
+	if text, found := texts[path]; found {
+		s: Sfz
+		sfz_read(&s, path, text, texts, context.temp_allocator)
+		for label, k in s.cc_labels {
+			if label != "" && (label == key || strings.to_lower(label, context.temp_allocator) == strings.to_lower(key, context.temp_allocator)) {
+				return k, f32(n), true
+			}
+		}
+	}
+	return
+}
+
 // A Sampler's named keys: its set's pads (a set of the song's), else
 // General MIDI's names (a kit keyed to them).
 @(private = "file")
@@ -1123,7 +1419,11 @@ instrument_program :: proc(s: ^Spec, d: i32, beat_seconds: f64, bank: ^device.Ba
 	if !draft_read(&c, &draft, dev.row, path, s, 0) {
 		return -1
 	}
-	return device.compile_program(progs, draft_desc(&c, &draft, path), findings)
+	desc := draft_desc(&c, &draft, path)
+	if desc == nil {
+		return -1
+	}
+	return device.compile_program(progs, desc, findings)
 }
 
 // The sample sets a Voice's row plays (its Samplers', its pads' too), each
@@ -1140,6 +1440,17 @@ instrument_sets :: proc(s: ^Spec, d: i32, out: ^[dynamic]Asset_Ref) {
 
 @(private = "file")
 draft_sets :: proc(c: ^Ctx, d: ^Draft, from: ^Spec, out: ^[dynamic]Asset_Ref) {
+	if d.sfz_name != "" {
+		scope := d.sfz_owner != nil ? d.sfz_owner : from
+		found := false
+		for x in out {
+			found ||= x.name == d.sfz_name && x.from == scope
+		}
+		if !found {
+			append(out, Asset_Ref{d.sfz_name, nil, scope}) // no owner: not a set of the song's own
+		}
+		return
+	}
 	for n in d.nodes {
 		if n.set_name == "" {
 			continue
@@ -1161,6 +1472,13 @@ draft_sets :: proc(c: ^Ctx, d: ^Draft, from: ^Spec, out: ^[dynamic]Asset_Ref) {
 			draft_sets(c, &sub, from, out)
 		}
 	}
+	for l in d.layers {
+		sub: Draft
+		draft_init(&sub)
+		if draft_read(c, &sub, l.value, l.path, l.owner, 0) {
+			draft_sets(c, &sub, from, out)
+		}
+	}
 }
 
 // The pads an instrument has, by id (a machine's, its Sampler's set's):
@@ -1170,7 +1488,7 @@ program_pads :: proc(progs: ^device.Programs, program: i32, out: ^[dynamic]u32) 
 		return
 	}
 	p := &progs.programs[program]
-	for pr in progs.pads[p.pads.first:base.span_end(p.pads)] {
+	for pr in progs.layers[p.layers.first:base.span_end(p.layers)] {
 		append(out, pr.pad)
 	}
 }

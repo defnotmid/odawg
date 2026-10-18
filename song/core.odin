@@ -164,6 +164,17 @@ Note_Row :: struct {
 	pad:            u32, // base.name_id of its name (0: a pitched note)
 	accent:         f32, // 0..1: an accented step (X), a note's !
 	track:          u16,
+	kind:           device.Note_Kind, // played, or made at compose (a release trigger's, a keyswitch)
+	round:          u16, // earlier notes of its key on its track
+	keyswitch:      u8, // 1 + the last keyswitch key before it (0: none)
+	legato:         bool, // another note of its track is held when it starts
+	level:          f32, // a gain on it (0: 1)
+}
+
+// A note row as the engine and the devices read it.
+note_of :: proc(s: ^Song, i: int) -> device.Note {
+	n := s.notes[i]
+	return {n.time, n.duration, n.pitch, n.velocity, n.pad, n.accent, n.kind, n.round, n.keyswitch, n.legato, n.level}
 }
 
 Song :: struct {
@@ -261,6 +272,7 @@ song_from_spec :: proc(s: ^spec.Spec, out: ^Song, bank: ^device.Bank = nil) -> b
 	work.notes = make([dynamic][dynamic]Note_Row, context.temp_allocator)
 	arrange(s, out, &work)
 	add_transitions(s, out, &work)
+	layered_notes(out, &work)
 	index_notes(out, &work)
 	sort_regions(out)
 	graph_build(out)

@@ -63,6 +63,7 @@ Sample_Need :: struct {
 	set:        i32,
 	keys:       bit_set[0 ..< 128;u128],
 	velocities: [128]bit_set[0 ..< 128;u128], // by key
+	zones:      [dynamic]i32, // zones (of the set's, by index) played as such (an SFZ region's Region)
 }
 
 // A zone's loop_to before loading: take the file's loop (a WAV's smpl).

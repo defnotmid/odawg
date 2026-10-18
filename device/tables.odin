@@ -125,6 +125,20 @@ Note :: struct {
 	velocity: f32, // 0..1
 	pad:      u32, // the pad it plays (name_id of its name; 0: none)
 	accent:   f32, // 0..1
+	kind:     Note_Kind,
+	round:    u16, // earlier notes of its key on its track (a round robin's turn)
+	keyswitch: u8, // 1 + the last keyswitch key before it (0: none)
+	legato:   bool, // another note of its track is held when it starts
+	level:    f32, // a gain on it (a release note's rt_decay; 0: 1)
+}
+
+// What a note is: played, or made at compose from another (an SFZ release
+// trigger at a note's end, a key that switches articulation and doesn't
+// sound).
+Note_Kind :: enum u8 {
+	Attack,
+	Release,
+	Keyswitch,
 }
 
 // General MIDI's drum names and keys: what a sample set's pad of one of

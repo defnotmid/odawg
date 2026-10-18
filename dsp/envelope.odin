@@ -11,7 +11,9 @@ import "core:math"
 
 Adsr_Stage :: enum u8 {
 	Idle,
+	Delay, // silent until it starts (SFZ's delay)
 	Attack,
+	Hold, // at the top (SFZ's hold)
 	Decay,
 	Sustain,
 	Release,
@@ -19,6 +21,8 @@ Adsr_Stage :: enum u8 {
 
 Adsr :: struct {
 	attack, decay, sustain, release: f32,
+	delay, hold:                     f32, // seconds (0: none: Tone's ADSR)
+	start:                           f32, // the level the attack rises from
 	exponential_attack:              bool,
 	stage:                           Adsr_Stage,
 	samples:                         int, // into the stage
@@ -90,6 +94,15 @@ adsr_run :: proc "contextless" (e: ^Adsr, out: []f32, release_at: int) {
 		switch e.stage {
 		case .Idle:
 			e.value = 0
+		case .Delay:
+			e.value = 0
+			if f64(e.samples) >= f64(e.delay) * RATE {
+				e.stage, e.samples, e.from, e.length = .Attack, 0, e.start, 0
+				if e.exponential_attack {
+					stage_set(e, e.attack, 1)
+				}
+				e.value = e.start
+			}
 		case .Attack:
 			a := f64(e.attack)
 			t := f64(e.samples) / RATE
@@ -101,6 +114,16 @@ adsr_run :: proc "contextless" (e: ^Adsr, out: []f32, release_at: int) {
 				e.value = e.from + (1 - e.from) * f32(t / a)
 			}
 			if done {
+				if e.hold > 0 {
+					e.stage, e.samples = .Hold, 0
+				} else {
+					e.stage, e.samples, e.from = .Decay, 0, 1
+					stage_set(e, e.decay, e.sustain)
+				}
+			}
+		case .Hold:
+			e.value = 1
+			if f64(e.samples) >= f64(e.hold) * RATE {
 				e.stage, e.samples, e.from = .Decay, 0, 1
 				stage_set(e, e.decay, e.sustain)
 			}

@@ -1,6 +1,7 @@
 package odawg_device
 
 import base "../base"
+import dsp "../dsp"
 import "core:math"
 
 // Tone's Sampler over a set of the Bank: a note picks the zone answering its
@@ -218,15 +219,18 @@ sampler_level :: #force_inline proc "contextless" (st: ^Sampler_State, k: i64) -
 	case t >= st.release:
 		return 0, true
 	case t < 0.9 * st.release:
-		return from * f32(math.exp(-t / st.release_tc)), false
+		return from * dsp.exp_decay(f32(-t / st.release_tc)), false
 	}
 	v90 := f64(from) * math.exp(-0.9 * st.release / st.release_tc)
 	return f32(v90 - v90 * (t - 0.9 * st.release) / (0.1 * st.release)), false
 }
 
-// The note's next len(l) samples, added into l and r; false once it is over.
+// The note's next len(l) samples, written into l and r (silence where it is
+// over); false once it is over.
 sampler_play :: proc(st: ^Sampler_State, at: i64, env: ^Voice_Env, l, r: []f32) -> bool {
 	if st.zone < 0 || env == nil || env.bank == nil {
+		slice_zero(l)
+		slice_zero(r)
 		return false
 	}
 	sm := env.bank.samples[env.bank.zones[st.zone].sample]
@@ -261,6 +265,8 @@ sampler_run :: proc(st: ^Sampler_State, data: []$T, channels: int, scale: f32, a
 		k := at + i64(i)
 		level, done := sampler_level(st, k)
 		if done {
+			slice_zero(l[i:m])
+			slice_zero(r[i:m])
 			return false
 		}
 		pos := f64(st.offset) + f64(k) * st.step
@@ -268,6 +274,8 @@ sampler_run :: proc(st: ^Sampler_State, data: []$T, channels: int, scale: f32, a
 			pos = f64(st.loop_from) + math.mod(pos - f64(st.loop_from), f64(loop_len))
 		}
 		if !looped && pos >= f64(st.length) + f64(st.taps) {
+			slice_zero(l[i:m])
+			slice_zero(r[i:m])
 			return false
 		}
 		centre := i64(pos) // pos >= 0: truncation floors it
@@ -277,8 +285,9 @@ sampler_run :: proc(st: ^Sampler_State, data: []$T, channels: int, scale: f32, a
 		case frac == 0 && st.step == 1 && centre < st.length:
 			sl, sr = f32(data[ch * centre]) * cutoff, f32(data[ch * centre + right]) * cutoff
 		case centre - taps + 1 >= 0 && centre + taps < safe_to:
+			// every tap inside the sample, every table index inside the table
 			f := f32(frac)
-			for d in 1 - taps ..= taps {
+			#no_bounds_check for d in 1 - taps ..= taps {
 				x := abs((f - f32(d)) * c) * SINC_STEPS
 				ti := int(x)
 				w := (sinc_table[ti] + (sinc_table[ti + 1] - sinc_table[ti]) * (x - f32(ti))) * cutoff
@@ -300,8 +309,8 @@ sampler_run :: proc(st: ^Sampler_State, data: []$T, channels: int, scale: f32, a
 				sr += f32(data[ch * f + right]) * w
 			}
 		}
-		l[i] += sl * st.gain_l * level
-		r[i] += sr * st.gain_r * level
+		l[i] = sl * st.gain_l * level
+		r[i] = sr * st.gain_r * level
 	}
 	return true
 }
@@ -353,4 +362,215 @@ tail_sampler :: proc(set_index: i32, release: f32, key: f32, n: Note, env: ^Voic
 		}
 	}
 	return tail
+}
+
+// ---- Region: one zone of a set, as an SFZ region plays it --------------------------
+
+// A zone (one of its set's, by index) played from `offset` (plus up to
+// `offset_random` frames, by the note's seed) at the note's key: shifted
+// from `keycenter` by `keytrack` cents a key and `tune` cents, and by `rate`
+// (what moves the pitch: a pitch envelope, an LFO, a factor); it plays to
+// `end` (0: the sample's), loops as `loop_mode` says (default: the zone's
+// own loop, if it has one), starts after `delay`, and spreads its two sides
+// by `width` (percent: 100 as recorded, 0 mono). Read through the same
+// Kaiser-windowed sinc as the Sampler. While nothing moves its rate, every
+// sample is a function of its index alone (a seek may start it anywhere).
+
+REGION_SET :: 3
+REGION_ZONE :: 4
+REGION_KEYCENTER :: 5
+REGION_KEYTRACK :: 6
+REGION_TUNE :: 7
+REGION_RATE :: 8
+REGION_OFFSET :: 9
+REGION_OFFSET_RANDOM :: 10
+REGION_END :: 11
+REGION_LOOP_MODE :: 12
+REGION_LOOP_START :: 13
+REGION_LOOP_END :: 14
+REGION_DELAY :: 15
+REGION_WIDTH :: 16
+
+REGION_LOOP_MODES := []string{"default", "no_loop", "one_shot", "loop_continuous", "loop_sustain"}
+
+Region_State :: struct {
+	zone:      i32, // into the bank's zones (-1: nothing to play)
+	length:    i64, // frames it plays to
+	loop_from: i64,
+	loop_to:   i64, // <= loop_from: no loop
+	sustain:   bool, // it loops only while its note is held
+	start:     f64, // the frame it starts at
+	pos:       f64, // where it is (a moving rate: the sum of its steps)
+	step:      f64, // frames per output sample at rate 1
+	cutoff:    f64,
+	taps:      int,
+	delay:     i64, // samples
+	width:     f32,
+	over:      bool,
+}
+
+#assert(size_of(Region_State) <= VOICE_STATE_SIZE)
+
+@(private = "package")
+region_start :: proc(c: ^Node_Call, lane: ^Lane, st: ^Region_State) {
+	st^ = {zone = -1}
+	v := node_values(c, lane)
+	env := c.env
+	if env == nil || env.bank == nil {
+		return
+	}
+	bank := env.bank
+	set := int(v[REGION_SET])
+	if set < 0 || set >= len(bank.sets) {
+		return
+	}
+	zs := bank.sets[set].zones
+	zi := zs.first + i32(v[REGION_ZONE])
+	if v[REGION_ZONE] < 0 || zi >= base.span_end(zs) {
+		return
+	}
+	z := &bank.zones[zi]
+	if z.sample < 0 || int(z.sample) >= len(bank.samples) {
+		return
+	}
+	sm := bank.samples[z.sample]
+	st.zone = zi
+	st.length = sm.frames
+	if end := i64(v[REGION_END]); end > 0 {
+		st.length = min(st.length, end + 1)
+	}
+	switch int(v[REGION_LOOP_MODE]) {
+	case 0: // the zone's own loop (the file's), unless it is a one-shot
+		st.loop_from, st.loop_to = i64(z.loop_from), i64(z.loop_to)
+	case 3, 4:
+		st.loop_from, st.loop_to = i64(z.loop_from), i64(z.loop_to)
+		st.sustain = int(v[REGION_LOOP_MODE]) == 4
+	}
+	if v[REGION_LOOP_START] >= 0 && int(v[REGION_LOOP_MODE]) >= 3 {
+		st.loop_from = i64(v[REGION_LOOP_START])
+	}
+	if v[REGION_LOOP_END] > 0 && int(v[REGION_LOOP_MODE]) >= 3 {
+		st.loop_to = i64(v[REGION_LOOP_END]) + 1
+	}
+	if st.loop_to > st.length || st.loop_to - st.loop_from < 2 {
+		st.loop_to = st.loop_from
+	}
+	random := f64(v[REGION_OFFSET_RANDOM]) * base.hash_unit(lane.seed ~ 0x0ff5e7)
+	st.start = max(f64(node_value(c, lane, REGION_OFFSET)) + math.floor(random), 0)
+	st.pos = st.start
+	cents := (f64(lane.key) - f64(v[REGION_KEYCENTER])) * f64(v[REGION_KEYTRACK]) + f64(node_value(c, lane, REGION_TUNE))
+	st.step = math.pow(2, cents / 1200) * device_rate_ratio(sm)
+	st.cutoff = clamp(1 / st.step, 1.0 / SINC_MAX_STRETCH, 1)
+	st.taps = int(math.ceil(SINC_HALF / st.cutoff))
+	st.delay = i64(math.round(f64(max(node_value(c, lane, REGION_DELAY), 0)) * RATE))
+	st.width = v[REGION_WIDTH] / 100
+}
+
+@(private = "package")
+process_region :: proc(c: ^Node_Call) {
+	n := c.frames
+	for &lane in c.lanes {
+		st := node_state(c, &lane, Region_State)
+		if lane.starting || lane.fresh {
+			region_start(c, &lane, st)
+		}
+		l, r := node_out(c, &lane)
+		slice_zero(l)
+		slice_zero(r)
+		if st.zone < 0 || st.over || c.env == nil || c.env.bank == nil {
+			continue
+		}
+		rate: [NODE_CHUNK]f32
+		varies, factor := node_curve(c, &lane, REGION_RATE, node_values(c, &lane)[REGION_RATE], rate[:n])
+		bank := c.env.bank
+		sm := bank.samples[bank.zones[st.zone].sample]
+		switch sm.format {
+		case .F32:
+			region_run(st, &lane, sample_f32(bank, sm), int(sm.channels), 1, varies, factor, rate[:n], l, r)
+		case .I16:
+			region_run(st, &lane, sample_i16(bank, sm), int(sm.channels), 1.0 / 32768, varies, factor, rate[:n], l, r)
+		}
+	}
+}
+
+@(private = "file")
+region_run :: proc(st: ^Region_State, lane: ^Lane, data: []$T, channels: int, scale: f32, varies: bool, factor: f32, rate: []f32, l, r: []f32) {
+	ch := i64(channels)
+	right := i64(channels > 1 ? 1 : 0)
+	taps := i64(st.taps)
+	c := f32(st.cutoff)
+	cutoff := f32(st.cutoff) * scale
+	for i in 0 ..< len(l) {
+		k := lane.at + i64(i) - st.delay
+		if k < 0 {
+			continue
+		}
+		looped := st.loop_to > st.loop_from && (!st.sustain || lane.at + i64(i) < lane.gate)
+		pos := varies ? st.pos : st.start + f64(k) * st.step * f64(factor)
+		if looped && pos >= f64(st.loop_to) {
+			pos = f64(st.loop_from) + math.mod(pos - f64(st.loop_from), f64(st.loop_to - st.loop_from))
+		}
+		if varies {
+			st.pos = pos + st.step * f64(rate[i])
+		}
+		if pos >= f64(st.length) + f64(taps) {
+			st.over = true
+			return
+		}
+		centre := i64(pos)
+		frac := pos - f64(centre)
+		sl, sr: f32
+		// the frames a kernel may read without wrapping or leaving the sample
+		safe_to := looped ? st.loop_to : st.length
+		if frac == 0 && st.step * f64(varies ? rate[i] : factor) == 1 && centre < st.length {
+			sl, sr = f32(data[ch * centre]) * cutoff, f32(data[ch * centre + right]) * cutoff
+		} else if centre - taps + 1 >= 0 && centre + taps < safe_to {
+			// every tap inside the sample, every table index inside the table
+			f := f32(frac)
+			#no_bounds_check for d in 1 - taps ..= taps {
+				x := abs((f - f32(d)) * c) * SINC_STEPS
+				ti := int(x)
+				w := (sinc_table[ti] + (sinc_table[ti + 1] - sinc_table[ti]) * (x - f32(ti))) * cutoff
+				fi := centre + d
+				sl += f32(data[ch * fi]) * w
+				sr += f32(data[ch * fi + right]) * w
+			}
+		} else {
+			f := f32(frac)
+			for d in 1 - taps ..= taps {
+				fi := centre + d
+				if looped && fi >= st.loop_to {
+					fi = st.loop_from + (fi - st.loop_from) % (st.loop_to - st.loop_from)
+				}
+				if fi < 0 || fi >= st.length {
+					continue
+				}
+				x := abs((f - f32(d)) * c) * SINC_STEPS
+				ti := int(x)
+				w := (sinc_table[ti] + (sinc_table[ti + 1] - sinc_table[ti]) * (x - f32(ti))) * cutoff
+				sl += f32(data[ch * fi]) * w
+				sr += f32(data[ch * fi + right]) * w
+			}
+		}
+		if st.width != 1 {
+			mid, side := (sl + sr) * 0.5, (sl - sr) * 0.5 * st.width
+			sl, sr = mid + side, mid - side
+		}
+		l[i], r[i] = sl, sr
+	}
+}
+
+// Seconds it sounds from the note's start: to its sample's end at its
+// pitch (INF: it loops, so its note's envelope ends it).
+@(private = "package")
+tail_region :: proc(c: ^Node_Call, lane: ^Lane) -> f64 {
+	st: Region_State
+	region_start(c, lane, &st)
+	if st.zone < 0 {
+		return 0
+	}
+	if st.loop_to > st.loop_from {
+		return math.INF_F64
+	}
+	return (f64(st.length) - st.start) / st.step / RATE + f64(st.delay) / RATE
 }

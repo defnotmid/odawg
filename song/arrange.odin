@@ -308,8 +308,11 @@ pad_play_path :: proc(s: ^spec.Spec, src: ^Sources, part, style, pad: string) ->
 			continue
 		}
 		for pl in from.plays[p.plays.first:base.span_end(p.plays)] {
+			if pl.kind != .Steps {
+				continue // its rows are another table's (events, notes)
+			}
 			for lane in from.lanes[pl.rows.first:base.span_end(pl.rows)] {
-				if pl.kind == .Steps && lane.pad == pad {
+				if lane.pad == pad {
 					path := strings.concatenate({strings.trim_prefix(pl.path, "song/"), "/steps/", pad})
 					return k == 0 ? path : strings.concatenate({"style/", style, "/", path})
 				}
@@ -1054,6 +1057,62 @@ add_transitions :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 			}
 		case .None, .Cut:
 		}
+	}
+}
+
+// The notes of a track playing a layered instrument (an SFZ's), as it
+// reads them, worked out here so a render from anywhere sees the same: a
+// key in its keyswitch range switches (it doesn't sound) and every later
+// note carries the last switch; each note its round (earlier notes of its
+// key: a round robin's turn) and whether another is held when it starts
+// (legato); and, when a region answers a note's end, a release note there
+// (its duration: how long the note was held).
+layered_notes :: proc(song: ^Song, work: ^Work) {
+	for &notes, ti in work.notes {
+		d := song.tracks[ti].instrument
+		if d < 0 || song.devices[d] != .Voice {
+			continue
+		}
+		program := i32(song.params[d][.Program])
+		if program < 0 || song.programs.programs[program].layer_mode != .All {
+			continue
+		}
+		prog := song.programs.programs[program]
+		slice.sort_by(notes[:], proc(a, b: Note_Row) -> bool {return a.time < b.time || (a.time == b.time && a.pitch < b.pitch)})
+		last := prog.sw_default
+		rounds: [128]u16
+		held := make([dynamic]f64, context.temp_allocator) // the ends of the notes sounding
+		releases := make([dynamic]Note_Row, context.temp_allocator)
+		for &n in notes {
+			key := int(math.round(n.pitch))
+			if prog.sw_lo != 0 && key + 1 >= int(prog.sw_lo) && key + 1 <= int(prog.sw_hi) {
+				n.kind = .Keyswitch
+				last = u8(key + 1)
+				continue
+			}
+			n.keyswitch = last
+			if key >= 0 && key < 128 {
+				n.round = rounds[key]
+				rounds[key] += 1
+			}
+			#reverse for end, k in held {
+				if end <= n.time + 1e-9 {
+					unordered_remove(&held, k)
+				}
+			}
+			n.legato = len(held) > 0
+			append(&held, n.time + n.duration)
+			if prog.release_layers {
+				r := n
+				r.kind = .Release
+				r.time = n.time + n.duration
+				r.beat = tempo.beat_from_seconds(&song.tempo, r.time)
+				r.duration = n.duration // how long it was held (rt_decay)
+				r.legato = false
+				append(&releases, r)
+			}
+		}
+		append(&notes, ..releases[:])
 	}
 }
 

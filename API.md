@@ -274,12 +274,12 @@ itself under `styles` wins over a file of the same name.
 
 ### 3.6 Sample sets of your own
 
-A Sampler's `set` names a set from one of three places, tried in this order:
+A Sampler's `set` names a set from one of two places, tried in this order (an SFZ file is an
+instrument of its own: §3.6.1):
 
 | source | written as | its zones |
 | --- | --- | --- |
 | the song's own | `sets = { my_kit = { ... } }` | pads and zones, as written |
-| an SFZ file | `set = "piano/piano.sfz"` | the file's regions |
 | the register | `set = "vcsl/upright_piano"` | pinned, fetched on first use |
 
 ```lua
@@ -301,18 +301,49 @@ parts = { drums = { instrument = { "Sampler", set = "kit" } },
   `offset` (frames into the file).
 - Files are read at their own rate and played at the right pitch. Nothing is resampled
   when it loads.
-- SFZ reads the opcodes that place and play a sample. These are `sample`, `key`, `lokey`,
-  `hikey`, `pitch_keycenter`, `lovel`, `hivel`, `volume`, `tune`, `offset`, the loop modes
-  and points, and `seq_position` (zones that answer the same keys and velocities take
-  turns). Headers inherit as SFZ has it, from `<global>` down to `<region>`, and paths
-  come after `default_path`. Any other opcode is an `unsupported_opcode` info finding.
-  Release-triggered regions are left out, and the rest of the file still plays.
 - A set is keyed by its content. When a file changes, its set is declared again, and the
   song's `files` list (from `bank_declare_spec`) is what a host watches.
 - The samples are yours: odawg never commits or redistributes them. `credit` is what
   `odawg credits` prints.
 - A path in a style file is relative to that file's folder, so a style travels with its
   files.
+
+#### 3.6.1 SFZ instruments
+
+An SFZ file is an instrument: `instrument = "piano/piano.sfz"`, or with changes
+`{ "piano/piano.sfz", cc64 = 127, ampeg_release = 0.4 }`. Its regions are layers of one
+program (§3.4): a note starts every region whose conditions it meets, each a voice.
+
+- **Read:** headers inherit as SFZ has it (`<control>`, `<global>`, `<master>`, `<group>`,
+  `<region>`); `#define $NAME value` and `#include "file"` (from the first file's folder,
+  read the way its samples are: the song's folder, the host, a source); `<curve>`; names in
+  either case and with padded numbers (`eg01_time1`); any opcode with a CC suffix
+  (`cutoff_oncc74`, v1's `cutoffcc74`).
+- **Played:** key, velocity, random and sequence conditions; triggers (attack, release with
+  `rt_decay`, first, legato); keyswitches (`sw_lokey`, `sw_hikey`, `sw_last`, `sw_lolast`,
+  `sw_hilast`, `sw_default`); `group`, `off_by`, `off_mode`, `off_time`, `polyphony`,
+  `note_polyphony`; pitch (`pitch_keycenter`, `pitch_keytrack`, `tune`, `transpose`,
+  `pitch_veltrack`, `pitch_random`); `offset`, `end`, loops, `delay`; the amp, filter and pitch
+  EGs with their `vel2` opcodes; two filters (`fil_type`, `cutoff`, `resonance`, key, velocity
+  and random tracking); three EQ bands; the v1 LFOs and `lfoN`; SFZ v2's flex envelopes
+  (`egN`); `volume`, `amplitude`, `pan`, `width`, `amp_veltrack`, `amp_velcurve_N`,
+  `amp_keytrack`, `amp_random`; velocity, key and CC crossfades; the `*sine`, `*saw`,
+  `*square`, `*triangle`, `*noise` and `*silence` generators.
+- **CCs** sit at a value: the row's (`cc64 = 127`, or by its `label_ccN`, `sustain = 127`),
+  else the file's `set_ccN`, else SFZ's (CC 7 100, 10 64, 11 127, the rest 0). What a CC
+  moves is read at that value, once, when the instrument is compiled, and a region whose
+  `loccN`/`hiccN` it fails isn't placed. They read back as the instrument's controls;
+  changing one after compose is refused until automation.
+- **An opcode written on the row** by its name sets it for every region
+  (`ampeg_release = 0.4`). v0.0.5's `{ "Sampler", set = "x.sfz", attack, release }` still
+  works: its attack and release are every region's `ampeg_attack` and `ampeg_release`, with
+  an info finding naming the form above.
+- **Not played**, each a finding once a file with its count and first region: `<effect>`,
+  scripts, ARIA's envelope shapes (linear here), pedal switches, `param_offset`,
+  `note_selfmask`, `output`, `loop_crossfade`, `phase`, and anything not in the SFZ
+  reference (a Warning when it changes the sound, Info when it doesn't: labels, `bend_up`
+  without pitch bend). `odawg sfz-check DIR` reports which opcodes a library uses and how
+  each plays (the table is `spec/sfz_opcodes.tsv`, from the SFZ reference's data).
 
 Samples that live elsewhere come from **sources**: a folder at a pinned URL, with each file
 pinned by SHA-256 and size. A path whose first part names a source is one of its files.
@@ -324,7 +355,7 @@ sources = {
                   page = "https://github.com/sfzinstruments/karoryfer.fashionbass",
                   pins = "fashionbass.pins" },
 },
-parts = { bass = { instrument = { "Sampler", set = "fashionbass/fashionbass_clean.sfz" } } },
+parts = { bass = { instrument = { "fashionbass/fashionbass_clean.sfz", ampeg_release = 0.08 } } },
 ```
 
 - A file is fetched into the data directory the first time a note reaches it, and only the

@@ -221,11 +221,13 @@ pitch_from_degree_at :: proc(song: ^Song, degree: int, at: string, octave: int) 
 }
 
 // Which notes a question is about: a part ("" any), a pad or note ("kick",
-// "A2"; "" any), a range ("" all).
+// "A2"; "" any), a range ("" all); the notes written (made ones too, an SFZ's
+// release notes and keyswitches, with `made`).
 Note_Filter :: struct {
 	part:  string,
 	note:  string,
 	range: string,
+	made:  bool,
 }
 
 // A filter made ready for a scan of the notes.
@@ -235,11 +237,12 @@ Matcher :: struct {
 	pad:      u32, // 0 any
 	pitch:    f32, // -1 any
 	from, to: f64, // seconds
+	made:     bool, // the notes compose made too
 }
 
 @(private = "file")
 matcher_from_filter :: proc(song: ^Song, f: Note_Filter) -> (m: Matcher, ok: bool) {
-	m = {part = -1, pitch = -1, from = -math.INF_F64, to = math.INF_F64}
+	m = {part = -1, pitch = -1, from = -math.INF_F64, to = math.INF_F64, made = f.made}
 	if f.part != "" {
 		for n, i in song.parts {
 			if n == f.part {
@@ -267,6 +270,9 @@ matcher_from_filter :: proc(song: ^Song, f: Note_Filter) -> (m: Matcher, ok: boo
 @(private = "file")
 matches :: proc(song: ^Song, m: Matcher, i: i32) -> bool {
 	n := song.notes[i]
+	if n.kind != .Attack && !m.made {
+		return false
+	}
 	if m.part >= 0 && song.tracks[n.track].part != m.part {
 		return false
 	}
@@ -277,6 +283,17 @@ matches :: proc(song: ^Song, m: Matcher, i: i32) -> bool {
 		return false
 	}
 	return n.time >= m.from - 1e-9 && n.time < m.to - 1e-9
+}
+
+// The notes a track plays as written (not the ones compose made: an SFZ's
+// release notes and keyswitches).
+track_note_count :: proc(song: ^Song, track: int) -> int {
+	t := song.tracks[track]
+	count := 0
+	for i in t.notes.first ..< base.span_end(t.notes) {
+		count += song.notes.kind[i] == .Attack ? 1 : 0
+	}
+	return count
 }
 
 // The notes matching a filter, in time order (indices into song.notes).

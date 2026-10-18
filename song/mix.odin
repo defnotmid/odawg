@@ -218,12 +218,12 @@ mix_end :: proc(m: ^Song) {
 @(private = "file")
 programs_append :: proc(to, from: ^device.Programs) -> i32 {
 	p0, n0, m0 := i32(len(to.programs)), i32(len(to.nodes)), i32(len(to.mods))
-	i0, pad0, c0 := i32(len(to.inputs)), i32(len(to.pads)), i32(len(to.chokes))
+	i0, pad0, c0 := i32(len(to.inputs)), i32(len(to.layers)), i32(len(to.chokes))
 	ctl0, tgt0 := i32(len(to.controls)), i32(len(to.control_targets))
 	shift :: proc(sp: Span, by: i32) -> Span {return {sp.first + by, sp.count}}
 	for p in from.programs {
 		x := p
-		x.nodes, x.pads, x.controls = shift(p.nodes, n0), shift(p.pads, pad0), shift(p.controls, ctl0)
+		x.nodes, x.layers, x.controls = shift(p.nodes, n0), shift(p.layers, pad0), shift(p.controls, ctl0)
 		append(&to.programs, x)
 	}
 	for c in from.controls {
@@ -247,14 +247,36 @@ programs_append :: proc(to, from: ^device.Programs) -> i32 {
 	}
 	append(&to.mods, ..from.mods[:])
 	append(&to.inputs, ..from.inputs[:])
-	for pr in from.pads {
+	t0 := f32(len(to.tables) / device.CURVE_POINTS)
+	for pr in from.layers {
 		x := pr
 		if x.program >= 0 {
 			x.program += p0
 		}
 		x.chokes = shift(pr.chokes, c0)
-		append(&to.pads, x)
+		// its values, a Curve's table index moved past the tables there
+		x.params = {i32(len(to.layer_params)), pr.params.count}
+		if pr.program >= 0 {
+			fp := from.programs[pr.program]
+			for lp in from.layer_params[pr.params.first:base.span_end(pr.params)] {
+				y := lp
+				if from.nodes[fp.nodes.first + i32(lp.node)].kind == device.NODE_CURVE && int(lp.slot) == len(device.COMMON_FIELDS) {
+					y.value += t0
+				}
+				append(&to.layer_params, y)
+			}
+		}
+		append(&to.layers, x)
 	}
 	append(&to.chokes, ..from.chokes[:])
+	// a Curve's table index moves past the tables there
+	if t0 > 0 {
+		for &n in to.nodes[n0:] {
+			if n.kind == device.NODE_CURVE {
+				n.values[len(device.COMMON_FIELDS)] += t0
+			}
+		}
+	}
+	append(&to.tables, ..from.tables[:])
 	return p0
 }

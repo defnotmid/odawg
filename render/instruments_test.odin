@@ -342,3 +342,84 @@ test_row_option_order :: proc(t: ^testing.T) {
 		}
 	}
 }
+
+// A layered row (layers = { ... }: what an SFZ instrument compiles to, and
+// a row of its own): a note starts every layer whose conditions it meets.
+// Keys in its keyswitch range switch (they don't sound) and later notes
+// play the layers of the last switch; a release layer sounds at each
+// note's end; a round robin alternates; a group whose off_by is itself
+// cuts its earlier voice. A render cut into segments is the same.
+@(test)
+test_layers :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	tone :: `{ nodes: { env: { class: "Env", attack: 0.001, decay: 0.01, sustain: 1, release: 0.005 }, out: { class: "Osc", wave: "sine", amp: "env" } } }`
+	click :: `{ nodes: { env: { class: "Decay", time: 0.01 }, out: { class: "Noise", amp: "env" } } }`
+	text := strings.concatenate({`{ bpm: 120, gain_db: 0, sections: [ { name: "a", duration: "4m" } ], parts: {
+		sw: { gain_db: 0, instrument: { sw_lo: "C1", sw_hi: "C#1", sw_default: "C1", layers: [
+			{ instrument: `, tone, `, lo_key: "C3", hi_key: "C5", sw_last_lo: "C1" },
+			{ instrument: `, tone, `, lo_key: "C3", hi_key: "C5", sw_last_lo: "C#1", gain_db: -20 },
+			{ instrument: `, click, `, trigger: "release", rt_decay: 0 } ] },
+			play: [ { name: "a", notes: "C4 . C#1 . C4 . . .", subdivision: "4n", duration: "8n" } ] },
+		rr: { gain_db: 0, instrument: { layers: [
+			{ instrument: `, tone, `, seq_length: 2, seq_position: 1 },
+			{ instrument: `, tone, `, seq_length: 2, seq_position: 2, gain_db: -20 } ] },
+			play: [ { name: "a", notes: "E4 . E4 . E4 . . .", subdivision: "4n", duration: "8n" } ] },
+		cut: { gain_db: 0, instrument: { layers: [ { instrument: `, tone, `, group: 1, off_by: 1 } ] },
+			play: [ { name: "a", events: [ { time: 0, note: "G4", duration: 2 }, { time: 0.5, note: "C4", duration: 0.25 } ] } ] } } }`})
+	s := compose_with(t, text, &arena)
+	out := output_from_song(s, {threads = 1, stems = true})
+	defer output_destroy(&out)
+	rms :: proc(st: [2][]f32, from, to: f64) -> f32 {
+		a, b := int(from * RATE), min(int(to * RATE), len(st[0]))
+		sum: f64
+		for i in a ..< b {
+			sum += f64(st[0][i] * st[0][i])
+		}
+		return f32(math.sqrt(sum / f64(max(b - a, 1))))
+	}
+	sw := out.stems[song.part_index(s, "sw")]
+	// a beat is 0.5 s: C4 at 0 (switch C1: layer 1), C#1 at 1 s (a switch,
+	// silent), C4 at 2 s (switch C#1: layer 2, 20 dB down)
+	first, silent, second := rms(sw, 0.05, 0.2), rms(sw, 1.05, 1.2), rms(sw, 2.05, 2.2)
+	testing.expectf(t, first > 0.1 && silent < first * 0.01 && second > first * 0.05 && second < first * 0.2, "keyswitch: %v %v %v", first, silent, second)
+	// the release layer: a click as each note ends (at 0.25 s), after the
+	// tone's own short release
+	testing.expectf(t, rms(sw, 0.26, 0.28) > 0.01, "no release click: %v", rms(sw, 0.26, 0.28))
+	rr := out.stems[song.part_index(s, "rr")]
+	a, b, c := rms(rr, 0.05, 0.2), rms(rr, 1.05, 1.2), rms(rr, 2.05, 2.2)
+	testing.expectf(t, b < a * 0.2 && c > b * 5, "round robin: %v %v %v", a, b, c)
+	cut := out.stems[song.part_index(s, "cut")]
+	// G4 held to 2 s, C4 at 0.5 s cuts it: after C4 ends only silence
+	testing.expectf(t, rms(cut, 0.9, 1.5) < rms(cut, 0.1, 0.4) * 0.01, "off_by: %v %v", rms(cut, 0.9, 1.5), rms(cut, 0.1, 0.4))
+	// the same, cut into segments
+	seg := output_from_song(s, {threads = 3, segment = 0.37, stems = true})
+	defer output_destroy(&seg)
+	worst: f32
+	for v, i in out.left {
+		worst = max(worst, abs(v - seg.left[i]), abs(out.right[i] - seg.right[i]))
+	}
+	testing.expectf(t, worst == 0, "cut into segments it differs by %g", worst)
+	for name in ([]string{"sw", "rr", "cut"}) {
+		st, sg := out.stems[song.part_index(s, name)], seg.stems[song.part_index(s, name)]
+		at := -1
+		w: f32
+		for v, i in st[0] {
+			if abs(v - sg[0][i]) > w {
+				w = abs(v - sg[0][i])
+				if at < 0 && w > 1e-6 {
+					at = i
+				}
+			}
+		}
+		if w > 0 {
+			testing.expectf(t, false, "%s differs by %g from sample %d (%.3f s)", name, w, at, f64(at) / RATE)
+		}
+	}
+	// the notes compose made don't count as played
+	for tr, ti in s.tracks {
+		if int(tr.part) == song.part_index(s, "sw") {
+			testing.expect_value(t, song.track_note_count(s, ti), 4) // C4 twice a pass, two passes (not the switches, not the release notes)
+		}
+	}
+}

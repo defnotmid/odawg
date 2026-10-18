@@ -43,6 +43,7 @@ Engine :: struct {
 	slot_note: []i32, // the note a slot plays (-1: free)
 	slot_at:   []i64, // samples of it played
 	slot_choke: []i32, // samples left of a choked note's fade (0: not choked)
+	slot_choke_len: []i32, // the fade's whole length
 	graph:     []f32, // the lanes' buffers of the largest call of device.graph_run
 	fx:        []Fx_Run,
 	fx_bytes:  []u8,
@@ -180,6 +181,7 @@ engine_init :: proc(e: ^Engine, s: ^song.Song) -> bool {
 	e.slot_note = make([]i32, slots_total)
 	e.slot_at = make([]i64, slots_total)
 	e.slot_choke = make([]i32, slots_total)
+	e.slot_choke_len = make([]i32, slots_total)
 	e.fx = make([]Fx_Run, fx_total)
 	// each node's effect instances and their state bytes, 16-aligned each
 	e.nodes = make([]Node_Run, len(s.nodes))
@@ -292,6 +294,8 @@ polyphony_from_track :: proc(s: ^song.Song, t: song.Track) -> int {
 	}
 	ends := make([dynamic]f64, context.temp_allocator)
 	most := 0
+	program := i32(p[.Program])
+	layered := program >= 0 && s.programs.programs[program].layer_mode == .All
 	for i in t.notes.first ..< base.span_end(t.notes) {
 		n := note_from_row(s, int(i))
 		#reverse for end, k in ends {
@@ -299,7 +303,15 @@ polyphony_from_track :: proc(s: ^song.Song, t: song.Track) -> int {
 				unordered_remove(&ends, k)
 			}
 		}
-		append(&ends, n.time + device.note_tail(kind, &p, n, &env))
+		// a layered note: a voice per layer it may start
+		voices := 1
+		if layered {
+			layers: [device.MAX_LAYERS]i32
+			voices = device.graph_layers(&s.programs, program, n, -1, layers[:])
+		}
+		for _ in 0 ..< voices {
+			append(&ends, n.time + device.note_tail(kind, &p, n, &env))
+		}
 		most = max(most, len(ends))
 	}
 	return clamp(most, 1, MAX_POLYPHONY)
@@ -628,32 +640,90 @@ track_seek :: proc(e: ^Engine, ti: int, at: i64, exact: bool) {
 	// a voice that remembers earlier notes (a mono program's slew) replays
 	// those within its memory, from a fresh state, as it would have played them
 	memory := i64(math.ceil(device.voice_memory(kind, &p, &e.env) * RATE))
-	discard := track_scratch(e, ti)[4 * BLOCK:][:2 * BLOCK]
+	// in time order: every voice sounding played up to the next note's start,
+	// then that note started (so what it cuts or slides into is cut or slid
+	// into where it was), then all of them up to `input`
+	jump := device.voice_jump(kind, &p, &e.env)
 	for i := first; i < first + k; i += 1 {
 		n := note_from_row(s, i)
 		start := i64(math.round(n.time * RATE))
-		if f64(input - start) >= device.note_tail(kind, &p, n, &e.env) * RATE && input - start > memory {
+		over := f64(input - start) >= device.note_tail(kind, &p, n, &e.env) * RATE && input - start > memory
+		if over && !sounding_any(e, ti) {
 			continue
 		}
-		slot := start_note(e, ti, i32(i), mono, start)
-		if memory > 0 && i + 1 < first + k {
-			// played to the next note's start (it may slide into it)
-			next := i64(math.round(s.notes.time[i + 1] * RATE))
-			for e.slot_note[slot] >= 0 && e.slot_at[slot] < next - start {
-				m := int(min(next - start - e.slot_at[slot], BLOCK))
-				slice.zero(discard[:2 * BLOCK])
-				play_slot(e, ti, slot, discard[:m], discard[BLOCK:][:m])
+		chase_to(e, ti, start, jump)
+		if over {
+			// its sound is over by `input`, what it cut is still cut
+			note_cuts(e, ti, i32(i), n)
+			continue
+		}
+		start_note(e, ti, i32(i), mono, start)
+	}
+	chase_to(e, ti, input, jump)
+}
+
+@(private = "file")
+sounding_any :: proc(e: ^Engine, ti: int) -> bool {
+	run := &e.tracks[ti]
+	for k in run.slots.first ..< base.span_end(run.slots) {
+		if e.slot_note[k] >= 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// What a note does to the voices sounding when it starts, without
+// sounding itself (a seek passing a note that is over by where it lands):
+// its pad's chokes, its layers' off_by cuts and polyphony.
+@(private = "file")
+note_cuts :: proc(e: ^Engine, ti: int, ni: i32, n: device.Note) {
+	run := &e.tracks[ti]
+	t := e.song.tracks[ti]
+	p := e.song.params[t.instrument]
+	program := i32(p[.Program])
+	if program < 0 || n.kind == .Keyswitch {
+		return
+	}
+	if e.song.programs.programs[program].layer_mode == .All {
+		layers: [device.MAX_LAYERS]i32
+		rand := f32(base.hash_unit(slot_seed(e, ti, n) ~ 0x5ead))
+		for l in layers[:device.graph_layers(&e.song.programs, program, n, rand, layers[:])] {
+			layer_cuts(e, run, ni, l, n)
+		}
+		return
+	}
+	if chokes := device.graph_chokes(&e.song.programs, program, n); len(chokes) > 0 {
+		for k in run.slots.first ..< base.span_end(run.slots) {
+			if e.slot_note[k] >= 0 && e.slot_choke[k] == 0 && slice.contains(chokes, e.song.notes.pad[e.slot_note[k]]) {
+				slot_cut(e, int(k), device.CHOKE_SAMPLES)
 			}
+		}
+	}
+}
+
+// Every voice of the track sounding played up to song sample `at` (a
+// seek's chase; a voice that jumps is put there).
+@(private = "file")
+chase_to :: proc(e: ^Engine, ti: int, at: i64, jump: bool) {
+	s := e.song
+	run := &e.tracks[ti]
+	discard := track_scratch(e, ti)[4 * BLOCK:][:2 * BLOCK]
+	for k in run.slots.first ..< base.span_end(run.slots) {
+		slot := int(k)
+		if e.slot_note[slot] < 0 {
 			continue
 		}
-		if device.voice_jump(kind, &p, &e.env) {
-			// started (its state set from the note), then where it is
-			play_slot(e, ti, slot, discard[:0], discard[BLOCK:][:0])
-			e.slot_at[slot] = input - start
+		target := at - i64(math.round(s.notes.time[e.slot_note[slot]] * RATE))
+		if jump {
+			if e.slot_at[slot] == 0 {
+				play_slot(e, ti, slot, discard[:0], discard[BLOCK:][:0]) // its state set from the note
+			}
+			e.slot_at[slot] = max(e.slot_at[slot], target)
 			continue
 		}
-		for e.slot_at[slot] < input - start {
-			m := int(min(input - start - e.slot_at[slot], BLOCK))
+		for e.slot_note[slot] >= 0 && e.slot_at[slot] < target {
+			m := int(min(target - e.slot_at[slot], BLOCK))
 			slice.zero(discard[:2 * BLOCK])
 			if !play_slot(e, ti, slot, discard[:m], discard[BLOCK:][:m]) {
 				break
@@ -741,63 +811,144 @@ slot_state :: #force_inline proc(e: ^Engine, slot: int) -> ^device.Voice_State {
 // tells a slide from a new attack), else a free one (zeroed), else the
 // oldest (counted as stolen).
 @(private = "file")
-start_note :: proc(e: ^Engine, ti: int, ni: i32, mono: bool, start: i64) -> int {
+start_note :: proc(e: ^Engine, ti: int, ni: i32, mono: bool, start: i64) -> []int {
 	run := &e.tracks[ti]
-	{
-		t := e.song.tracks[ti]
-		p := e.song.params[t.instrument]
-		tail := i64(math.ceil(device.note_tail(e.song.devices[t.instrument], &p, note_from_row(e.song, int(ni)), &e.env) * RATE))
-		run.awake_until = max(run.awake_until, start + tail + run.tail)
-	}
-	first := int(run.slots.first)
-	slot := first
-	if !mono {
-		slot = -1
-		oldest := first
-		for k in first ..< int(base.span_end(run.slots)) {
-			if e.slot_note[k] < 0 {
-				slot = k
-				break
-			}
-			if e.slot_at[k] > e.slot_at[oldest] {
-				oldest = k
-			}
-		}
-		if slot < 0 {
-			slot = oldest
-			run.stolen += 1
-		}
-	}
 	t := e.song.tracks[ti]
 	kind := e.song.devices[t.instrument]
 	p := e.song.params[t.instrument]
 	n := note_from_row(e.song, int(ni))
-	// a pad that chokes others on the track cuts them (5 ms)
-	if kind == .Voice {
-		if chokes := device.graph_chokes(&e.song.programs, i32(p[.Program]), n); len(chokes) > 0 {
-			for k in first ..< int(base.span_end(run.slots)) {
-				if k != slot && e.slot_note[k] >= 0 && e.slot_choke[k] == 0 && slice.contains(chokes, e.song.notes.pad[e.slot_note[k]]) {
-					e.slot_choke[k] = device.CHOKE_SAMPLES
+	if n.kind == .Keyswitch {
+		return nil // it switches the regions later notes play; it doesn't sound
+	}
+	tail := i64(math.ceil(device.note_tail(kind, &p, n, &e.env) * RATE))
+	run.awake_until = max(run.awake_until, start + tail + run.tail)
+	// a layered program's note: a voice per layer it starts (its regions)
+	program := i32(p[.Program])
+	layers: [device.MAX_LAYERS]i32
+	count := 1
+	layered := program >= 0 && e.song.programs.programs[program].layer_mode == .All
+	if layered {
+		rand := f32(base.hash_unit(slot_seed(e, ti, n) ~ 0x5ead))
+		count = device.graph_layers(&e.song.programs, program, n, rand, layers[:])
+	}
+	slots := make([]int, count, context.temp_allocator)
+	for li in 0 ..< count {
+		layer := layered ? layers[li] : -1
+		slot := slot_free(e, run, mono)
+		if layered {
+			layer_cuts(e, run, ni, layer, n)
+		} else if kind == .Voice {
+			// a pad that chokes others on the track cuts them (5 ms)
+			if chokes := device.graph_chokes(&e.song.programs, program, n); len(chokes) > 0 {
+				for k in run.slots.first ..< base.span_end(run.slots) {
+					if int(k) != slot && e.slot_note[k] >= 0 && e.slot_choke[k] == 0 && slice.contains(chokes, e.song.notes.pad[e.slot_note[k]]) {
+						slot_cut(e, int(k), device.CHOKE_SAMPLES)
+					}
 				}
 			}
 		}
+		// a mono voice still sounding keeps what it holds into the next note (a
+		// slide, a slew's charge); one that has fallen silent, or any other,
+		// starts from nothing
+		fresh := !mono || e.slot_note[slot] < 0
+		if fresh {
+			mem.zero(&e.voices[e.slot_at_byte[slot]], device.voice_bytes(kind, &p, &e.env))
+		}
+		e.slot_note[slot] = ni
+		e.slot_at[slot] = 0
+		e.slot_choke[slot] = 0
+		if kind == .Voice {
+			if _, ok := device.graph_start(slot_state(e, slot), &p, n, &e.env, fresh, layer); !ok {
+				e.slot_note[slot] = -1
+			}
+		}
+		slots[li] = slot
 	}
-	// a mono voice still sounding keeps what it holds into the next note (a
-	// slide, a slew's charge); one that has fallen silent, or any other,
-	// starts from nothing
-	fresh := !mono || e.slot_note[slot] < 0
-	if fresh {
-		mem.zero(&e.voices[e.slot_at_byte[slot]], device.voice_bytes(kind, &p, &e.env))
+	return slots
+}
+
+// A slot for a new voice: a free one, else the one playing longest (a
+// stolen note: a finding); a mono track's one.
+@(private = "file")
+slot_free :: proc(e: ^Engine, run: ^Track_Run, mono: bool) -> int {
+	first := int(run.slots.first)
+	if mono {
+		return first
 	}
-	e.slot_note[slot] = ni
-	e.slot_at[slot] = 0
-	e.slot_choke[slot] = 0
-	if kind == .Voice {
-		if _, ok := device.graph_start(slot_state(e, slot), &p, n, &e.env, fresh); !ok {
-			e.slot_note[slot] = -1
+	oldest := first
+	for k in first ..< int(base.span_end(run.slots)) {
+		if e.slot_note[k] < 0 {
+			return k
+		}
+		if e.slot_at[k] > e.slot_at[oldest] {
+			oldest = k
 		}
 	}
-	return slot
+	run.stolen += 1
+	return oldest
+}
+
+// Fades slot k out over `samples` (a choke, an off_by cut).
+@(private = "file")
+slot_cut :: proc(e: ^Engine, k: int, samples: i32) {
+	if e.slot_choke[k] != 0 {
+		return
+	}
+	e.slot_choke[k] = max(samples, 1)
+	e.slot_choke_len[k] = max(samples, 1)
+}
+
+// What starting a voice of `layer` does to the track's other voices (not
+// its own note's): those whose off_by is its group stop by their off_mode;
+// past its group's polyphony, or note_polyphony on its key, the oldest of
+// them stops.
+@(private = "file")
+layer_cuts :: proc(e: ^Engine, run: ^Track_Run, ni: i32, layer: i32, n: device.Note) {
+	progs := &e.song.programs
+	l := progs.layers[layer]
+	group_count, key_count := 0, 0
+	oldest_group, oldest_key := -1, -1
+	key := math.round(n.pitch)
+	for k in run.slots.first ..< base.span_end(run.slots) {
+		if e.slot_note[k] < 0 || e.slot_note[k] == ni || e.slot_choke[k] != 0 {
+			continue
+		}
+		other := device.graph_layer(slot_state(e, int(k)))
+		if other < 0 {
+			continue
+		}
+		o := progs.layers[other]
+		if o.off_by != 0 && o.off_by == l.group {
+			switch o.off_mode {
+			case .Fast:
+				slot_cut(e, int(k), device.CHOKE_SAMPLES)
+			case .Normal:
+				device.graph_release_now(slot_state(e, int(k)))
+			case .Time:
+				slot_cut(e, int(k), i32(max(o.off_time, 0) * RATE))
+			}
+			continue
+		}
+		if o.group != l.group {
+			continue
+		}
+		group_count += 1
+		if oldest_group < 0 || e.slot_at[k] > e.slot_at[oldest_group] {
+			oldest_group = int(k)
+		}
+		if math.round(e.song.notes.pitch[e.slot_note[k]]) == key {
+			key_count += 1
+			if oldest_key < 0 || e.slot_at[k] > e.slot_at[oldest_key] {
+				oldest_key = int(k)
+			}
+		}
+	}
+	if l.polyphony > 0 && group_count >= int(l.polyphony) && oldest_group >= 0 {
+		slot_cut(e, oldest_group, device.CHOKE_SAMPLES)
+	}
+	if l.note_polyphony > 0 && key_count >= int(l.note_polyphony) && oldest_key >= 0 && oldest_key != oldest_group {
+		device.graph_release_now(slot_state(e, oldest_key))
+	}
 }
 
 // Plays a slot's note for len(l) more samples, alone (a seek's chase); false
@@ -849,7 +1000,7 @@ play_graph :: proc(e: ^Engine, ti: int, slot: int, level: f32, l, r: []f32) -> b
 	if choked {
 		left := e.slot_choke[slot]
 		for i in 0 ..< m {
-			g := f32(left - i32(i)) / f32(device.CHOKE_SAMPLES)
+			g := f32(left - i32(i)) / f32(max(e.slot_choke_len[slot], 1))
 			l[i] += cl[i] * g
 			r[i] += cr[i] * g
 		}

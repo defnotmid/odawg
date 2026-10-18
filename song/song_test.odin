@@ -414,9 +414,9 @@ test_machine :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(s.tracks), 1)
 	program := i32(s.params[s.tracks[0].instrument][.Program])
 	machine := s.programs.programs[program]
-	testing.expect_value(t, machine.pads.count, 3)
+	testing.expect_value(t, machine.layers.count, 3)
 	keys := make(map[u32]f32, context.temp_allocator)
-	for pr in s.programs.pads[machine.pads.first:base.span_end(machine.pads)] {
+	for pr in s.programs.layers[machine.layers.first:base.span_end(machine.layers)] {
 		keys[pr.pad] = pr.key
 		if pr.pad == base.name_id("glass") {
 			testing.expect_value(t, s.programs.chokes[pr.chokes.first], base.name_id("door"))
@@ -440,7 +440,7 @@ test_machine :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(m.programs.programs), 2 * len(s.programs.programs))
 	second := i32(m.params[m.tracks[1].instrument][.Program])
 	testing.expect_value(t, second, program + i32(len(s.programs.programs)))
-	for pr in m.programs.pads[m.programs.programs[second].pads.first:][:3] {
+	for pr in m.programs.layers[m.programs.programs[second].layers.first:][:3] {
 		testing.expect(t, pr.program >= i32(len(s.programs.programs)))
 	}
 }
@@ -506,4 +506,15 @@ test_part_over_style :: proc(t: ^testing.T) {
 		}
 	}
 	testing.expect(t, notes > 0)
+}
+
+// An event's note that is no pitch is a pad's name: a part whose instrument
+// has no such pad gives the finding, it doesn't stop composing.
+@(test)
+test_event_pad_unknown :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	s := compose(t, `{ sections: [ { name: "a", duration: "1m" } ], parts: {
+		p: { instrument: "Synth", play: [ { name: "a", events: [ { time: 0, note: "D", duration: 1 } ] } ] } } }`, &arena)
+	testing.expect(t, has(s, "unknown_pad"))
 }

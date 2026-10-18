@@ -89,7 +89,8 @@ The rules that keep it this way:
 
 Committed, in this order (nothing jumps ahead of them):
 
-1. **SFZ synthesis** (the next release). Every region a row over the
+1. **SFZ synthesis** (the next release: its first cut, SFZ v1 and the common v2,
+   is in; the rest of v2 and ARIA follow). Every region a row over the
    registered kinds; a general primitive that's missing is added, never a
    special case. The scope: layers, release triggers, amp, filter and pitch
    EGs with velocity tracking, filters with key and velocity tracking, v1

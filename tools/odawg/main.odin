@@ -60,6 +60,7 @@ COMMAND_TABLE := []Command_Row {
 	{"credits", "credits SPEC|SET ...", "what to credit for the sample sets and sources a song plays", run_credits},
 	{"pin", "pin SPEC", "fetches what the song plays from its sources and writes their pins (SHA-256 and size per file)", run_pin},
 	{"bench", "bench SPEC ... [-o OUT.f32]", "how fast songs render on one core (seconds of sound per CPU second), the mix written raw to compare", run_bench},
+	{"sfz-check", "sfz-check FILE|DIR ...", "reads SFZ files (their includes from beside them): per file what it doesn't read; then every opcode they use, how many files use it, and how odawg plays it", run_sfz_check},
 }
 
 main :: proc() {
@@ -302,8 +303,8 @@ timeline_from_song :: proc(l: ^Loaded) -> Timeline {
 		append(&sections, Timeline_Section{sec.name, sec.start, sec.stop, sec.bars, {sec.bpm0, sec.bpm1}, sec.beats_per_bar, sec.style, sec.energy, strings.to_string(b), song.TRANSITION_NAMES[sec.transition]})
 	}
 	tracks := make([dynamic]Timeline_Track)
-	for tr in s.tracks {
-		append(&tracks, Timeline_Track{s.parts[tr.part], tr.variant, s.labels[tr.instrument], int(tr.notes.count), tr.gain_db})
+	for tr, ti in s.tracks {
+		append(&tracks, Timeline_Track{s.parts[tr.part], tr.variant, s.labels[tr.instrument], song.track_note_count(s, ti), tr.gain_db})
 	}
 	t.sections, t.tracks = sections[:], tracks[:]
 	return t
@@ -388,11 +389,11 @@ run_show :: proc(a: ^Args) -> bool {
 				continue
 			}
 			found = true
-			for tr in s.tracks {
+			for tr, ti in s.tracks {
 				if int(tr.part) != pi {
 					continue
 				}
-				fmt.printfln("track %s/%s  %s  %d notes  %+.1f dB  pan %.2f", p, tr.variant, s.labels[tr.instrument], tr.notes.count, tr.gain_db, tr.pan)
+				fmt.printfln("track %s/%s  %s  %d notes  %+.1f dB  pan %.2f", p, tr.variant, s.labels[tr.instrument], song.track_note_count(s, ti), tr.gain_db, tr.pan)
 				// its instrument's controls (a Param_Set command sets one by its path)
 				if s.devices[tr.instrument] == .Voice {
 					if program := i32(s.params[tr.instrument][.Program]); program >= 0 {
@@ -448,7 +449,7 @@ run_at :: proc(a: ^Args) -> bool {
 		p := s.params[tr.instrument]
 		for i in tr.notes.first ..< base.span_end(tr.notes) {
 			n := s.notes[i]
-			note := device.Note{n.time, n.duration, n.pitch, n.velocity, n.pad, n.accent}
+			note := song.note_of(s, int(i))
 			if n.time <= t && t < n.time + device.note_tail(kind, &p, note, &env) {
 				what := n.pad != 0 ? song.pad_name(s, n.pad) : theory.string_from_pitch(n.pitch)
 				state := t < n.time + n.duration ? "held" : "ringing"
@@ -543,5 +544,145 @@ run_bench :: proc(a: ^Args) -> bool {
 		}
 	}
 	fmt.printfln("%-40s %.1fs of sound in %.2fs: %.1fx realtime", "all", total_sound, total_cpu, total_sound / total_cpu)
+	return true
+}
+
+run_sfz_check :: proc(a: ^Args) -> bool {
+	paths := make([dynamic]string)
+	for p in a.positional {
+		collect :: proc(path: string, out: ^[dynamic]string) {
+			if os.is_dir(path) {
+				entries, err := os.read_all_directory_by_path(path, context.temp_allocator)
+				if err != nil {
+					return
+				}
+				for e in entries {
+					collect(e.fullpath, out)
+				}
+				return
+			}
+			if strings.has_suffix(strings.to_lower(path, context.temp_allocator), ".sfz") {
+				append(out, strings.clone(path))
+			}
+		}
+		collect(p, &paths)
+	}
+	slice.sort(paths[:])
+	// a file another includes is checked as part of it, not alone (an
+	// include's path is from the instrument's first file: any file whose
+	// path ends with it)
+	included := make([dynamic]string)
+	for path in paths {
+		text, err := os.read_entire_file(path, context.temp_allocator)
+		if err != nil {
+			continue
+		}
+		folder := filepath.dir(path)
+		for line in strings.split_lines(string(text), context.temp_allocator) {
+			t := strings.trim_space(line)
+			if strings.has_prefix(t, "#include") {
+				name, _ := strings.replace_all(strings.trim(strings.trim_space(t[len("#include"):]), "\""), "\\", "/", context.temp_allocator)
+				_ = folder
+				append(&included, strings.clone(strings.trim_left(name, "./")))
+			}
+		}
+	}
+	tops := make([dynamic]string)
+	for p in paths {
+		inside := false
+		for inc in included {
+			inside ||= strings.has_suffix(p, strings.concatenate({"/", inc}, context.temp_allocator))
+		}
+		if !inside {
+			append(&tops, p)
+		}
+	}
+	paths = tops
+	counts := make([]int, len(spec.SFZ_OPCODES))
+	files_using := make([]int, len(spec.SFZ_OPCODES))
+	unknown := make(map[string]int)
+	regions, broken := 0, 0
+	for path in paths {
+		// the file and what it includes, read from disk round by round
+		texts := make(map[string]string, context.temp_allocator)
+		text, err := os.read_entire_file(path, context.temp_allocator)
+		if err != nil {
+			fmt.eprintfln("%s: can't be read", path)
+			broken += 1
+			continue
+		}
+		s: spec.Sfz
+		unreadable := make([dynamic]string, context.temp_allocator)
+		for round in 0 ..< 16 {
+			spec.sfz_read(&s, path, string(text), texts, context.temp_allocator)
+			if len(s.missing) == 0 {
+				break
+			}
+			added := false
+			for m in s.missing {
+				if m in texts {
+					continue
+				}
+				t, e := os.read_entire_file(m, context.temp_allocator)
+				texts[m] = e == nil ? string(t) : ""
+				if e != nil {
+					append(&unreadable, m)
+				}
+				added = true
+			}
+			if !added || round == 15 {
+				break
+			}
+		}
+		file_counts := make([]int, len(spec.SFZ_OPCODES), context.temp_allocator)
+		spec.sfz_coverage(&s, file_counts)
+		for c, i in file_counts {
+			counts[i] += c
+			files_using[i] += c > 0 ? 1 : 0
+		}
+		regions += len(s.regions)
+		problems := make([dynamic]string, context.temp_allocator)
+		for m in unreadable {
+			append(&problems, fmt.tprintf("include %s missing", m))
+		}
+		for u in s.unknown {
+			unknown[u.name] += 1
+			append(&problems, fmt.tprintf("%s x%d (first %s:%d)", u.name, u.count, u.file, u.line))
+		}
+		if len(s.regions) == 0 {
+			append(&problems, "no regions")
+		}
+		if len(problems) > 0 {
+			fmt.printfln("%s: %s", path, strings.join(problems[:], "; ", context.temp_allocator))
+		}
+	}
+	fmt.printfln("\n%d files, %d regions, %d unreadable", len(paths), regions, broken)
+	Row :: struct {
+		i, files: int,
+	}
+	rows := make([dynamic]Row)
+	for f, i in files_using {
+		if f > 0 {
+			append(&rows, Row{i, f})
+		}
+	}
+	slice.sort_by(rows[:], proc(a, b: Row) -> bool {return a.files > b.files || (a.files == b.files && a.i < b.i)})
+	STATUS := [spec.Sfz_Status]string{.Warn = "warn", .Plays = "plays", .Compile = "compile", .Info = "info"}
+	by_status: [spec.Sfz_Status]int
+	fmt.printfln("\n%-28s %-8s %-8s %7s %8s", "opcode", "version", "odawg", "files", "regions")
+	for r in rows {
+		op := spec.SFZ_OPCODES[r.i]
+		by_status[op.status] += 1
+		fmt.printfln("%-28s %-8s %-8s %7d %8d", op.name, op.version, STATUS[op.status], r.files, counts[r.i])
+	}
+	fmt.printfln("\nopcodes used: %d (plays %d, compile %d, info %d, warn %d)", len(rows), by_status[.Plays], by_status[.Compile], by_status[.Info], by_status[.Warn])
+	if len(unknown) > 0 {
+		names := make([dynamic]string)
+		for n in unknown {
+			append(&names, n)
+		}
+		slice.sort(names[:])
+		fmt.printfln("not in the SFZ reference (%d): %s", len(names), strings.join(names[:], ", "))
+	}
 	return true
 }

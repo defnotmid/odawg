@@ -23,7 +23,7 @@ COMB_LINE :: 4096
 
 // The kinds' ids (set at init).
 NODE_OSC, NODE_NOISE, NODE_RANDOM, NODE_ENV, NODE_DECAY, NODE_RAMP, NODE_LFO: Node_Kind
-NODE_FILTER, NODE_DRIVE, NODE_SLEW, NODE_MAP, NODE_MIX, NODE_MUL, NODE_COMB, NODE_SAMPLER, NODE_CLIP: Node_Kind
+NODE_FILTER, NODE_DRIVE, NODE_SLEW, NODE_MAP, NODE_CURVE, NODE_MIX, NODE_MUL, NODE_COMB, NODE_SAMPLER, NODE_REGION, NODE_SEGMENTS, NODE_CLIP: Node_Kind
 
 @(init, private = "file")
 nodes_init :: proc "contextless" () {
@@ -54,6 +54,9 @@ nodes_init :: proc "contextless" () {
 			{name = "sustain", unit = .Number, default = 1},
 			{name = "release", unit = .Seconds, default = 0.1},
 			{name = "attack_curve", unit = .Choice, choices = CURVE_NAMES},
+			{name = "delay", unit = .Seconds},
+			{name = "hold", unit = .Seconds},
+			{name = "start", unit = .Number},
 		},
 	})
 	NODE_DECAY = register_node(r, {
@@ -75,7 +78,13 @@ nodes_init :: proc "contextless" () {
 	})
 	NODE_LFO = register_node(r, {
 		name = "Lfo", state = size_of(dsp.Osc), process = process_lfo,
-		fields = {{name = "wave", unit = .Choice, choices = PLAIN_WAVES}, {name = "rate", unit = .Hz, default = 4, per_sample = true}},
+		fields = {
+			{name = "wave", unit = .Choice, choices = PLAIN_WAVES},
+			{name = "rate", unit = .Hz, default = 4, per_sample = true},
+			{name = "delay", unit = .Seconds},
+			{name = "fade", unit = .Seconds},
+			{name = "phase", unit = .Number},
+		},
 	})
 	NODE_FILTER = register_node(r, {
 		name = "Filter", inputs = 1, state = size_of(Filter_State), process = process_filter,
@@ -96,6 +105,10 @@ nodes_init :: proc "contextless" () {
 		name = "Map", inputs = 1, stateless = true, process = process_map,
 		fields = {{name = "scale", unit = .Number, default = 1}, {name = "offset", unit = .Number}, {name = "min", unit = .Number, default = -1e30}, {name = "max", unit = .Number, default = 1e30}},
 	})
+	NODE_CURVE = register_node(r, {
+		name = "Curve", inputs = 1, unipolar = true, stateless = true, process = process_curve,
+		fields = {{name = "table", unit = .Number}},
+	})
 	NODE_MIX = register_node(r, {name = "Mix", inputs = -1, stateless = true, process = process_mix})
 	NODE_MUL = register_node(r, {name = "Mul", inputs = -1, stateless = true, process = process_mul})
 	NODE_COMB = register_node(r, {
@@ -110,6 +123,34 @@ nodes_init :: proc "contextless" () {
 	NODE_SAMPLER = register_node(r, {
 		name = "Sampler", stereo = true, state = size_of(Sampler_State), process = process_sampler, tail = tail_sampler_node,
 		fields = {{name = "set", unit = .Asset, default = -1}, {name = "attack", unit = .Seconds}, {name = "release", unit = .Seconds, default = 0.1}},
+	})
+	NODE_SEGMENTS = register_node(r, {
+		name = "Segments", unipolar = true, process = process_segments, tail = tail_segments,
+		fields = {
+			{name = "times", unit = .Number, list = SEGMENT_POINTS}, // seconds from the point before (the first: from the note's start)
+			{name = "levels", unit = .Number, list = SEGMENT_POINTS},
+			{name = "sustain", unit = .Number, default = -1}, // the point it holds at while the note is held (-1: none)
+			{name = "points", unit = .Number},
+		},
+	})
+	NODE_REGION = register_node(r, {
+		name = "Region", stereo = true, state = size_of(Region_State), process = process_region, tail = tail_region,
+		fields = {
+			{name = "set", unit = .Asset, default = -1},
+			{name = "zone", unit = .Number},
+			{name = "keycenter", unit = .Number, default = 60},
+			{name = "keytrack", unit = .Number, default = 100},
+			{name = "tune", unit = .Cents},
+			{name = "rate", unit = .Number, default = 1, per_sample = true},
+			{name = "offset", unit = .Number},
+			{name = "offset_random", unit = .Number},
+			{name = "end", unit = .Number},
+			{name = "loop_mode", unit = .Choice, choices = REGION_LOOP_MODES},
+			{name = "loop_start", unit = .Number, default = -1},
+			{name = "loop_end", unit = .Number},
+			{name = "delay", unit = .Seconds},
+			{name = "width", unit = .Number, default = 100},
+		},
 	})
 	NODE_CLIP = register_node(r, {
 		name = "Clip", stereo = true, jump = true, process = process_clip, tail = tail_clip,
@@ -167,9 +208,9 @@ Osc_State :: struct {
 
 @(private = "file")
 process_osc :: proc(c: ^Node_Call) {
-	v := &c.node.values
 	n := c.frames
 	for &lane in c.lanes {
+		v := node_values(c, &lane)
 		s := node_state(c, &lane, Osc_State)
 		l, r := node_out(c, &lane)
 		if lane.starting || lane.fresh {
@@ -268,7 +309,7 @@ process_noise :: proc(c: ^Node_Call) {
 	for &lane in c.lanes {
 		s := node_state(c, &lane, dsp.Noise)
 		if lane.starting || lane.fresh {
-			s^ = dsp.noise_init(dsp.Noise_Type(u8(c.node.values[3])), node_seed(c, &lane))
+			s^ = dsp.noise_init(dsp.Noise_Type(u8(node_values(c, &lane)[3])), node_seed(c, &lane))
 		}
 		l, _ := node_out(c, &lane)
 		dsp.noise_run(s, l)
@@ -297,8 +338,13 @@ process_env :: proc(c: ^Node_Call) {
 			s^ = {
 				attack = max(node_value(c, &lane, 3), 0), decay = max(node_value(c, &lane, 4), 0),
 				sustain = clamp(node_value(c, &lane, 5), 0, 1), release = max(node_value(c, &lane, 6), 0),
-				exponential_attack = c.node.values[7] == 1, stage = .Attack,
+				exponential_attack = node_values(c, &lane)[7] == 1, stage = .Attack,
+				delay = max(node_value(c, &lane, 8), 0), hold = max(node_value(c, &lane, 9), 0), start = clamp(node_value(c, &lane, 10), 0, 1),
 			}
+			if s.delay > 0 {
+				s.stage = .Delay
+			}
+			s.from = s.start
 		}
 		l, _ := node_out(c, &lane)
 		dsp.adsr_run(s, l, lane.release)
@@ -461,16 +507,28 @@ process_lfo :: proc(c: ^Node_Call) {
 	for &lane in c.lanes {
 		s := node_state(c, &lane, dsp.Osc)
 		if lane.starting || lane.fresh {
-			s^ = {wave = dsp.Wave(u8(c.node.values[3])), width = 0.5}
+			vals := node_values(c, &lane)
+			s^ = {wave = dsp.Wave(u8(vals[3])), width = 0.5, phase = f64(vals[7]) - math.floor(f64(vals[7]))}
 		}
+		vals := node_values(c, &lane)
 		rate: [NODE_CHUNK]f32
 		inc: [NODE_CHUNK]f64
-		varies, v := node_curve(c, &lane, 4, c.node.values[4], rate[:n])
+		varies, v := node_curve(c, &lane, 4, vals[4], rate[:n])
+		// it starts after its delay and grows to its depth over its fade
+		delay := i64(f64(vals[5]) * RATE)
+		fade := f64(vals[6]) * RATE
 		for i in 0 ..< n {
-			inc[i] = f64(varies ? rate[i] : v) / RATE
+			inc[i] = lane.at + i64(i) < delay ? 0 : f64(varies ? rate[i] : v) / RATE
 		}
 		l, _ := node_out(c, &lane)
 		dsp.osc_run(s, inc[:n], l)
+		if delay > 0 || fade > 0 {
+			for i in 0 ..< n {
+				k := lane.at + i64(i) - delay
+				g: f32 = k < 0 ? 0 : (fade > 0 && f64(k) < fade ? f32(f64(k) / fade) : 1)
+				l[i] *= g
+			}
+		}
 	}
 }
 
@@ -507,11 +565,11 @@ LADDER_DRIVE :: 0.4
 
 @(private = "file")
 process_filter :: proc(c: ^Node_Call) {
-	v := &c.node.values
 	n := c.frames
-	type := int(v[FILTER_TYPE])
+	type := int(c.node.values[FILTER_TYPE]) // its shape: the same for every voice
 	diode := type == DIODE
 	for &lane in c.lanes {
+		v := node_values(c, &lane)
 		s := node_state(c, &lane, Filter_State)
 		if type == ONE_POLE || type == DIFFERENCE {
 			plain_filter(c, &lane, s, type)
@@ -590,7 +648,7 @@ plain_filter :: proc(c: ^Node_Call, lane: ^Lane, s: ^Filter_State, type: int) {
 	sides := c.node.stereo ? 2 : 1
 	if lane.fresh || (lane.starting && type == ONE_POLE) {
 		s.y, s.x_last = {}, {}
-		s.k = f32(dsp.one_pole_k(f64(c.node.values[FILTER_FREQUENCY])))
+		s.k = f32(dsp.one_pole_k(f64(node_values(c, lane)[FILTER_FREQUENCY])))
 	}
 	if type == DIFFERENCE {
 		for side in 0 ..< sides {
@@ -605,13 +663,14 @@ plain_filter :: proc(c: ^Node_Call, lane: ^Lane, s: ^Filter_State, type: int) {
 		return
 	}
 	hz: [NODE_CHUNK]f32
-	swept, cutoff := node_curve(c, lane, FILTER_FREQUENCY, c.node.values[FILTER_FREQUENCY], hz[:n])
+	base_hz := node_values(c, lane)[FILTER_FREQUENCY]
+	swept, cutoff := node_curve(c, lane, FILTER_FREQUENCY, base_hz, hz[:n])
 	ks: [NODE_CHUNK]f32
 	if swept {
 		for i in 0 ..< n {
 			ks[i] = 1 - dsp.exp_decay(-math.TAU * min(hz[i], 0.49 * RATE) / RATE)
 		}
-	} else if cutoff != c.node.values[FILTER_FREQUENCY] {
+	} else if cutoff != base_hz {
 		s.k = 1 - dsp.exp_decay(-math.TAU * min(cutoff, 0.49 * RATE) / RATE) // a steady modulator's
 	}
 	for side in 0 ..< sides {
@@ -733,6 +792,41 @@ process_map :: proc(c: ^Node_Call) {
 	}
 }
 
+// The points a Curve's table has: its input 0..1 read at 127 steps (an
+// SFZ curve's: a velocity's level, a crossfade).
+CURVE_POINTS :: 128
+
+// Its input (0..1) through a table of CURVE_POINTS, straight between its
+// points (Programs.tables, at the `table` field's index).
+@(private = "file")
+process_curve :: proc(c: ^Node_Call) {
+	read :: #force_inline proc "contextless" (table: []f32, x: f32) -> f32 {
+		t := clamp(x, 0, 1) * (CURVE_POINTS - 1)
+		i := min(int(t), CURVE_POINTS - 2)
+		return table[i] + (table[i + 1] - table[i]) * (t - f32(i))
+	}
+	for &lane in c.lanes {
+		il, ir := node_input(c, &lane, 0)
+		l, r := node_out(c, &lane)
+		// its table: its layer's (a region's own velocity curve)
+		at := int(node_values(c, &lane)[3]) * CURVE_POINTS
+		if at < 0 || at + CURVE_POINTS > len(c.progs.tables) {
+			slice_zero(l)
+			slice_zero(r)
+			continue
+		}
+		table := c.progs.tables[at:][:CURVE_POINTS]
+		for i in 0 ..< len(l) {
+			l[i] = read(table, il[i])
+		}
+		if c.node.stereo {
+			for i in 0 ..< len(r) {
+				r[i] = read(table, ir[i])
+			}
+		}
+	}
+}
+
 @(private = "file")
 process_mix :: proc(c: ^Node_Call) {
 	for &lane in c.lanes {
@@ -804,7 +898,7 @@ comb_start :: proc(c: ^Node_Call, lane: ^Lane, s: ^Comb_State) {
 	damp := f64(node_value(c, lane, COMB_DAMP))
 	k := damp > 0 ? dsp.one_pole_k(damp) : 1
 	s.k = f32(k)
-	d := f64(c.node.values[COMB_DELAY]) * RATE // its base: what moves it moves it per sample
+	d := f64(node_values(c, lane)[COMB_DELAY]) * RATE // its base: what moves it moves it per sample
 	if d <= 0 {
 		f := max(lane.hz, RATE / f64(COMB_LINE - 2))
 		w := math.TAU * f / RATE
@@ -896,19 +990,16 @@ process_sampler :: proc(c: ^Node_Call) {
 	for &lane in c.lanes {
 		s := node_state(c, &lane, Sampler_State)
 		if lane.starting || lane.fresh {
-			sampler_start(s, i32(c.node.values[3]), node_value(c, &lane, 4), node_value(c, &lane, 5), lane.key, lane.note, lane.seed, c.env)
+			sampler_start(s, i32(node_values(c, &lane)[3]), node_value(c, &lane, 4), node_value(c, &lane, 5), lane.key, lane.note, lane.seed, c.env)
 		}
 		l, r := node_out(c, &lane)
-		for i in 0 ..< len(l) {
-			l[i], r[i] = 0, 0
-		}
 		sampler_play(s, lane.at, c.env, l, r)
 	}
 }
 
 @(private = "file")
 tail_sampler_node :: proc(c: ^Node_Call, lane: ^Lane) -> f64 {
-	return tail_sampler(i32(c.node.values[3]), node_value(c, lane, 5), lane.key, lane.note, c.env)
+	return tail_sampler(i32(node_values(c, lane)[3]), node_value(c, lane, 5), lane.key, lane.note, c.env)
 }
 
 // ---- Clip: a recording as it was made ----------------------------------------------
@@ -995,4 +1086,95 @@ fade_gain :: #force_inline proc "contextless" (k, length: i64, curve: Curve) -> 
 @(private = "file")
 tail_clip :: proc(c: ^Node_Call, lane: ^Lane) -> f64 {
 	return f64(lane.gate) / RATE
+}
+
+// ---- Segments: an envelope of points ------------------------------------------------
+
+// Up to SEGMENT_POINTS points, each a level reached `times` seconds after
+// the one before (straight between them), from the first's level at the
+// note's start; held at the `sustain` point while the note is held, and on
+// from there when it ends (SFZ v2's egN). Its value is a function of where
+// the note is.
+
+SEGMENT_POINTS :: 8
+SEGMENTS_TIMES :: 3
+SEGMENTS_LEVELS :: SEGMENTS_TIMES + SEGMENT_POINTS
+SEGMENTS_SUSTAIN :: SEGMENTS_LEVELS + SEGMENT_POINTS
+SEGMENTS_POINTS :: SEGMENTS_SUSTAIN + 1
+
+// Its level `t` seconds after its start, held at `sustain` until `gate`.
+@(private = "file")
+segments_at :: proc(v: ^[MAX_FIELDS]f32, t, gate: f64) -> f32 {
+	points := clamp(int(v[SEGMENTS_POINTS]), 1, SEGMENT_POINTS)
+	sustain := int(v[SEGMENTS_SUSTAIN])
+	// the time each point is reached
+	at: [SEGMENT_POINTS]f64
+	for k in 1 ..< points {
+		at[k] = at[k - 1] + max(f64(v[SEGMENTS_TIMES + k]), 0)
+	}
+	level :: proc(v: ^[MAX_FIELDS]f32, at: [SEGMENT_POINTS]f64, points: int, t: f64) -> f32 {
+		if t <= 0 {
+			return v[SEGMENTS_LEVELS]
+		}
+		for k in 1 ..< points {
+			if t < at[k] {
+				span := at[k] - at[k - 1]
+				x := span > 0 ? f32((t - at[k - 1]) / span) : 1
+				return v[SEGMENTS_LEVELS + k - 1] + (v[SEGMENTS_LEVELS + k] - v[SEGMENTS_LEVELS + k - 1]) * x
+			}
+		}
+		return v[SEGMENTS_LEVELS + points - 1]
+	}
+	if sustain < 0 || sustain >= points {
+		return level(v, at, points, t)
+	}
+	if t < gate {
+		return level(v, at, points, min(t, at[sustain]))
+	}
+	// released: from where it was at the gate, on through the points after the sustain
+	from := level(v, at, points, min(gate, at[sustain]))
+	r := t - gate
+	if sustain + 1 >= points {
+		return from
+	}
+	first := max(f64(v[SEGMENTS_TIMES + sustain + 1]), 0)
+	if r < first {
+		x := first > 0 ? f32(r / first) : 1
+		return from + (v[SEGMENTS_LEVELS + sustain + 1] - from) * x
+	}
+	return level(v, at, points, at[sustain + 1] + (r - first))
+}
+
+@(private = "file")
+process_segments :: proc(c: ^Node_Call) {
+	for &lane in c.lanes {
+		v := node_values(c, &lane)
+		l, _ := node_out(c, &lane)
+		gate := f64(lane.gate) / RATE
+		for i in 0 ..< len(l) {
+			l[i] = segments_at(v, f64(lane.at + i64(i)) / RATE, gate)
+		}
+	}
+}
+
+@(private = "file")
+tail_segments :: proc(c: ^Node_Call, lane: ^Lane) -> f64 {
+	v := node_values(c, lane)
+	points := clamp(int(v[SEGMENTS_POINTS]), 1, SEGMENT_POINTS)
+	sustain := int(v[SEGMENTS_SUSTAIN])
+	total: f64
+	for k in 1 ..< points {
+		total += max(f64(v[SEGMENTS_TIMES + k]), 0)
+	}
+	if v[SEGMENTS_LEVELS + points - 1] != 0 {
+		return math.INF_F64 // it ends somewhere other than silence: what it moves decides
+	}
+	if sustain >= 0 && sustain < points {
+		after: f64
+		for k in sustain + 1 ..< points {
+			after += max(f64(v[SEGMENTS_TIMES + k]), 0)
+		}
+		return max(lane.note.duration, total - after) + after
+	}
+	return total
 }

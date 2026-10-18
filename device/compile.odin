@@ -108,6 +108,7 @@ Node_Desc :: struct {
 	values: [MAX_FIELDS]f32, // node_defaults(kind) and what was written: seconds, Hz, gain linear
 	inputs: []string,
 	mods:   []Mod_Desc,
+	table:  []f32, // a Curve's points (CURVE_POINTS; placed in Programs.tables, its `table` field set)
 	path:   string,
 }
 
@@ -117,6 +118,15 @@ Pad_Desc :: struct {
 	gain_db: f32,
 	chokes:  []string, // the pads it cuts
 	program: ^Program_Desc,
+	path:    string,
+}
+
+// A layer of a layered program (an SFZ region): the program it plays and
+// the conditions a note must meet for it (Layer_Row's), every one meeting
+// them sounding.
+Layer_Desc :: struct {
+	program: ^Program_Desc,
+	row:     Layer_Row, // its conditions and level (program and chokes are set when placed)
 	path:    string,
 }
 
@@ -147,12 +157,14 @@ Control_Desc :: struct {
 	targets: []Target_Desc,
 	value:   f32,
 	given:   bool, // value set (else it is read back from its first target)
+	fixed:   bool, // read once, at compile (an SFZ's CC): a change after is refused
 	path:    string,
 }
 
 Program_Desc :: struct {
 	nodes:      []Node_Desc,
 	pads:       []Pad_Desc, // a machine (and no nodes)
+	layers:     []Layer_Desc, // a layered instrument (and no nodes): every layer a note meets sounds
 	keys:       []Key_Desc,
 	controls:   []Control_Desc,
 	out:        string, // the node it plays
@@ -161,6 +173,8 @@ Program_Desc :: struct {
 	note:       f32,
 	mono:       bool,
 	velocity:   bool, // the out follows the note's velocity
+	one_shot:   bool, // its notes play to their end whatever the gate
+	sw_lo, sw_hi, sw_default: u8, // 1 + a layered instrument's keyswitch keys and default (0: none)
 	path:       string, // where its nodes or pads were written
 }
 
@@ -181,6 +195,7 @@ Control_Row :: struct {
 	name:    u32, // base.name_id of its name
 	value:   f32,
 	targets: Span, // into Programs.control_targets
+	fixed:   bool, // read at compile: a change after is refused (until automation)
 }
 
 // Places desc into progs; its program's index (-1: it can't play, the
@@ -192,9 +207,16 @@ compile_program :: proc(progs: ^Programs, desc: ^Program_Desc, findings: ^base.F
 		note       = desc.note,
 		mono       = desc.mono,
 		velocity   = desc.velocity,
+		one_shot   = desc.one_shot,
 	}
 	id: i32
-	if len(desc.pads) > 0 {
+	if len(desc.layers) > 0 {
+		if len(desc.nodes) > 0 || len(desc.pads) > 0 {
+			base.report(findings, "bad_value", .Error, desc.path, "%s: a row plays nodes, pads or layers, one of them", desc.path)
+			return -1
+		}
+		id = compile_layers(progs, desc, prog, findings)
+	} else if len(desc.pads) > 0 {
 		if len(desc.nodes) > 0 {
 			base.report(findings, "bad_value", .Error, desc.path, "%s: a row plays nodes or pads, not both", desc.path)
 			return -1
@@ -373,6 +395,10 @@ compile_nodes :: proc(progs: ^Programs, desc: ^Program_Desc, prog: Program, find
 			bufs += 1
 		}
 		g := Graph_Node{kind = n.kind, name = base.name_id(n.name), values = n.values, state = i32(state), buf = buf[i]}
+		if len(n.table) == CURVE_POINTS {
+			g.values[len(COMMON_FIELDS)] = f32(len(progs.tables) / CURVE_POINTS)
+			append(&progs.tables, ..n.table)
+		}
 		state += (row.state + 15) &~ 15
 		g.inputs = {i32(len(progs.inputs)), i32(len(n.inputs))}
 		for name in n.inputs {
@@ -402,16 +428,16 @@ compile_nodes :: proc(progs: ^Programs, desc: ^Program_Desc, prog: Program, find
 	prog.state = i32(state)
 	prog.bufs = i32(bufs)
 	// its named keys (a Sampler's set's), each once
-	prog.pads.first = i32(len(progs.pads))
+	prog.layers.first = i32(len(progs.layers))
 	for k in desc.keys {
 		id := base.name_id(k.name)
 		known := false
-		for pr in progs.pads[prog.pads.first:] {
+		for pr in progs.layers[prog.layers.first:] {
 			known ||= pr.pad == id
 		}
 		if !known {
-			append(&progs.pads, Pad_Row{pad = id, key = k.key, program = -1, gain = 1})
-			prog.pads.count += 1
+			append(&progs.layers, Layer_Row{pad = id, key = k.key, program = -1, gain = 1})
+			prog.layers.count += 1
 		}
 	}
 	append(&progs.programs, prog)
@@ -471,12 +497,12 @@ compile_machine :: proc(progs: ^Programs, desc: ^Program_Desc, prog: Program, fi
 			bufs = max(bufs, pp.bufs)
 		}
 	}
-	m.pads.first = i32(len(progs.pads))
+	m.layers.first = i32(len(progs.layers))
 	for p, i in pads {
 		if programs[i] < 0 {
 			continue
 		}
-		row := Pad_Row{pad = base.name_id(p.name), key = keys[i], program = programs[i], gain = f32(base.db_to_gain(f64(p.gain_db)))}
+		row := Layer_Row{pad = base.name_id(p.name), key = keys[i], program = programs[i], gain = f32(base.db_to_gain(f64(p.gain_db)))}
 		row.chokes.first = i32(len(progs.chokes))
 		for name in p.chokes {
 			found := false
@@ -490,12 +516,166 @@ compile_machine :: proc(progs: ^Programs, desc: ^Program_Desc, prog: Program, fi
 			append(&progs.chokes, base.name_id(name))
 			row.chokes.count += 1
 		}
-		append(&progs.pads, row)
-		m.pads.count += 1
+		append(&progs.layers, row)
+		m.layers.count += 1
 	}
 	m.state, m.bufs = state, bufs
 	append(&progs.programs, m)
 	return i32(len(progs.programs) - 1)
+}
+
+// A layered instrument: its layers' programs, one per shape (the regions
+// whose programs have the same nodes, wiring and modulators share one, so
+// their voices play in one call), each layer its row of conditions and the
+// values where it differs from its shape's program (its zone, tuning,
+// level, times, velocity table).
+@(private = "file")
+compile_layers :: proc(progs: ^Programs, desc: ^Program_Desc, prog: Program, findings: ^base.Findings) -> i32 {
+	m := prog
+	m.layer_mode = .All
+	m.sw_lo, m.sw_hi, m.sw_default = desc.sw_lo, desc.sw_hi, desc.sw_default
+	Shape :: struct {
+		key:     string,
+		program: i32,
+	}
+	shapes := make([dynamic]Shape, context.temp_allocator)
+	tables := make(map[u64]f32, context.temp_allocator) // a table's contents: its index
+	programs := make([]i32, len(desc.layers), context.temp_allocator)
+	state := i32(GRAPH_HEADER)
+	bufs := i32(RESERVED)
+	for &l, i in desc.layers {
+		programs[i] = -1
+		if l.program == nil || len(l.program.pads) > 0 || len(l.program.layers) > 0 {
+			continue
+		}
+		key := desc_shape(l.program)
+		for x in shapes {
+			if x.key == key {
+				programs[i] = x.program
+			}
+		}
+		if programs[i] < 0 {
+			programs[i] = compile_program(progs, l.program, findings)
+			if programs[i] < 0 {
+				continue
+			}
+			append(&shapes, Shape{key, programs[i]})
+			// its tables, by their contents, for the layers after it
+			for n in l.program.nodes {
+				if len(n.table) == CURVE_POINTS {
+					tables[table_hash(n.table)] = f32(len(progs.tables) / CURVE_POINTS - 1)
+				}
+			}
+		}
+		pp := &progs.programs[programs[i]]
+		state = max(state, pp.state)
+		bufs = max(bufs, pp.bufs)
+	}
+	m.layers.first = i32(len(progs.layers))
+	for &l, i in desc.layers {
+		if programs[i] < 0 {
+			continue
+		}
+		row := l.row
+		row.program = programs[i]
+		if row.gain == 0 {
+			row.gain = 1
+		}
+		row.chokes = {}
+		row.params = layer_values(progs, programs[i], l.program, &tables)
+		m.release_layers ||= row.trigger == .Release
+		append(&progs.layers, row)
+		m.layers.count += 1
+	}
+	m.state, m.bufs = state, bufs
+	append(&progs.programs, m)
+	return i32(len(progs.programs) - 1)
+}
+
+// What a desc's program is made of, but its values: its nodes, what each
+// reads and what moves it, and what of its values decides how it is placed
+// (a level, a pan, a filter's type, an oscillator's sides): programs of one
+// shape are one program with different values.
+@(private = "file")
+desc_shape :: proc(d: ^Program_Desc) -> string {
+	b := strings.builder_make(context.temp_allocator)
+	strings.write_string(&b, d.out)
+	strings.write_byte(&b, d.one_shot ? 'o' : '-')
+	strings.write_byte(&b, d.velocity ? 'v' : '-')
+	strings.write_byte(&b, d.mono ? 'm' : '-')
+	for n in d.nodes {
+		strings.write_byte(&b, '|')
+		strings.write_string(&b, n.name)
+		strings.write_byte(&b, ':')
+		strings.write_int(&b, int(n.kind))
+		for x in n.inputs {
+			strings.write_byte(&b, '<')
+			strings.write_string(&b, x)
+		}
+		for m in n.mods {
+			strings.write_string(&b, "~")
+			strings.write_int(&b, m.slot)
+			strings.write_string(&b, m.source)
+			strings.write_int(&b, int(m.kind))
+			strings.write_f64(&b, f64(m.amount), 'g')
+			strings.write_f64(&b, f64(m.exponent), 'g')
+		}
+		strings.write_byte(&b, len(n.table) > 0 ? 't' : '-')
+		strings.write_byte(&b, n.values[FIELD_GAIN] != 1 ? 'g' : '-')
+		strings.write_byte(&b, n.values[FIELD_PAN] != 0 ? 'p' : '-')
+		if n.kind == NODE_FILTER {
+			strings.write_f64(&b, f64(n.values[len(COMMON_FIELDS)]), 'g') // its type
+		}
+		if n.kind == NODE_OSC {
+			v := n.values
+			strings.write_byte(&b, osc_stereo(&v) ? 's' : '-')
+		}
+	}
+	return strings.to_string(b)
+}
+
+@(private = "file")
+table_hash :: proc(t: []f32) -> u64 {
+	h: u64 = 0x7ab1e
+	for x in t {
+		h = base.hash_combine(h, u64(transmute(u32)x))
+	}
+	return h
+}
+
+// A layer's values where its desc differs from the program it shares (by
+// its nodes' names), its tables placed (once per contents).
+@(private = "file")
+layer_values :: proc(progs: ^Programs, program: i32, d: ^Program_Desc, tables: ^map[u64]f32) -> Span {
+	sp := Span{i32(len(progs.layer_params)), 0}
+	prog := progs.programs[program]
+	nodes := progs.nodes[prog.nodes.first:base.span_end(prog.nodes)]
+	for n in d.nodes {
+		id := base.name_id(n.name)
+		for g, j in nodes {
+			if g.name != id {
+				continue
+			}
+			values := n.values
+			if len(n.table) == CURVE_POINTS {
+				h := table_hash(n.table)
+				at, placed := tables[h]
+				if !placed {
+					at = f32(len(progs.tables) / CURVE_POINTS)
+					append(&progs.tables, ..n.table)
+					tables[h] = at
+				}
+				values[len(COMMON_FIELDS)] = at
+			}
+			for slot in 0 ..< MAX_FIELDS {
+				if values[slot] != g.values[slot] {
+					append(&progs.layer_params, Layer_Param{node = u16(j), slot = u8(slot), value = values[slot]})
+					sp.count += 1
+				}
+			}
+		}
+	}
+	return sp
 }
 
 // ---- controls ----------------------------------------------------------------------
@@ -520,7 +700,7 @@ targets_add :: proc(progs: ^Programs, id: i32, desc: ^Program_Desc, parts: []str
 				continue
 			}
 			pid := base.name_id(p.name)
-			for pr in progs.pads[prog.pads.first:base.span_end(prog.pads)] {
+			for pr in progs.layers[prog.layers.first:base.span_end(prog.layers)] {
 				if pr.pad == pid && pr.program >= 0 {
 					count += targets_add(progs, pr.program, p.program, parts[2:], t)
 				}
@@ -593,7 +773,7 @@ control_target_value :: proc(progs: ^Programs, t: Control_Target) -> f32 {
 compile_controls :: proc(progs: ^Programs, id: i32, desc: ^Program_Desc, findings: ^base.Findings) {
 	progs.programs[id].controls.first = i32(len(progs.controls))
 	for cd in desc.controls {
-		row := Control_Row{name = base.name_id(cd.name), targets = {i32(len(progs.control_targets)), 0}}
+		row := Control_Row{name = base.name_id(cd.name), targets = {i32(len(progs.control_targets)), 0}, fixed = cd.fixed}
 		for t in cd.targets {
 			n := targets_add(progs, id, desc, strings.split(t.path, "/", context.temp_allocator), t)
 			if n == 0 {
@@ -629,8 +809,11 @@ compile_controls :: proc(progs: ^Programs, id: i32, desc: ^Program_Desc, finding
 		}
 	}
 	for &c, i in controls {
-		if !desc.controls[i].given {
+		if !desc.controls[i].given && !c.fixed {
 			c.value = control_read(progs, &c)
+		}
+		if c.fixed {
+			c.value = desc.controls[i].value
 		}
 	}
 }
@@ -711,7 +894,7 @@ control_of :: proc(progs: ^Programs, program: i32, name: u32) -> ^Control_Row {
 // the program's shape (a mono node made stereo), and nothing changed.
 control_set :: proc(progs: ^Programs, program: i32, name: u32, value: f32) -> bool {
 	c := control_of(progs, program, name)
-	if c == nil {
+	if c == nil || c.fixed {
 		return false
 	}
 	old := c.value
@@ -747,7 +930,7 @@ node_field_set :: proc(progs: ^Programs, program: i32, node: u32, field: string,
 				n.values[slot] = slot == FIELD_GAIN ? f32(base.db_to_gain(f64(value))) : value
 			}
 		}
-		for pr in progs.pads[p.pads.first:base.span_end(p.pads)] {
+		for pr in progs.layers[p.layers.first:base.span_end(p.layers)] {
 			if pr.program >= 0 && pr.program != program {
 				set(progs, pr.program, node, field, value, olds)
 			}
@@ -883,7 +1066,7 @@ program_derive :: proc(progs: ^Programs, program: i32) -> (reshaped: bool) {
 	for g in nodes {
 		prog.jump &&= node_row(g.kind).jump
 	}
-	for pr in progs.pads[prog.pads.first:base.span_end(prog.pads)] {
+	for pr in progs.layers[prog.layers.first:base.span_end(prog.layers)] {
 		if pr.program >= 0 && pr.program != program {
 			reshaped ||= program_derive(progs, pr.program)
 		}

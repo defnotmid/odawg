@@ -212,16 +212,17 @@ test_sfz :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(files), 6) // the .sfz and its five samples
 	set, found := device.bank_set_from_name(&bank, "inst/piano.sfz")
 	testing.expect(t, found)
+	// a zone per region with a sample, in the file's order (the release
+	// region's too): what each region's Region node plays, by index; how it
+	// plays (its tune, level, loop, round robin) is its program's
 	zs := bank.zones[bank.sets[set].zones.first:][:bank.sets[set].zones.count]
-	testing.expect_value(t, len(zs), 4) // the release region left out
+	testing.expect_value(t, len(zs), 5)
 	soft := zs[0]
-	testing.expect(t, soft.lo_key == 60 && soft.hi_key == 66 && soft.hi_velocity == 63 && !soft.one_shot)
-	// zones in the file's order; in the round robin, seq_position 1 is first
-	testing.expect(t, zs[1].lo_velocity == 64 && zs[1].one_shot && zs[1].sequence == 1 && zs[2].sequence == 0 && zs[2].group == zs[1].group)
+	testing.expect(t, soft.lo_key == 60 && soft.hi_key == 66 && soft.hi_velocity == 63)
+	testing.expect(t, zs[1].lo_velocity == 64 && zs[2].lo_velocity == 64)
 	testing.expect(t, bank.files[bank.zone_file[bank.sets[set].zones.first + 1]].path == "inst/samples/c4_loud_1.wav")
-	g := zs[3]
-	testing.expectf(t, g.lo_key == 67 && abs(g.root - 67.5) < 1e-4 && abs(g.gain - 0.501) < 0.01, "g4: key %d root %f gain %f", g.lo_key, g.root, g.gain)
-	testing.expect(t, has_code(findings, "unsupported_opcode"))
+	testing.expectf(t, zs[3].lo_key == 67 && zs[3].root == 67, "g4: key %d root %f", zs[3].lo_key, zs[3].root)
+	testing.expect(t, bank.files[bank.zone_file[bank.sets[set].zones.first + 4]].path == "inst/samples/rel.wav")
 	testing.expect(t, bank_load(&bank, {{set = set, keys = ~bit_set[0 ..< 128;u128]{}}}, &findings, nil, &host))
 	testing.expect(t, !has_code(findings, "asset_unavailable"))
 }
@@ -344,7 +345,6 @@ test_source_pins :: proc(t: ^testing.T) {
 	set, found := device.bank_set_from_name(&bank, "lib/lib.sfz")
 	testing.expect(t, found)
 	zs := bank.sets[set].zones
-	testing.expect(t, abs(bank.zones[zs.first].release - 0.3) < 1e-6)
 	s := new(song.Song)
 	testing.expect(t, song.song_from_spec(sp, s, &bank))
 	needs := make([dynamic]device.Sample_Need)
@@ -353,8 +353,8 @@ test_source_pins :: proc(t: ^testing.T) {
 	testing.expect(t, bank_load_at(&bank, data, needs[:], &findings, nil, host = &host))
 	testing.expect(t, bank.zones[zs.first].sample >= 0 && bank.zones[zs.first + 1].sample < 0)
 	// a loud one reaches the unpinned file: a finding, until it is pinned
-	loud_need := needs[0]
-	loud_need.velocities[57] = {127}
+	loud_need := device.Sample_Need{set = needs[0].set}
+	append(&loud_need.zones, 1)
 	testing.expect(t, !bank_load_at(&bank, data, {loud_need}, &findings, nil, host = &host))
 	testing.expect(t, has_code(findings, "asset_unavailable"))
 	// odawg pin: fetched (here: found fetched) and its pin kept for writing

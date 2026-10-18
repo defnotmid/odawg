@@ -85,8 +85,7 @@ chain_tail :: proc(s: ^song.Song, c: base.Span) -> f64 {
 }
 
 note_from_row :: proc(s: ^song.Song, i: int) -> device.Note {
-	n := s.notes[i]
-	return {n.time, n.duration, n.pitch, n.velocity, n.pad, n.accent}
+	return song.note_of(s, i)
 }
 
 // The master's lookahead in samples (its chain's latency).

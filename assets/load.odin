@@ -368,6 +368,11 @@ bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Ne
 				}
 			}
 		}
+		for z in need.zones {
+			if z >= 0 && z < zs.count {
+				reached[z] = true
+			}
+		}
 		for zi in zs.first ..< base.span_end(zs) {
 			z := bank.zones[zi]
 			if !reached[zi - zs.first] || z.sample >= 0 || bank.zone_file[zi] < 0 {

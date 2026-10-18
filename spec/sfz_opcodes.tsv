@@ -1,0 +1,776 @@
+# The SFZ reference's opcodes (sfz.github.io data/sfz/syntax.yml, CC0), one per
+# line: its name (N, X, Y: a number), version, category, what it is an alias of,
+# and how odawg reads it: plays (it sounds as SFZ says), compile (read once at
+# compile: a CC at its value), info (doesn't change the sound), warn (not played:
+# a warning naming it).
+#define	SFZ v2	Instrument Settings		warn
+#include	ARIA	Instrument Settings		warn
+*_mod	ARIA	Instrument Settings		warn
+amp_attack	SFZ v2	Modulation/Envelope Generators	ampeg_attack	warn
+amp_decay	SFZ v2	Modulation/Envelope Generators	ampeg_decay	warn
+amp_delay	SFZ v2	Modulation/Envelope Generators	ampeg_delay	warn
+amp_hold	SFZ v2	Modulation/Envelope Generators	ampeg_hold	warn
+amp_keycenter	SFZ v1	Performance Parameters/Amplifier		plays
+amp_keytrack	SFZ v1	Performance Parameters/Amplifier		plays
+amp_random	SFZ v1	Performance Parameters/Amplifier		plays
+amp_release	SFZ v2	Modulation/Envelope Generators	ampeg_release	warn
+amp_sustain	SFZ v2	Modulation/Envelope Generators	ampeg_sustain	warn
+amp_velcurve_N	SFZ v1	Performance Parameters/Amplifier		plays
+amp_veltrack	SFZ v1	Performance Parameters/Amplifier		plays
+amp_veltrack_curveccN	ARIA	Performance Parameters/Amplifier/modulation		warn
+amp_veltrack_onccN	ARIA	Performance Parameters/Amplifier/modulation		warn
+amp_veltrack_random	ARIA	Performance Parameters/Amplifier		warn
+ampeg_attack	SFZ v1	Modulation/Envelope Generators		plays
+ampeg_attack_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
+ampeg_attack_shape	ARIA	Modulation/Envelope Generators		warn
+ampeg_attackccN		Modulation/Envelope Generators/modulation		warn
+ampeg_decay	SFZ v1	Modulation/Envelope Generators		plays
+ampeg_decay_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
+ampeg_decay_shape	ARIA	Modulation/Envelope Generators		warn
+ampeg_decay_zero	ARIA	Modulation/Envelope Generators		warn
+ampeg_decayccN		Modulation/Envelope Generators/modulation		warn
+ampeg_delay	SFZ v1	Modulation/Envelope Generators		plays
+ampeg_delay_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
+ampeg_delayccN		Modulation/Envelope Generators/modulation		warn
+ampeg_dynamic	ARIA	Modulation/Envelope Generators		warn
+ampeg_hold	SFZ v1	Modulation/Envelope Generators		plays
+ampeg_hold_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
+ampeg_holdccN		Modulation/Envelope Generators/modulation		warn
+ampeg_release	SFZ v1	Modulation/Envelope Generators		plays
+ampeg_release_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
+ampeg_release_shape	ARIA	Modulation/Envelope Generators		warn
+ampeg_release_zero	ARIA	Modulation/Envelope Generators		warn
+ampeg_releaseccN		Modulation/Envelope Generators/modulation		warn
+ampeg_start	SFZ v1	Modulation/Envelope Generators		plays
+ampeg_start_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
+ampeg_startccN		Modulation/Envelope Generators/modulation		warn
+ampeg_sustain	SFZ v1	Modulation/Envelope Generators		plays
+ampeg_sustain_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
+ampeg_sustainccN		Modulation/Envelope Generators/modulation		warn
+ampeg_vel2attack		Modulation/Envelope Generators/modulation		plays
+ampeg_vel2decay		Modulation/Envelope Generators/modulation		plays
+ampeg_vel2delay		Modulation/Envelope Generators/modulation		plays
+ampeg_vel2hold		Modulation/Envelope Generators/modulation		plays
+ampeg_vel2release		Modulation/Envelope Generators/modulation		plays
+ampeg_vel2sustain		Modulation/Envelope Generators/modulation		plays
+amplfo_delay	SFZ v1	Modulation/LFO		plays
+amplfo_depth	SFZ v1	Modulation/LFO		plays
+amplfo_depthccN		Modulation/LFO/modulation		warn
+amplfo_depthchanaft		Modulation/LFO/modulation		warn
+amplfo_depthpolyaft		Modulation/LFO/modulation		warn
+amplfo_fade	SFZ v1	Modulation/LFO		plays
+amplfo_freq	SFZ v1	Modulation/LFO		plays
+amplfo_freqccN		Modulation/LFO/modulation		warn
+amplfo_freqchanaft		Modulation/LFO/modulation		warn
+amplfo_freqpolyaft		Modulation/LFO/modulation		warn
+amplitude	ARIA	Performance Parameters/Amplifier		plays
+amplitude_curveccN		Performance Parameters/Amplifier/modulation		warn
+amplitude_onccN		Performance Parameters/Amplifier/modulation		warn
+amplitude_smoothccN		Performance Parameters/Amplifier/modulation		warn
+apan_depth	SFZ v2	Effects		warn
+apan_depth_onccN		Effects/modulation		warn
+apan_dry	SFZ v2	Effects		warn
+apan_dry_onccN		Effects/modulation		warn
+apan_freq	SFZ v2	Effects		warn
+apan_freq_onccN		Effects/modulation		warn
+apan_phase	SFZ v2	Effects		warn
+apan_phase_onccN		Effects/modulation		warn
+apan_waveform	SFZ v2	Effects		warn
+apan_wet	SFZ v2	Effects		warn
+apan_wet_onccN		Effects/modulation		warn
+bend_down	SFZ v1	Performance Parameters/Pitch		info
+bend_smooth	SFZ v2	Performance Parameters/Pitch		info
+bend_step	SFZ v1	Performance Parameters/Pitch		info
+bend_stepdown	SFZ v2	Performance Parameters/Pitch		warn
+bend_stepup	SFZ v2	Performance Parameters/Pitch		warn
+bend_up	SFZ v1	Performance Parameters/Pitch		info
+benddown	SFZ v1	Performance Parameters/Pitch	bend_down	warn
+bendstep	SFZ v1	Performance Parameters/Pitch	bend_step	warn
+bendup	SFZ v1	Performance Parameters/Pitch	bend_up	warn
+bitred	SFZ v2	Effects		warn
+bitred_curveccN		Effects/modulation		warn
+bitred_onccN		Effects/modulation		warn
+bitred_smoothccN		Effects/modulation		warn
+bitred_stepccN		Effects/modulation		warn
+bus	SFZ v2	Effects		warn
+bypass_onccN	SFZ v2	Effects		warn
+comp_attack	SFZ v2	Effects		warn
+comp_gain	SFZ v2	Effects		warn
+comp_ratio	SFZ v2	Effects		warn
+comp_release	SFZ v2	Effects		warn
+comp_stlink	SFZ v2	Effects		warn
+comp_threshold	SFZ v2	Effects		warn
+count	SFZ v1	Sound Source/Sample Playback		warn
+curve_index	ARIA	Curves		compile
+cutoff	SFZ v1	Performance Parameters/Filter		plays
+cutoff2	SFZ v2	Performance Parameters/Filter	cutoff	plays
+cutoff2_random	ARIA	Performance Parameters/Filter	fil_random	warn
+cutoff_ccN		Performance Parameters/Filter/modulation		warn
+cutoff_chanaft		Performance Parameters/Filter/modulation		warn
+cutoff_curveccN	SFZ v2	Performance Parameters/Filter/modulation		warn
+cutoff_polyaft		Performance Parameters/Filter/modulation		warn
+cutoff_random	SFZ v2	Performance Parameters/Filter	fil_random	warn
+cutoff_smoothccN	SFZ v2	Performance Parameters/Filter/modulation		warn
+cutoff_stepccN	SFZ v2	Performance Parameters/Filter/modulation		warn
+decim	SFZ v2	Effects		warn
+decim_curveccN		Effects/modulation		warn
+decim_onccN		Effects/modulation		warn
+decim_smoothccN		Effects/modulation		warn
+decim_stepccN		Effects/modulation		warn
+default_path	SFZ v2	Instrument Settings		info
+delay	SFZ v1	Sound Source/Sample Playback		plays
+delay_beats	SFZ v2	Sound Source/Sample Playback		warn
+delay_beats_curveccN	ARIA	Sound Source/Sample Playback/modulation		warn
+delay_beats_onccN	ARIA	Sound Source/Sample Playback/modulation		warn
+delay_beats_random	ARIA	Sound Source/Sample Playback		warn
+delay_ccN		Sound Source/Sample Playback/modulation		warn
+delay_curveccN	ARIA	Sound Source/Sample Playback/modulation		warn
+delay_cutoff	SFZ v2	Effects		warn
+delay_cutoff_onccN		Effects/modulation		warn
+delay_damphi	SFZ v2	Effects		warn
+delay_damphi_onccN		Effects/modulation		warn
+delay_damplo	SFZ v2	Effects		warn
+delay_damplo_onccN		Effects/modulation		warn
+delay_dry	SFZ v2	Effects		warn
+delay_dry_onccN		Effects/modulation		warn
+delay_feedback	SFZ v2	Effects		warn
+delay_feedback_onccN		Effects/modulation		warn
+delay_filter	SFZ v2	Effects		warn
+delay_input	SFZ v2	Effects		warn
+delay_input_onccN		Effects/modulation		warn
+delay_levelc	SFZ v2	Effects		warn
+delay_levell	SFZ v2	Effects		warn
+delay_levelr	SFZ v2	Effects		warn
+delay_lfofreq	SFZ v2	Effects		warn
+delay_lfofreq_onccN		Effects/modulation		warn
+delay_moddepth	SFZ v2	Effects		warn
+delay_moddepth_onccN		Effects/modulation		warn
+delay_mode	SFZ v2	Effects		warn
+delay_panc	SFZ v2	Effects		warn
+delay_panc_onccN		Effects/modulation		warn
+delay_panl	SFZ v2	Effects		warn
+delay_panl_onccN		Effects/modulation		warn
+delay_panr	SFZ v2	Effects		warn
+delay_panr_onccN		Effects/modulation		warn
+delay_random	SFZ v1	Sound Source/Sample Playback		plays
+delay_resonance	SFZ v2	Effects		warn
+delay_resonance_onccN		Effects/modulation		warn
+delay_samples	SFZ v2	Sound Source/Sample Playback		warn
+delay_samples_onccN		Sound Source/Sample Playback/modulation		warn
+delay_spread	SFZ v2	Effects		warn
+delay_spread_onccN		Effects/modulation		warn
+delay_syncc_onccN	SFZ v2	Effects		warn
+delay_syncl_onccN	SFZ v2	Effects		warn
+delay_syncr_onccN	SFZ v2	Effects		warn
+delay_time_tap	SFZ v2	Effects		warn
+delay_timec	SFZ v2	Effects		warn
+delay_timec_onccN		Effects/modulation		warn
+delay_timel	SFZ v2	Effects		warn
+delay_timel_onccN		Effects/modulation		warn
+delay_timer	SFZ v2	Effects		warn
+delay_timer_onccN		Effects/modulation		warn
+delay_wet	SFZ v2	Effects		warn
+delay_wet_onccN		Effects/modulation		warn
+direction	SFZ v2	Sound Source/Sample Playback		warn
+directtomain	SFZ v2	Effects		warn
+disto_depth	SFZ v2	Effects		warn
+disto_depth_onccN		Effects/modulation		warn
+disto_dry	SFZ v2	Effects		warn
+disto_dry_onccN		Effects/modulation		warn
+disto_stages	SFZ v2	Effects		warn
+disto_tone	SFZ v2	Effects		warn
+disto_tone_onccN		Effects/modulation		warn
+disto_wet	SFZ v2	Effects		warn
+disto_wet_onccN		Effects/modulation		warn
+dsp_order	SFZ v2	Effects		warn
+effect1	SFZ v1	Effects		warn
+effect2	SFZ v1	Effects		warn
+effect3	SFZ v2	Effects		warn
+effect4	SFZ v2	Effects		warn
+egN_ampeg	ARIA	Modulation/Envelope Generators		warn
+egN_amplitude	SFZ v2	Modulation/Envelope Generators		plays
+egN_amplitude_onccX		Modulation/Envelope Generators/modulation		warn
+egN_bitred	SFZ v2	Modulation/Envelope Generators		warn
+egN_bitred_onccX		Modulation/Envelope Generators/modulation		warn
+egN_curveX	SFZ v2	Modulation/Envelope Generators		warn
+egN_cutoff	SFZ v2	Modulation/Envelope Generators		plays
+egN_cutoff2	SFZ v2	Modulation/Envelope Generators		warn
+egN_cutoff2_onccX		Modulation/Envelope Generators/modulation		warn
+egN_cutoff_onccX		Modulation/Envelope Generators/modulation		warn
+egN_decim	SFZ v2	Modulation/Envelope Generators		warn
+egN_decim_onccX		Modulation/Envelope Generators/modulation		warn
+egN_depth_lfoX	SFZ v2	Modulation/Envelope Generators		warn
+egN_depthadd_lfoX	SFZ v2	Modulation/Envelope Generators		warn
+egN_driveshape	SFZ v2	Modulation/Envelope Generators		warn
+egN_driveshape_onccX		Modulation/Envelope Generators/modulation		warn
+egN_dynamic	ARIA	Modulation/Envelope Generators		warn
+egN_eqXbw	SFZ v2	Modulation/Envelope Generators		warn
+egN_eqXbw_onccY		Modulation/Envelope Generators/modulation		warn
+egN_eqXfreq	SFZ v2	Modulation/Envelope Generators		warn
+egN_eqXfreq_onccY		Modulation/Envelope Generators/modulation		warn
+egN_eqXgain	SFZ v2	Modulation/Envelope Generators		warn
+egN_eqXgain_onccY		Modulation/Envelope Generators/modulation		warn
+egN_freq_lfoX	SFZ v2	Modulation/Envelope Generators		warn
+egN_levelX	SFZ v2	Modulation/Envelope Generators		plays
+egN_levelX_onccY		Modulation/Envelope Generators/modulation		warn
+egN_loop	SFZ v2	Modulation/Envelope Generators		warn
+egN_loop_count	SFZ v2	Modulation/Envelope Generators		warn
+egN_noiselevel	SFZ v2	Modulation/Envelope Generators		warn
+egN_noiselevel_onccX		Modulation/Envelope Generators/modulation		warn
+egN_noisestep	SFZ v2	Modulation/Envelope Generators		warn
+egN_noisestep_onccX		Modulation/Envelope Generators/modulation		warn
+egN_noisetone	SFZ v2	Modulation/Envelope Generators		warn
+egN_noisetone_onccX		Modulation/Envelope Generators/modulation		warn
+egN_pan	SFZ v2	Modulation/Envelope Generators		plays
+egN_pan_curve	SFZ v2	Modulation/Envelope Generators		warn
+egN_pan_curveccX		Modulation/Envelope Generators/modulation		warn
+egN_pan_onccX		Modulation/Envelope Generators/modulation		warn
+egN_pitch	SFZ v2	Modulation/Envelope Generators		plays
+egN_pitch_onccX		Modulation/Envelope Generators/modulation		warn
+egN_points	SFZ v2	Modulation/Envelope Generators		warn
+egN_rectify	SFZ v2	Modulation/Envelope Generators		warn
+egN_rectify_onccX		Modulation/Envelope Generators/modulation		warn
+egN_resonance	SFZ v2	Modulation/Envelope Generators		warn
+egN_resonance2	SFZ v2	Modulation/Envelope Generators		warn
+egN_resonance2_onccX		Modulation/Envelope Generators/modulation		warn
+egN_resonance_onccX		Modulation/Envelope Generators/modulation		warn
+egN_ringmod	SFZ v2	Modulation/Envelope Generators		warn
+egN_ringmod_onccX		Modulation/Envelope Generators/modulation		warn
+egN_sample_dyn_paramX	ARIA	Modulation/Envelope Generators		warn
+egN_sample_dyn_paramX_onccY		Modulation/Envelope Generators/modulation		warn
+egN_shapeX	SFZ v2	Modulation/Envelope Generators		warn
+egN_sustain	SFZ v2	Modulation/Envelope Generators		plays
+egN_timeX	SFZ v2	Modulation/Envelope Generators		plays
+egN_timeX_onccY		Modulation/Envelope Generators/modulation		warn
+egN_volume	SFZ v2	Modulation/Envelope Generators		plays
+egN_volume_onccX		Modulation/Envelope Generators/modulation		warn
+egN_width	SFZ v2	Modulation/Envelope Generators		warn
+egN_width_onccX		Modulation/Envelope Generators/modulation		warn
+end	SFZ v1	Sound Source/Sample Playback		plays
+eqN_bw	SFZ v1	Performance Parameters/EQ		plays
+eqN_bwccX		Performance Parameters/EQ/modulation		warn
+eqN_dynamic	ARIA	Performance Parameters/EQ		warn
+eqN_freq	SFZ v1	Performance Parameters/EQ		plays
+eqN_freqccX		Performance Parameters/EQ/modulation		warn
+eqN_gain	SFZ v1	Performance Parameters/EQ		plays
+eqN_gainccX		Performance Parameters/EQ/modulation		warn
+eqN_mode	ARIA	Performance Parameters/EQ		warn
+eqN_type	SFZ v2	Performance Parameters/EQ		warn
+eqN_vel2freq		Performance Parameters/EQ/modulation		warn
+eqN_vel2gain		Performance Parameters/EQ/modulation		warn
+eq_bw	SFZ v2	Effects		warn
+eq_bw_onccN		Effects/modulation		warn
+eq_freq	SFZ v2	Effects		warn
+eq_freq_onccN		Effects/modulation		warn
+eq_gain	SFZ v2	Effects		warn
+eq_gain_onccN		Effects/modulation		warn
+eq_type	SFZ v2	Effects		warn
+fil2_gain	ARIA	Performance Parameters/Filter	fil_gain	plays
+fil2_keycenter	SFZ v2	Performance Parameters/Filter	fil_keycenter	plays
+fil2_keytrack	SFZ v2	Performance Parameters/Filter	fil_keytrack	plays
+fil2_mode	ARIA	Performance Parameters/Filter	fil_mode	warn
+fil2_type	SFZ v2	Performance Parameters/Filter	fil_type	plays
+fil2_veltrack	SFZ v2	Performance Parameters/Filter	fil_veltrack	plays
+fil_attack	SFZ v2	Modulation/Envelope Generators	fileg_attack	warn
+fil_decay	SFZ v2	Modulation/Envelope Generators	fileg_decay	warn
+fil_delay	SFZ v2	Modulation/Envelope Generators	fileg_delay	warn
+fil_depth	SFZ v2	Modulation/Envelope Generators	fileg_depth	warn
+fil_gain	ARIA	Performance Parameters/Filter		plays
+fil_gain_onccN		Performance Parameters/Filter/modulation		warn
+fil_hold	SFZ v2	Modulation/Envelope Generators	fileg_hold	warn
+fil_keycenter	SFZ v1	Performance Parameters/Filter		plays
+fil_keytrack	SFZ v1	Performance Parameters/Filter		plays
+fil_mode	ARIA	Performance Parameters/Filter		warn
+fil_random	SFZ v1	Performance Parameters/Filter		plays
+fil_release	SFZ v2	Modulation/Envelope Generators	fileg_release	warn
+fil_sustain	SFZ v2	Modulation/Envelope Generators	fileg_sustain	warn
+fil_type	SFZ v1	Performance Parameters/Filter		plays
+fil_veltrack	SFZ v1	Performance Parameters/Filter		plays
+fileg_attack	SFZ v1	Modulation/Envelope Generators		plays
+fileg_attack_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
+fileg_attack_onccN	ARIA	Modulation/Envelope Generators/modulation		warn
+fileg_attack_shape	ARIA	Modulation/Envelope Generators		warn
+fileg_decay	SFZ v1	Modulation/Envelope Generators		plays
+fileg_decay_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
+fileg_decay_onccN	ARIA	Modulation/Envelope Generators/modulation		warn
+fileg_decay_shape	ARIA	Modulation/Envelope Generators		warn
+fileg_decay_zero	ARIA	Modulation/Envelope Generators		warn
+fileg_delay	SFZ v1	Modulation/Envelope Generators		plays
+fileg_delay_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
+fileg_delay_onccN	ARIA	Modulation/Envelope Generators/modulation		warn
+fileg_depth	SFZ v1	Modulation/Envelope Generators		plays
+fileg_depth_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
+fileg_depth_onccN	ARIA	Modulation/Envelope Generators/modulation		warn
+fileg_dynamic	ARIA	Modulation/Envelope Generators		warn
+fileg_hold	SFZ v1	Modulation/Envelope Generators		plays
+fileg_hold_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
+fileg_hold_onccN	ARIA	Modulation/Envelope Generators/modulation		warn
+fileg_release	SFZ v1	Modulation/Envelope Generators		plays
+fileg_release_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
+fileg_release_onccN	ARIA	Modulation/Envelope Generators/modulation		warn
+fileg_release_shape	ARIA	Modulation/Envelope Generators		warn
+fileg_release_zero	ARIA	Modulation/Envelope Generators		warn
+fileg_start	SFZ v1	Modulation/Envelope Generators		plays
+fileg_start_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
+fileg_start_onccN	ARIA	Modulation/Envelope Generators/modulation		warn
+fileg_sustain	SFZ v1	Modulation/Envelope Generators		plays
+fileg_sustain_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
+fileg_sustain_onccN	ARIA	Modulation/Envelope Generators/modulation		warn
+fileg_vel2attack		Modulation/Envelope Generators/modulation		plays
+fileg_vel2decay		Modulation/Envelope Generators/modulation		plays
+fileg_vel2delay		Modulation/Envelope Generators/modulation		plays
+fileg_vel2depth		Modulation/Envelope Generators/modulation		warn
+fileg_vel2hold		Modulation/Envelope Generators/modulation		plays
+fileg_vel2release		Modulation/Envelope Generators/modulation		plays
+fileg_vel2sustain		Modulation/Envelope Generators/modulation		plays
+fillfo_delay	SFZ v1	Modulation/LFO		plays
+fillfo_depth	SFZ v1	Modulation/LFO		plays
+fillfo_depthccN		Modulation/LFO/modulation		warn
+fillfo_depthchanaft		Modulation/LFO/modulation		warn
+fillfo_depthpolyaft		Modulation/LFO/modulation		warn
+fillfo_fade	SFZ v1	Modulation/LFO		plays
+fillfo_freq	SFZ v1	Modulation/LFO		plays
+fillfo_freqccN		Modulation/LFO/modulation		warn
+fillfo_freqchanaft		Modulation/LFO/modulation		warn
+fillfo_freqpolyaft		Modulation/LFO/modulation		warn
+filter_cutoff	SFZ v2	Effects		warn
+filter_cutoff_onccN		Effects/modulation		warn
+filter_resonance	SFZ v2	Effects		warn
+filter_resonance_onccN		Effects/modulation		warn
+filter_type	SFZ v2	Effects		warn
+filtype	SFZ v1	Performance Parameters/Filter	fil_type	warn
+fxNtomain	SFZ v2	Effects		warn
+fxNtomix	SFZ v2	Effects		warn
+gain_ccN		Performance Parameters/Amplifier/modulation		warn
+gain_random	SFZ v2	Performance Parameters/Amplifier	amp_random	warn
+gate_attack	SFZ v2	Effects		warn
+gate_onccN	SFZ v2	Effects		warn
+gate_release	SFZ v2	Effects		warn
+gate_stlink	SFZ v2	Effects		warn
+gate_threshold	SFZ v2	Effects		warn
+global_amplitude	ARIA	Performance Parameters/Amplifier		plays
+global_label	ARIA	Instrument Settings		info
+global_tune	ARIA	Performance Parameters/Pitch		warn
+global_volume	ARIA	Performance Parameters/Amplifier		plays
+group	SFZ v1	Instrument Settings/Voice Lifecycle		plays
+group_amplitude	ARIA	Performance Parameters/Amplifier		plays
+group_label	ARIA	Instrument Settings		info
+group_tune	ARIA	Performance Parameters/Pitch		warn
+group_volume	ARIA	Performance Parameters/Amplifier		plays
+hibend	SFZ v1	Region Logic/MIDI Conditions		warn
+hibpm	SFZ v1	Region Logic/Internal Conditions		warn
+hiccN	SFZ v1	Region Logic/MIDI Conditions		compile
+hichan	SFZ v1	Region Logic/MIDI Conditions		warn
+hichanaft	SFZ v1	Region Logic/Internal Conditions		warn
+hihdccN	ARIA	Region Logic/MIDI Conditions		warn
+hikey	SFZ v1	Region Logic/Key Mapping		plays
+hint_*	ARIA	Instrument Settings		warn
+hipolyaft	SFZ v1	Region Logic/Internal Conditions		warn
+hiprog	SFZ v2	Region Logic/MIDI Conditions		compile
+hirand	SFZ v1	Region Logic/Internal Conditions		plays
+hitimer	SFZ v2	Region Logic/Internal Conditions		warn
+hivel	SFZ v1	Region Logic/Key Mapping		plays
+image	SFZ v2	Loading		info
+internal	SFZ v2	Effects		warn
+key	SFZ v1	Region Logic/Key Mapping		plays
+label_ccN	ARIA	Instrument Settings		info
+label_keyN	sfizz	Instrument Settings		info
+label_outputN	Calfbox	Instrument Settings		info
+lfoN_amplitude	SFZ v2	Modulation/LFO		plays
+lfoN_amplitude_onccX		Modulation/LFO/modulation		warn
+lfoN_amplitude_smoothccX		Modulation/LFO/modulation		warn
+lfoN_amplitude_stepccX		Modulation/LFO/modulation		warn
+lfoN_bitred	SFZ v2	Modulation/LFO		warn
+lfoN_bitred_onccX		Modulation/LFO/modulation		warn
+lfoN_bitred_smoothccX		Modulation/LFO/modulation		warn
+lfoN_bitred_stepccX		Modulation/LFO/modulation		warn
+lfoN_count	SFZ v2	Modulation/LFO		warn
+lfoN_cutoff	SFZ v2	Modulation/LFO		plays
+lfoN_cutoff2	SFZ v2	Modulation/LFO	lfoN_cutoff	warn
+lfoN_cutoff_onccX		Modulation/LFO/modulation		warn
+lfoN_cutoff_smoothccX		Modulation/LFO/modulation		warn
+lfoN_cutoff_stepccX		Modulation/LFO/modulation		warn
+lfoN_decim	SFZ v2	Modulation/LFO		warn
+lfoN_decim_onccX		Modulation/LFO/modulation		warn
+lfoN_decim_smoothccX		Modulation/LFO/modulation		warn
+lfoN_decim_stepccX		Modulation/LFO/modulation		warn
+lfoN_delay	SFZ v2	Modulation/LFO		plays
+lfoN_delay_onccX		Modulation/LFO/modulation		warn
+lfoN_depth_lfoX	SFZ v2	Modulation/LFO		warn
+lfoN_depthadd_lfoX	SFZ v2	Modulation/LFO		warn
+lfoN_drive	SFZ v2	Modulation/LFO		warn
+lfoN_drive_onccX		Modulation/LFO/modulation		warn
+lfoN_drive_smoothccX		Modulation/LFO/modulation		warn
+lfoN_drive_stepccX		Modulation/LFO/modulation		warn
+lfoN_eqXbw	SFZ v2	Modulation/LFO		warn
+lfoN_eqXbw_onccY		Modulation/LFO/modulation		warn
+lfoN_eqXbw_smoothccY		Modulation/LFO/modulation		warn
+lfoN_eqXbw_stepccY		Modulation/LFO/modulation		warn
+lfoN_eqXfreq	SFZ v2	Modulation/LFO		warn
+lfoN_eqXfreq_onccY		Modulation/LFO/modulation		warn
+lfoN_eqXfreq_smoothccY		Modulation/LFO/modulation		warn
+lfoN_eqXfreq_stepccY		Modulation/LFO/modulation		warn
+lfoN_eqXgain	SFZ v2	Modulation/LFO		warn
+lfoN_eqXgain_onccY		Modulation/LFO/modulation		warn
+lfoN_eqXgain_smoothccY		Modulation/LFO/modulation		warn
+lfoN_eqXgain_stepccY		Modulation/LFO/modulation		warn
+lfoN_fade	SFZ v2	Modulation/LFO		plays
+lfoN_fade_onccX		Modulation/LFO/modulation		warn
+lfoN_freq	SFZ v2	Modulation/LFO		plays
+lfoN_freq_lfoX	SFZ v2	Modulation/LFO		warn
+lfoN_freq_lfoX_onccY	ARIA	Modulation/LFO/modulation		warn
+lfoN_freq_onccX		Modulation/LFO/modulation		warn
+lfoN_freq_smoothccX		Modulation/LFO/modulation		warn
+lfoN_freq_stepccX		Modulation/LFO/modulation		warn
+lfoN_noiselevel	SFZ v2	Modulation/LFO		warn
+lfoN_noiselevel_onccX		Modulation/LFO/modulation		warn
+lfoN_noiselevel_smoothccX		Modulation/LFO/modulation		warn
+lfoN_noiselevel_stepccX		Modulation/LFO/modulation		warn
+lfoN_noisestep	SFZ v2	Modulation/LFO		warn
+lfoN_noisestep_onccX		Modulation/LFO/modulation		warn
+lfoN_noisestep_smoothccX		Modulation/LFO/modulation		warn
+lfoN_noisestep_stepccX		Modulation/LFO/modulation		warn
+lfoN_noisetone	SFZ v2	Modulation/LFO		warn
+lfoN_noisetone_onccX		Modulation/LFO/modulation		warn
+lfoN_noisetone_smoothccX		Modulation/LFO/modulation		warn
+lfoN_noisetone_stepccX		Modulation/LFO/modulation		warn
+lfoN_offset	ARIA	Modulation/LFO		warn
+lfoN_offsetX	ARIA	Modulation/LFO	lfoN_offset	warn
+lfoN_pan	SFZ v2	Modulation/LFO		plays
+lfoN_pan_onccX		Modulation/LFO/modulation		warn
+lfoN_pan_smoothccX		Modulation/LFO/modulation		warn
+lfoN_pan_stepccX		Modulation/LFO/modulation		warn
+lfoN_phase	SFZ v2	Modulation/LFO		plays
+lfoN_phase_onccX		Modulation/LFO/modulation		warn
+lfoN_pitch	SFZ v2	Modulation/LFO		plays
+lfoN_pitch_curveccX		Modulation/LFO/modulation		warn
+lfoN_pitch_onccX		Modulation/LFO/modulation		warn
+lfoN_pitch_smoothccX		Modulation/LFO/modulation		warn
+lfoN_pitch_stepccX		Modulation/LFO/modulation		warn
+lfoN_ratio	ARIA	Modulation/LFO		warn
+lfoN_ratioX	ARIA	Modulation/LFO	lfoN_ratio	warn
+lfoN_resonance	SFZ v2	Modulation/LFO		warn
+lfoN_resonance2	SFZ v2	Modulation/LFO	lfoN_resonance	warn
+lfoN_resonance_onccX		Modulation/LFO/modulation		warn
+lfoN_resonance_smoothccX		Modulation/LFO/modulation		warn
+lfoN_resonance_stepccX		Modulation/LFO/modulation		warn
+lfoN_sample_dyn_paramX	ARIA	Modulation/LFO		warn
+lfoN_sample_dyn_paramX_onccY		Modulation/LFO/modulation		warn
+lfoN_scale	ARIA	Modulation/LFO		warn
+lfoN_scaleX	ARIA	Modulation/LFO	lfoN_scale	warn
+lfoN_smooth	SFZ v2	Modulation/LFO		warn
+lfoN_smooth_onccX		Modulation/LFO/modulation		warn
+lfoN_stepX	SFZ v2	Modulation/LFO		warn
+lfoN_stepX_onccY		Modulation/LFO/modulation		warn
+lfoN_steps	SFZ v2	Modulation/LFO		warn
+lfoN_volume	SFZ v2	Modulation/LFO		plays
+lfoN_volume_onccX		Modulation/LFO/modulation		warn
+lfoN_volume_smoothccX		Modulation/LFO/modulation		warn
+lfoN_volume_stepccX		Modulation/LFO/modulation		warn
+lfoN_wave	SFZ v2	Modulation/LFO		plays
+lfoN_waveX	ARIA	Modulation/LFO	lfoN_wave	warn
+lfoN_wave_onccX	ARIA	Modulation/LFO/modulation		warn
+lfoN_width	SFZ v2	Modulation/LFO		warn
+lfoN_width_onccX		Modulation/LFO/modulation		warn
+lfoN_width_smoothccX		Modulation/LFO/modulation		warn
+lfoN_width_stepccX		Modulation/LFO/modulation		warn
+load_end	SFZ v2	Loading		warn
+load_mode	SFZ v2	Loading		warn
+load_start	SFZ v2	Loading		warn
+lobend	SFZ v1	Region Logic/MIDI Conditions		warn
+lobpm	SFZ v1	Region Logic/Internal Conditions		warn
+loccN	SFZ v1	Region Logic/MIDI Conditions		compile
+lochan	SFZ v1	Region Logic/MIDI Conditions		warn
+lochanaft	SFZ v1	Region Logic/Internal Conditions		warn
+lohdccN	ARIA	Region Logic/MIDI Conditions		warn
+lokey	SFZ v1	Region Logic/Key Mapping		plays
+loop_count	SFZ v2	Sound Source/Sample Playback		warn
+loop_crossfade	SFZ v2	Sound Source/Sample Playback		warn
+loop_end	SFZ v1	Sound Source/Sample Playback		plays
+loop_end_offset	ARIA	Instrument Settings		warn
+loop_lengthccN	SFZ v2	Sound Source/Sample Playback/modulation		warn
+loop_mode	SFZ v1	Sound Source/Sample Playback		plays
+loop_start	SFZ v1	Sound Source/Sample Playback		plays
+loop_startccN	SFZ v2	Sound Source/Sample Playback/modulation		warn
+loop_tune	SFZ v2	Sound Source/Sample Playback		warn
+loop_type	SFZ v2	Sound Source/Sample Playback		warn
+loopcount	ARIA	Sound Source/Sample Playback	loop_count	warn
+loopend	SFZ v1	Sound Source/Sample Playback	loop_end	warn
+loopmode	SFZ v1	Sound Source/Sample Playback	loop_mode	warn
+loopstart	SFZ v1	Sound Source/Sample Playback	loop_start	warn
+looptune	ARIA	Sound Source/Sample Playback	loop_tune	warn
+looptype	ARIA	Sound Source/Sample Playback	loop_type	warn
+lopolyaft	SFZ v1	Region Logic/Internal Conditions		warn
+loprog	SFZ v2	Region Logic/MIDI Conditions		compile
+lorand	SFZ v1	Region Logic/Internal Conditions		plays
+lotimer	SFZ v2	Region Logic/Internal Conditions		warn
+lovel	SFZ v1	Region Logic/Key Mapping		plays
+master_amplitude	ARIA	Performance Parameters/Amplifier		plays
+master_label	ARIA	Instrument Settings		info
+master_tune	ARIA	Performance Parameters/Pitch		warn
+master_volume	ARIA	Performance Parameters/Amplifier		plays
+md5	SFZ v2	Sound Source/Sample Playback		warn
+noise_filter	SFZ v2	Performance Parameters/Filter		warn
+noise_level	SFZ v2	Performance Parameters/Filter		warn
+noise_level_onccN		Performance Parameters/Filter/modulation		warn
+noise_level_smoothccN		Performance Parameters/Filter/modulation		warn
+noise_step	SFZ v2	Performance Parameters/Filter		warn
+noise_step_onccN		Performance Parameters/Filter/modulation		warn
+noise_stereo	SFZ v2	Performance Parameters/Filter		warn
+noise_tone	SFZ v2	Performance Parameters/Filter		warn
+noise_tone_onccN		Performance Parameters/Filter/modulation		warn
+note_offset	SFZ v2	Instrument Settings		info
+note_polyphony	SFZ v2	Instrument Settings/Voice Lifecycle		plays
+note_selfmask	SFZ v2	Instrument Settings/Voice Lifecycle		warn
+octave_offset	SFZ v2	Instrument Settings		info
+off_by	SFZ v1	Instrument Settings/Voice Lifecycle		plays
+off_curve	ARIA	Instrument Settings/Voice Lifecycle		warn
+off_mode	SFZ v1	Instrument Settings/Voice Lifecycle		plays
+off_shape	ARIA	Instrument Settings/Voice Lifecycle		warn
+off_time	ARIA	Instrument Settings/Voice Lifecycle		plays
+offby	SFZ v1	Instrument Settings/Voice Lifecycle	off_by	warn
+offset	SFZ v1	Sound Source/Sample Playback		plays
+offset_ccN		Sound Source/Sample Playback/modulation		warn
+offset_mode	ARIA	Sound Source/Sample Playback		warn
+offset_random	SFZ v1	Sound Source/Sample Playback		plays
+on_hiccN	SFZ v1	Region Logic/Triggers		warn
+on_hihdccN	ARIA	Region Logic/Triggers		warn
+on_loccN	SFZ v1	Region Logic/Triggers		warn
+on_lohdccN	ARIA	Region Logic/Triggers		warn
+oscillator	SFZ v2	Wavetable Oscillator		warn
+oscillator_detune	SFZ v2	Wavetable Oscillator		warn
+oscillator_detune_onccN		Wavetable Oscillator/modulation		warn
+oscillator_mod_depth	SFZ v2	Wavetable Oscillator		warn
+oscillator_mod_depth_onccN		Wavetable Oscillator/modulation		warn
+oscillator_mod_smoothccN		Wavetable Oscillator/modulation		warn
+oscillator_mode	SFZ v2	Wavetable Oscillator		warn
+oscillator_multi	SFZ v2	Wavetable Oscillator		warn
+oscillator_phase	SFZ v2	Wavetable Oscillator		warn
+oscillator_quality	SFZ v2	Wavetable Oscillator		warn
+oscillator_table_size	SFZ v2	Wavetable Oscillator		warn
+output	SFZ v1	Instrument Settings/Voice Lifecycle		warn
+pan	SFZ v1	Performance Parameters/Amplifier		plays
+pan_curveccN	SFZ v2	Performance Parameters/Amplifier/modulation		warn
+pan_keycenter	SFZ v2	Performance Parameters/Amplifier		warn
+pan_keytrack	SFZ v2	Performance Parameters/Amplifier		warn
+pan_law	ARIA	Performance Parameters/Amplifier		warn
+pan_onccN	SFZ v2	Performance Parameters/Amplifier/modulation		warn
+pan_random	ARIA	Performance Parameters/Amplifier		warn
+pan_smoothccN	SFZ v2	Performance Parameters/Amplifier/modulation		warn
+pan_stepccN	SFZ v2	Performance Parameters/Amplifier/modulation		warn
+pan_veltrack	SFZ v2	Performance Parameters/Amplifier		warn
+param_offset	ARIA	Effects		warn
+phase	SFZ v2	Performance Parameters/Amplifier		warn
+phaser_depth	SFZ v2	Effects		warn
+phaser_depth_onccN		Effects/modulation		warn
+phaser_feedback	SFZ v2	Effects		warn
+phaser_feedback_onccN		Effects/modulation		warn
+phaser_freq	SFZ v2	Effects		warn
+phaser_freq_onccN		Effects/modulation		warn
+phaser_phase_onccN	SFZ v2	Effects		warn
+phaser_stages	SFZ v2	Effects		warn
+phaser_waveform	SFZ v2	Effects		warn
+phaser_wet	SFZ v2	Effects		warn
+phaser_wet_onccN		Effects/modulation		warn
+pitch	ARIA	Performance Parameters/Pitch	tune	warn
+pitch_attack	SFZ v2	Modulation/Envelope Generators	pitcheg_attack	warn
+pitch_curveccN	SFZ v2	Performance Parameters/Pitch/modulation		warn
+pitch_decay	SFZ v2	Modulation/Envelope Generators	pitcheg_decay	warn
+pitch_delay	SFZ v2	Modulation/Envelope Generators	pitcheg_delay	warn
+pitch_depth	SFZ v2	Modulation/Envelope Generators	pitcheg_depth	warn
+pitch_hold	SFZ v2	Modulation/Envelope Generators	pitcheg_hold	warn
+pitch_keycenter	SFZ v1	Performance Parameters/Pitch		plays
+pitch_keytrack	SFZ v1	Performance Parameters/Pitch		plays
+pitch_onccN	SFZ v2	Performance Parameters/Pitch/modulation		warn
+pitch_random	SFZ v1	Performance Parameters/Pitch		plays
+pitch_release	SFZ v2	Modulation/Envelope Generators	pitcheg_release	warn
+pitch_smoothccN	SFZ v2	Performance Parameters/Pitch/modulation		warn
+pitch_stepccN	SFZ v2	Performance Parameters/Pitch/modulation		warn
+pitch_sustain	SFZ v2	Modulation/Envelope Generators	pitcheg_sustain	warn
+pitch_veltrack	SFZ v1	Performance Parameters/Pitch		plays
+pitcheg_attack	SFZ v1	Modulation/Envelope Generators		plays
+pitcheg_attack_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
+pitcheg_attack_onccN	ARIA	Modulation/Envelope Generators/modulation		warn
+pitcheg_attack_shape	ARIA	Modulation/Envelope Generators		warn
+pitcheg_decay	SFZ v1	Modulation/Envelope Generators		plays
+pitcheg_decay_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
+pitcheg_decay_onccN	ARIA	Modulation/Envelope Generators/modulation		warn
+pitcheg_decay_shape	ARIA	Modulation/Envelope Generators		warn
+pitcheg_decay_zero	ARIA	Modulation/Envelope Generators		warn
+pitcheg_delay	SFZ v1	Modulation/Envelope Generators		plays
+pitcheg_delay_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
+pitcheg_delay_onccN	ARIA	Modulation/Envelope Generators/modulation		warn
+pitcheg_depth	SFZ v1	Modulation/Envelope Generators		plays
+pitcheg_depth_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
+pitcheg_depth_onccN	ARIA	Modulation/Envelope Generators/modulation		warn
+pitcheg_dynamic	ARIA	Modulation/Envelope Generators		warn
+pitcheg_hold	SFZ v1	Modulation/Envelope Generators		plays
+pitcheg_hold_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
+pitcheg_hold_onccN	ARIA	Modulation/Envelope Generators/modulation		warn
+pitcheg_release	SFZ v1	Modulation/Envelope Generators		plays
+pitcheg_release_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
+pitcheg_release_onccN	ARIA	Modulation/Envelope Generators/modulation		warn
+pitcheg_release_shape	ARIA	Modulation/Envelope Generators		warn
+pitcheg_release_zero	ARIA	Modulation/Envelope Generators		warn
+pitcheg_start	SFZ v1	Modulation/Envelope Generators		plays
+pitcheg_start_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
+pitcheg_start_onccN	ARIA	Modulation/Envelope Generators/modulation		warn
+pitcheg_sustain	SFZ v1	Modulation/Envelope Generators		plays
+pitcheg_sustain_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
+pitcheg_sustain_onccN	ARIA	Modulation/Envelope Generators/modulation		warn
+pitcheg_vel2attack		Modulation/Envelope Generators/modulation		plays
+pitcheg_vel2decay		Modulation/Envelope Generators/modulation		plays
+pitcheg_vel2delay		Modulation/Envelope Generators/modulation		plays
+pitcheg_vel2depth		Modulation/Envelope Generators/modulation		warn
+pitcheg_vel2hold		Modulation/Envelope Generators/modulation		plays
+pitcheg_vel2release		Modulation/Envelope Generators/modulation		plays
+pitcheg_vel2sustain		Modulation/Envelope Generators/modulation		plays
+pitchlfo_delay	SFZ v1	Modulation/LFO		plays
+pitchlfo_depth	SFZ v1	Modulation/LFO		plays
+pitchlfo_depthccN		Modulation/LFO/modulation		warn
+pitchlfo_depthchanaft		Modulation/LFO/modulation		warn
+pitchlfo_depthpolyaft		Modulation/LFO/modulation		warn
+pitchlfo_fade	SFZ v1	Modulation/LFO		plays
+pitchlfo_freq	SFZ v1	Modulation/LFO		plays
+pitchlfo_freqccN		Modulation/LFO/modulation		warn
+pitchlfo_freqchanaft		Modulation/LFO/modulation		warn
+pitchlfo_freqpolyaft		Modulation/LFO/modulation		warn
+polyphony	SFZ v2	Instrument Settings/Voice Lifecycle		plays
+polyphony_group	ARIA	Instrument Settings/Voice Lifecycle	group	warn
+polyphony_stealing	ARIA	Instrument Settings/Voice Lifecycle		warn
+position	SFZ v1	Performance Parameters/Amplifier		warn
+position_curveccN	ARIA	Performance Parameters/Amplifier/modulation		warn
+position_keycenter	ARIA	Performance Parameters/Amplifier		warn
+position_keytrack	ARIA	Performance Parameters/Amplifier		warn
+position_onccN	ARIA	Performance Parameters/Amplifier/modulation		warn
+position_random	ARIA	Performance Parameters/Amplifier		warn
+position_smoothccN	ARIA	Performance Parameters/Amplifier/modulation		warn
+position_stepccN	ARIA	Performance Parameters/Amplifier/modulation		warn
+position_veltrack	ARIA	Performance Parameters/Amplifier		warn
+region_label	ARIA	Instrument Settings		info
+resonance	SFZ v1	Performance Parameters/Filter		plays
+resonance2	SFZ v2	Performance Parameters/Filter	resonance	plays
+resonance2_random	ARIA	Performance Parameters/Filter		warn
+resonance_curveccN	SFZ v2	Performance Parameters/Filter/modulation		warn
+resonance_onccN	SFZ v2	Performance Parameters/Filter/modulation		warn
+resonance_random	ARIA	Performance Parameters/Filter		warn
+resonance_smoothccN	SFZ v2	Performance Parameters/Filter/modulation		warn
+resonance_stepccN	SFZ v2	Performance Parameters/Filter/modulation		warn
+reverb_damp	SFZ v2	Effects		warn
+reverb_damp_onccN		Effects/modulation		warn
+reverb_dry	SFZ v2	Effects		warn
+reverb_dry_onccN		Effects/modulation		warn
+reverb_input	SFZ v2	Effects		warn
+reverb_input_onccN		Effects/modulation		warn
+reverb_predelay	SFZ v2	Effects		warn
+reverb_predelay_onccN		Effects/modulation		warn
+reverb_size	SFZ v2	Effects		warn
+reverb_size_onccN		Effects/modulation		warn
+reverb_tone	SFZ v2	Effects		warn
+reverb_tone_onccN		Effects/modulation		warn
+reverb_type	SFZ v2	Effects		warn
+reverb_wet	SFZ v2	Effects		warn
+reverb_wet_onccN		Effects/modulation		warn
+reverse_hiccN	SFZ v2	Sound Source/Sample Playback		warn
+reverse_loccN	SFZ v2	Sound Source/Sample Playback		warn
+rt_dead	SFZ v2	Instrument Settings/Voice Lifecycle		warn
+rt_decay	SFZ v1	Performance Parameters/Amplifier		plays
+rt_decayN	ARIA	Performance Parameters/Amplifier		warn
+rt_decayN_time	ARIA	Performance Parameters/Amplifier		warn
+sample	SFZ v1	Sound Source/Sample Playback		plays
+sample_dyn_paramN	ARIA	Sound Source/Sample Playback		warn
+sample_dyn_paramN_onccX		Sound Source/Sample Playback/modulation		warn
+sample_fadeout	SFZ v2	Sound Source/Sample Playback		warn
+sample_quality	SFZ v2	Loading		warn
+script	LinuxSampler	Real-Time Instrument Script		warn
+seq_length	SFZ v1	Region Logic/Internal Conditions		plays
+seq_position	SFZ v1	Region Logic/Internal Conditions		plays
+set_ccN	SFZ v2	Instrument Settings		compile
+set_hdccN	ARIA	Instrument Settings		compile
+set_realccN	ARIA	Instrument Settings	set_hdccN	compile
+sostenuto_cc	ARIA	Region Logic/MIDI Conditions		warn
+sostenuto_lo	ARIA	Region Logic/MIDI Conditions		warn
+sostenuto_sw	SFZ v2	Region Logic/MIDI Conditions		warn
+start_hiccN	SFZ v2	Region Logic/Triggers	on_hiccN	warn
+start_hihdccN	ARIA	Region Logic/Triggers	on_hihdccN	warn
+start_loccN	SFZ v2	Region Logic/Triggers	on_loccN	warn
+start_lohdccN	ARIA	Region Logic/Triggers	on_lohdccN	warn
+static_cyclic_level	SFZ v2	Effects		warn
+static_cyclic_time	SFZ v2	Effects		warn
+static_filter	SFZ v2	Effects		warn
+static_level	SFZ v2	Effects		warn
+static_level_onccN		Effects/modulation		warn
+static_random_level	SFZ v2	Effects		warn
+static_random_maxtime	SFZ v2	Effects		warn
+static_random_mintime	SFZ v2	Effects		warn
+static_stereo	SFZ v2	Effects		warn
+static_tone	SFZ v2	Effects		warn
+stop_beats	SFZ v2	Sound Source/Sample Playback		warn
+stop_hiccN	SFZ v2	Region Logic/Triggers		warn
+stop_hihdccN	ARIA	Region Logic/Triggers		warn
+stop_loccN	SFZ v2	Region Logic/Triggers		warn
+stop_lohdccN	ARIA	Region Logic/Triggers		warn
+strings_number	SFZ v2	Effects		warn
+strings_wet_onccN	SFZ v2	Effects		warn
+sustain_cc	ARIA	Region Logic/MIDI Conditions		warn
+sustain_lo	ARIA	Region Logic/MIDI Conditions		warn
+sustain_sw	SFZ v2	Region Logic/MIDI Conditions		warn
+sw_default	SFZ v2	Region Logic/MIDI Conditions		plays
+sw_down	SFZ v1	Region Logic/MIDI Conditions		warn
+sw_hikey	SFZ v1	Region Logic/MIDI Conditions		plays
+sw_hilast	ARIA	Region Logic/MIDI Conditions		plays
+sw_label	ARIA	Region Logic/MIDI Conditions		info
+sw_last	SFZ v1	Region Logic/MIDI Conditions		plays
+sw_lokey	SFZ v1	Region Logic/MIDI Conditions		plays
+sw_lolast	ARIA	Region Logic/MIDI Conditions		plays
+sw_note_offset	ARIA	Instrument Settings		warn
+sw_octave_offset	ARIA	Instrument Settings		warn
+sw_previous	SFZ v1	Region Logic/MIDI Conditions		warn
+sw_up	SFZ v1	Region Logic/MIDI Conditions		warn
+sw_vel	SFZ v1	Region Logic/MIDI Conditions		warn
+sync_beats	SFZ v1	Sound Source/Sample Playback		warn
+sync_offset	SFZ v1	Sound Source/Sample Playback		warn
+tdfir_dry	SFZ v2	Effects		warn
+tdfir_dry_onccN		Effects/modulation		warn
+tdfir_gain	SFZ v2	Effects		warn
+tdfir_impulse	SFZ v2	Effects		warn
+tdfir_wet	SFZ v2	Effects		warn
+tdfir_wet_onccN		Effects/modulation		warn
+transpose	SFZ v1	Performance Parameters/Pitch		plays
+trigger	SFZ v1	Region Logic/Triggers		plays
+tune	SFZ v1	Performance Parameters/Pitch		plays
+tune_keytrack	ARIA	Performance Parameters/Pitch	pitch_keytrack	warn
+tune_random	ARIA	Performance Parameters/Pitch	pitch_random	warn
+tune_veltrack	ARIA	Performance Parameters/Pitch	pitch_veltrack	warn
+type	SFZ v2	Effects		warn
+vNNN	SFZ v2	Curves		compile
+varNN_*	ARIA	Region Logic/MIDI Conditions		warn
+varNN_curveccX		Region Logic/MIDI Conditions/modulation		warn
+varNN_mod	ARIA	Region Logic/MIDI Conditions		warn
+varNN_onccX		Region Logic/MIDI Conditions/modulation		warn
+vendor_specific	ARIA	Effects		warn
+volume	SFZ v1	Performance Parameters/Amplifier		plays
+volume_curveccN	SFZ v2	Performance Parameters/Amplifier/modulation		warn
+volume_smoothccN	SFZ v2	Performance Parameters/Amplifier/modulation		warn
+volume_stepccN	SFZ v2	Performance Parameters/Amplifier/modulation		warn
+waveguide	SFZ v2	Sound Source/Sample Playback		warn
+width	SFZ v1	Performance Parameters/Amplifier		plays
+width_curveccN	SFZ v2	Performance Parameters/Amplifier/modulation		warn
+width_onccN	SFZ v2	Performance Parameters/Amplifier/modulation		warn
+width_smoothccN	SFZ v2	Performance Parameters/Amplifier/modulation		warn
+width_stepccN	SFZ v2	Performance Parameters/Amplifier/modulation		warn
+xf_cccurve	SFZ v1	Performance Parameters/Amplifier		plays
+xf_keycurve	SFZ v1	Performance Parameters/Amplifier		plays
+xf_velcurve	SFZ v1	Performance Parameters/Amplifier		plays
+xfin_hiccN	SFZ v1	Performance Parameters/Amplifier		plays
+xfin_hikey	SFZ v1	Performance Parameters/Amplifier		plays
+xfin_hivel	SFZ v1	Performance Parameters/Amplifier		plays
+xfin_loccN	SFZ v1	Performance Parameters/Amplifier		plays
+xfin_lokey	SFZ v1	Performance Parameters/Amplifier		plays
+xfin_lovel	SFZ v1	Performance Parameters/Amplifier		plays
+xfout_hiccN	SFZ v1	Performance Parameters/Amplifier		plays
+xfout_hikey	SFZ v1	Performance Parameters/Amplifier		plays
+xfout_hivel	SFZ v1	Performance Parameters/Amplifier		plays
+xfout_loccN	SFZ v1	Performance Parameters/Amplifier		plays
+xfout_lokey	SFZ v1	Performance Parameters/Amplifier		plays
+xfout_lovel	SFZ v1	Performance Parameters/Amplifier		plays
