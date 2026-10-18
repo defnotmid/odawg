@@ -56,9 +56,7 @@ wav_write :: proc(spec: Wav_Spec, frames: int, hz: f64, amplitude := 0.5) -> []u
 		put16(&b, u16(spec.bits))
 		put32(&b, 0)
 		put16(&b, u16(spec.format))
-		for _ in 0 ..< 14 {
-			append(&b, 0)
-		}
+		append(&b, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71) // the KSDATAFORMAT GUID's rest
 	}
 	put4(&b, "LIST") // an unknown chunk of odd size, padded
 	put32(&b, 3)
@@ -378,4 +376,39 @@ test_bank_offline :: proc(t: ^testing.T) {
 	credits := credits_from_names({"vcsl/upright_piano", "virtuosity/drums"}, context.temp_allocator)
 	testing.expect_value(t, len(credits), 2)
 	testing.expect(t, strings.contains(credits[0], "CC0-1.0"))
+}
+
+// A WAV straight to 16 bits is, value for value, the 16-bit value nearest
+// its float: every format, two channels of three kept.
+@(test)
+test_wav_decode_i16 :: proc(t: ^testing.T) {
+	specs := []Wav_Spec {
+		{format = 1, bits = 16, channels = 1, rate = 44100},
+		{format = 1, bits = 24, channels = 2, rate = 48000, loop = {100, 899}},
+		{format = 1, bits = 32, channels = 2, rate = 96000},
+		{format = 3, bits = 32, channels = 2, rate = 44100, extensible = true},
+		{format = 3, bits = 64, channels = 1, rate = 44100},
+		{format = 1, bits = 24, channels = 3, rate = 44100, extensible = true},
+		{format = 1, bits = 8, channels = 1, rate = 22050},
+	}
+	for spec in specs {
+		frames := 1000
+		data := wav_write(spec, frames, 441)
+		d, err := decode("x.wav", data, context.temp_allocator)
+		testing.expectf(t, err == nil, "%v: %v", spec, err)
+		pcm, d16, err16 := wav_decode_i16(data, 2, context.temp_allocator)
+		testing.expectf(t, err16 == nil, "%v: %v", spec, err16)
+		ch := min(spec.channels, 2)
+		testing.expect_value(t, len(pcm), frames * ch)
+		testing.expect(t, d16.loop_from == d.loop_from && d16.loop_to == d.loop_to && d16.rate == d.rate)
+		differ := 0
+		for f in 0 ..< frames {
+			for c in 0 ..< ch {
+				// half a step, and f32's own rounding of 32-bit integers
+				x := f64(d.samples[f * spec.channels + c]) * 32768
+				differ += abs(f64(pcm[f * ch + c]) - clamp(x, -32768, 32767)) > 0.5 + 1e-3 ? 1 : 0
+			}
+		}
+		testing.expectf(t, differ == 0, "%v: %d values aren't the nearest 16-bit value", spec, differ)
+	}
 }

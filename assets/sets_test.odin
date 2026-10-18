@@ -540,3 +540,46 @@ test_spec_files_end :: proc(t: ^testing.T) {
 	}
 	testing.expect_value(t, missing, 1)
 }
+
+// A song's own part plays an SFZ from a source its style brings: the path's
+// source is found in the song's styles too, as the style's own parts find it.
+@(test)
+test_style_source_for_song_part :: proc(t: ^testing.T) {
+	root := scratch_root("style_source")
+	defer os.remove_all(root)
+	data, _ := filepath.join({root, "data"}, context.temp_allocator)
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	_ = virtual.arena_init_growing(&arena)
+	context.allocator = virtual.arena_allocator(&arena)
+	src := spec.Source_Spec{name = "lib", url = "https://example.invalid/lib/"}
+	dir := source_dir(data, &src)
+	sfz := "<region> sample=a3.wav pitch_keycenter=57\n"
+	pins := make([dynamic]string)
+	for f in ([?]struct {
+			name: string,
+			data: []u8,
+		}{{"lib.sfz", transmute([]u8)sfz}, {"a3.wav", sine_wav(44100, 4410, 220)}}) {
+		write(t, dir, f.name, f.data)
+		path, _ := filepath.join({dir, f.name}, context.temp_allocator)
+		sha, _ := hash_file(path)
+		_ = os.write_entire_file(stamp_path(path), sha)
+		append(&pins, fmt.tprintf("%s %d %s", sha, len(f.data), f.name))
+	}
+	write(t, root, "styles/lib.pins", transmute([]u8)strings.join(pins[:], "\n"))
+	findings := make(base.Findings)
+	sp := new(spec.Spec)
+	testing.expect(t, spec.spec_from_json(`{ sections: [ { name: "a", duration: "1m", style: "styles/band.json" } ],
+		parts: { own: { instrument: { name: "lib/lib.sfz", ampeg_release: 0.05 }, play: [ { name: "a", notes: "A3" } ] } } }`, sp, &findings))
+	testing.expect(t, spec.spec_add_style_text(sp, "styles/band.json", `{ sources: { lib: { url: "https://example.invalid/lib/", licence: "CC0-1.0", pins: "lib.pins" } } }`, &findings))
+	bank: device.Bank
+	defer device.bank_destroy(&bank)
+	host := Bank_Host{root = root, fetched = data}
+	testing.expectf(t, bank_declare_spec(&bank, sp, &findings, &host), "%v", findings[:])
+	testing.expect(t, !has_code(findings, "missing_file"))
+	_, found := device.bank_set_from_name(&bank, "lib/lib.sfz")
+	testing.expect(t, found)
+	s := new(song.Song)
+	testing.expect(t, song.song_from_spec(sp, s, &bank))
+	testing.expectf(t, song.part_index(s, "own") >= 0 && s.tracks[0].instrument >= 0, "%v", s.findings[:])
+}

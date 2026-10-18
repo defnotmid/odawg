@@ -41,11 +41,12 @@ style_spec :: proc(src: ^Sources, name: string, findings: ^base.Findings) -> ^sp
 	// the song's own, by name, or a style file the host read
 	for own in src.own.styles {
 		if own.name == name {
-			st := new(spec.Spec)
-			spec.spec_from_value(own.value, st, findings)
-			st.outer, st.folder = src.own, spec.style_folder(own.name)
-			append(&src.styles, st)
-			return st
+			// read when it was added: what that found is the song's now
+			if findings != nil {
+				append(findings, ..own.findings[:])
+			}
+			append(&src.styles, own.spec)
+			return own.spec
 		}
 	}
 	names := make([dynamic]string, context.temp_allocator)

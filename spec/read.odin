@@ -1056,7 +1056,7 @@ read_styles_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) 
 			bad(r, base.path_join(path, name), "a style: a table of parts, returns, swing")
 			continue
 		}
-		append(&r.spec.styles, Style_Spec{strings.clone(name), json.clone_value(o[name])})
+		append(&r.spec.styles, style_read(r.spec, name, json.clone_value(o[name])))
 	}
 }
 

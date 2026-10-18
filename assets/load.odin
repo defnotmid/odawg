@@ -3,7 +3,6 @@ package odawg_assets
 import "base:runtime"
 import base "../base"
 import device "../device"
-import "core:encoding/endian"
 import "core:fmt"
 import "core:math"
 import "core:mem/virtual"
@@ -11,7 +10,7 @@ import "core:os"
 import "core:strings"
 import "core:thread"
 
-// Loading: a set's files decoded (WAV here, FLAC by odecs: a row per
+// Loading: a set's files decoded (WAV and FLAC by odecs: a row per
 // extension), made
 // stereo, resampled to device.RATE through a Kaiser-windowed sinc and appended
 // to a device.Bank (frames to its slab, a sample row each, a zone row per
@@ -28,17 +27,21 @@ Decoded :: struct {
 }
 
 Decode_Proc :: #type proc(data: []u8, allocator := context.allocator) -> (Decoded, Error)
+// A file straight to the bank's 16 bits, at most `keep` of its channels
+// (interleaved), with no floats between.
+Decode_I16_Proc :: #type proc(data: []u8, keep: int, allocator := context.allocator) -> (pcm: []i16, d: Decoded, err: Error)
 // What a file holds, from its header alone: to size the bank before decoding.
 Info_Proc :: #type proc(data: []u8) -> (frames, channels, rate: int, ok: bool)
 
 // The decoder for a file, by its extension: a row each.
 Format_Row :: struct {
 	extension: string,
-	decode:    Decode_Proc,
-	info:      Info_Proc,
+	decode:     Decode_Proc,
+	decode_i16: Decode_I16_Proc,
+	info:       Info_Proc,
 }
 
-FORMAT_TABLE := []Format_Row{{".wav", wav_decode, wav_info}, {".flac", flac_decode, flac_info}}
+FORMAT_TABLE := []Format_Row{{".wav", wav_decode, wav_decode_i16, wav_info}, {".flac", flac_decode, flac_decode_i16, flac_info}}
 
 format_from_path :: proc(path: string) -> (^Format_Row, bool) {
 	for &f in FORMAT_TABLE {
@@ -49,134 +52,11 @@ format_from_path :: proc(path: string) -> (^Format_Row, bool) {
 	return nil, false
 }
 
-wav_info :: proc(data: []u8) -> (frames, channels, rate: int, ok: bool) {
-	if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
-		return
-	}
-	align, size := 0, -1
-	for pos := 12; pos + 8 <= len(data); {
-		id := string(data[pos:pos + 4])
-		n := int(endian.unchecked_get_u32le(data[pos + 4:]))
-		chunk := data[pos + 8:min(pos + 8 + n, len(data))]
-		switch id {
-		case "fmt ":
-			if len(chunk) >= 16 {
-				channels = int(endian.unchecked_get_u16le(chunk[2:]))
-				rate = int(endian.unchecked_get_u32le(chunk[4:]))
-				align = max(int(endian.unchecked_get_u16le(chunk[12:])), int(endian.unchecked_get_u16le(chunk[14:])) / 8 * channels)
-			}
-		case "data":
-			size = len(chunk)
-		}
-		pos += 8 + n + (n & 1)
-	}
-	if channels == 0 || rate == 0 || align == 0 || size < 0 {
-		return
-	}
-	return size / align, channels, rate, true
-}
-
 decode :: proc(path: string, data: []u8, allocator := context.allocator) -> (Decoded, Error) {
 	if f, ok := format_from_path(path); ok {
 		return f.decode(data, allocator)
 	}
 	return {}, fmt.tprintf("%s: no decoder for its extension", path)
-}
-
-// ---- WAV ---------------------------------------------------------------------------
-
-@(private)
-WAV_PCM :: 1
-@(private)
-WAV_FLOAT :: 3
-@(private)
-WAV_EXTENSIBLE :: 0xfffe
-
-// RIFF WAVE: PCM 8/16/24/32-bit, float 32/64-bit (plain or extensible), any
-// channel count; the first loop of a smpl chunk.
-wav_decode :: proc(data: []u8, allocator := context.allocator) -> (d: Decoded, err: Error) {
-	if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
-		return d, fmt.tprintf("wav: not a RIFF WAVE file")
-	}
-	format, bits, align := 0, 0, 0
-	body: []u8
-	for pos := 12; pos + 8 <= len(data); {
-		id := string(data[pos:pos + 4])
-		size := int(endian.unchecked_get_u32le(data[pos + 4:]))
-		start := pos + 8
-		end := min(start + size, len(data))
-		chunk := data[start:end]
-		switch id {
-		case "fmt ":
-			if len(chunk) < 16 {
-				return d, fmt.tprintf("wav: short fmt chunk")
-			}
-			format = int(endian.unchecked_get_u16le(chunk[0:]))
-			d.channels = int(endian.unchecked_get_u16le(chunk[2:]))
-			d.rate = int(endian.unchecked_get_u32le(chunk[4:]))
-			align = int(endian.unchecked_get_u16le(chunk[12:]))
-			bits = int(endian.unchecked_get_u16le(chunk[14:]))
-			if format == WAV_EXTENSIBLE && len(chunk) >= 26 {
-				format = int(endian.unchecked_get_u16le(chunk[24:])) // the subformat GUID's first field
-			}
-		case "data":
-			body = chunk
-		case "smpl":
-			if len(chunk) >= 36 + 24 && endian.unchecked_get_u32le(chunk[28:]) > 0 {
-				loop := chunk[36:]
-				d.loop_from = i64(endian.unchecked_get_u32le(loop[8:]))
-				d.loop_to = i64(endian.unchecked_get_u32le(loop[12:])) + 1 // its end is inclusive
-			}
-		}
-		pos = start + size + (size & 1)
-	}
-	if d.channels == 0 || d.rate == 0 || body == nil {
-		return d, fmt.tprintf("wav: no fmt or data chunk")
-	}
-	width := bits / 8
-	if align < width * d.channels {
-		align = width * d.channels
-	}
-	frames := len(body) / align
-	d.samples = make([]f32, frames * d.channels, allocator)
-	switch {
-	case format == WAV_PCM && bits == 8:
-		for f in 0 ..< frames {
-			for c in 0 ..< d.channels {
-				d.samples[f * d.channels + c] = (f32(body[f * align + c]) - 128) / 128
-			}
-		}
-	case format == WAV_PCM && (bits == 16 || bits == 24 || bits == 32):
-		scale := 1 / f32(i64(1) << uint(bits - 1))
-		for f in 0 ..< frames {
-			for c in 0 ..< d.channels {
-				at := f * align + c * width
-				v: i32
-				for k in 0 ..< width {
-					v |= i32(body[at + k]) << uint(8 * (4 - width + k))
-				}
-				d.samples[f * d.channels + c] = f32(v >> uint(32 - bits)) * scale
-			}
-		}
-	case format == WAV_FLOAT && bits == 32:
-		for f in 0 ..< frames {
-			for c in 0 ..< d.channels {
-				d.samples[f * d.channels + c] = transmute(f32)endian.unchecked_get_u32le(body[f * align + c * 4:])
-			}
-		}
-	case format == WAV_FLOAT && bits == 64:
-		for f in 0 ..< frames {
-			for c in 0 ..< d.channels {
-				d.samples[f * d.channels + c] = f32(transmute(f64)endian.unchecked_get_u64le(body[f * align + c * 8:]))
-			}
-		}
-	case:
-		return d, fmt.tprintf("wav: format %d with %d bits", format, bits)
-	}
-	if d.loop_to > i64(frames) || d.loop_to - d.loop_from < 2 {
-		d.loop_from, d.loop_to = 0, 0
-	}
-	return d, nil
 }
 
 // ---- resampling --------------------------------------------------------------------
@@ -519,8 +399,7 @@ Decode_Job :: struct {
 	err:                 string,
 }
 
-// Decodes the jobs on every core (a scratch arena each for the file and its
-// float samples).
+// Decodes the jobs on every core (a scratch arena each for the file).
 @(private = "file")
 decode_all :: proc(jobs: []Decode_Job) {
 	run :: proc(j: ^Decode_Job) {
@@ -554,21 +433,20 @@ decode_all :: proc(jobs: []Decode_Job) {
 			j.err = fmt.aprintf("%s can't be read", j.name, allocator = runtime.heap_allocator())
 			return
 		}
-		d, derr := decode(j.path, data)
+		format, known := format_from_path(j.path)
+		if !known {
+			j.err = fmt.aprintf("%s can't be decoded", j.name, allocator = runtime.heap_allocator())
+			return
+		}
+		// straight to 16 bits, in the bank's memory
+		pcm, d, derr := format.decode_i16(data, 2, runtime.heap_allocator())
 		if derr != nil {
 			j.err = fmt.aprintf("%s can't be decoded", j.name, allocator = runtime.heap_allocator())
 			return
 		}
-		j.channels = clamp(d.channels, 1, 2)
+		j.pcm, j.channels = pcm, clamp(d.channels, 1, 2)
 		j.rate = d.rate > 0 ? d.rate : device.RATE
 		j.loop_from, j.loop_to = d.loop_from, d.loop_to
-		n := len(d.samples) / max(d.channels, 1)
-		j.pcm = make([]i16, j.channels * n, runtime.heap_allocator())
-		for i in 0 ..< n {
-			for c in 0 ..< j.channels {
-				j.pcm[j.channels * i + c] = i16(clamp(math.round(d.samples[i * d.channels + c] * 32768), -32768, 32767))
-			}
-		}
 	}
 	workers := min(len(jobs), max(1, os.get_processor_core_count()))
 	if workers <= 1 {

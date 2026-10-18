@@ -70,8 +70,21 @@ Spec :: struct {
 // own instruments and sets), kept as the value it was given and read where
 // a section uses it.
 Style_Spec :: struct {
-	name:  string,
-	value: json.Value,
+	name:     string,
+	value:    json.Value,
+	spec:     ^Spec, // read once, as it is added (its outer the song, its folder the style's)
+	findings: base.Findings, // what reading it found (reported where the song uses it)
+}
+
+// A style read: its spec, in the song's (`s`) memory, what it found kept for
+// where the song uses the style.
+style_read :: proc(s: ^Spec, name: string, value: json.Value) -> Style_Spec {
+	st := Style_Spec{name = strings.clone(name), value = value}
+	st.findings = make(base.Findings)
+	st.spec = new(Spec)
+	spec_from_value(value, st.spec, &st.findings)
+	st.spec.outer, st.spec.folder = s, style_folder(name)
+	return st
 }
 
 // An instrument a spec declares (`instruments = { name = row }`): kept as
@@ -209,10 +222,24 @@ style_folder :: proc(name: string) -> string {
 // The source named `name` that `s` reads: its own, else its outer song's,
 // and the spec that defines it (its pins are in that spec's folder).
 source_from_name :: proc(s: ^Spec, name: string) -> (src: ^Source_Spec, owner: ^Spec) {
+	root := s
 	for o := s; o != nil; o = o.outer {
 		for &x in o.sources {
 			if x.name == name {
 				return &x, o
+			}
+		}
+		root = o
+	}
+	if root == nil {
+		return nil, nil
+	}
+	// a style's: a song's own part may play from a source its style brings
+	// (the style read into temp memory, as source_refs reads it)
+	for st in root.styles {
+		for &x in st.spec.sources {
+			if x.name == name {
+				return &x, st.spec
 			}
 		}
 	}
@@ -241,14 +268,7 @@ source_refs :: proc(s: ^Spec, out: ^[dynamic]Source_Ref) {
 	}
 	add(s, out)
 	for st in s.styles {
-		own := new(Spec, context.temp_allocator)
-		findings := make(base.Findings, context.temp_allocator)
-		{
-			context.allocator = context.temp_allocator
-			spec_from_value(st.value, own, &findings)
-		}
-		own.outer, own.folder = s, style_folder(st.name)
-		add(own, out)
+		add(st.spec, out)
 	}
 }
 
@@ -379,14 +399,7 @@ Asset_Ref :: struct {
 // Styles' specs are read into temp memory.
 asset_refs :: proc(s: ^Spec, out: ^[dynamic]Asset_Ref) {
 	for st in s.styles {
-		own := new(Spec, context.temp_allocator)
-		findings := make(base.Findings, context.temp_allocator)
-		{
-			context.allocator = context.temp_allocator
-			spec_from_value(st.value, own, &findings)
-		}
-		own.outer, own.folder = s, style_folder(st.name)
-		asset_refs(own, out)
+		asset_refs(st.spec, out)
 	}
 	for d, i in s.devices {
 		if d.kind == .Voice {
@@ -491,7 +504,7 @@ spec_add_style_text :: proc(s: ^Spec, name, text: string, findings: ^base.Findin
 		base.report(findings, "bad_json", .Error, name, "style %s is not valid JSON (%v)", name, err)
 		return false
 	}
-	append(&s.styles, Style_Spec{strings.clone(name), v})
+	append(&s.styles, style_read(s, name, v))
 	return true
 }
 

@@ -178,13 +178,7 @@ instrument_files :: proc(s: ^Spec, out: ^[dynamic]string) {
 		}
 	}
 	for st in s.styles {
-		own := new(Spec, context.temp_allocator)
-		findings := make(base.Findings, context.temp_allocator)
-		{
-			context.allocator = context.temp_allocator
-			spec_from_value(st.value, own, &findings)
-		}
-		own.outer, own.folder = s, style_folder(st.name)
+		own := st.spec
 		for d in own.devices {
 			if d.kind == .Voice {
 				walk(s, own, out, d.row)
