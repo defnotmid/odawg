@@ -412,6 +412,9 @@ host := assets.Bank_Host{root = folder}           // where the song's own files 
                                                   // read (decoded, lent; .Declined: odawg reads it),
                                                   // text and stamp procs
 assets.file_stamp(&host, path)                    // a file's identity, as sets are keyed by it
+host.pinning = true                               // declare and load trusting new source files, then
+updates := assets.pins_update(&bank, &s, &host, &findings)      // each source's pins text: the host writes
+                                                  // u.text at u.pins_path (what odawg pin does)
 files: [dynamic]string
 assets.bank_declare_spec(&bank, &s, &findings, &host, &files)   // every set the Samplers name:
                                                   // the song's own, SFZ, the register's (rows only);

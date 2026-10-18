@@ -361,6 +361,15 @@ test_source_pins :: proc(t: ^testing.T) {
 	testing.expect(t, bank_load_at(&bank, data, {loud_need}, &findings, nil, host = &host))
 	f := bank.files[bank.zone_file[zs.first + 1]]
 	testing.expect(t, f.sha256 != "" && f.size == i64(len(loud)) && strings.has_suffix(f.url, "lib/a3_loud.wav"))
+	// the pins the host writes: the new file merged in, sorted
+	updates := pins_update(&bank, sp, &host, &findings, context.temp_allocator)
+	testing.expect_value(t, len(updates), 1)
+	if len(updates) == 1 {
+		u := updates[0]
+		testing.expect(t, u.source == "lib" && u.pins_path == "lib.pins" && u.total == 3 && u.added == 1)
+		rows := pins_from_text(u.text)
+		testing.expect(t, len(rows) == 3 && rows[0].path == "a3_loud.wav" && rows[0].sha256 == f.sha256)
+	}
 	// a licence odawg doesn't allow: a finding, nothing fetched
 	clear(&findings)
 	nc := new(spec.Spec)

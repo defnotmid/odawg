@@ -3,6 +3,7 @@ package odawg_assets
 import "core:fmt"
 import "core:os"
 import "core:path/filepath"
+import "core:slice"
 import "core:strconv"
 import "core:strings"
 import base "../base"
@@ -233,4 +234,70 @@ song_file_text :: proc(bank: ^device.Bank, d: ^Declaring, f: Song_File, name: st
 	}
 	data, rerr := os.read_entire_file(f.path, context.temp_allocator)
 	return string(data), rerr == nil
+}
+
+// A source's pins once odawg pin has fetched what a song plays: the files
+// the bank fetched from it merged into what its pins held (sorted, earlier
+// rows kept), as the text for the host to write at `pins_path` (a plain
+// path of the song's, from the host's root).
+Pin_Update :: struct {
+	source:       string,
+	licence:      string,
+	pins_path:    string,
+	total, added: int,
+	text:         string,
+}
+
+// The pins each source of `s` (its own styles' included) holds after
+// `bank` was declared and loaded with host.pinning. A source whose pins
+// aren't a plain path in the song's folder (a style read from outside it)
+// is a finding, and isn't updated; a pins line odawg wouldn't take is left
+// out. In `allocator`.
+pins_update :: proc(bank: ^device.Bank, s: ^spec.Spec, host: ^Bank_Host, findings: ^base.Findings, allocator := context.allocator) -> []Pin_Update {
+	root := host != nil ? host.fetched : ""
+	if root == "" {
+		root, _ = data_dir(context.temp_allocator)
+	}
+	refs := make([dynamic]spec.Source_Ref, context.temp_allocator)
+	spec.source_refs(s, &refs)
+	out := make([dynamic]Pin_Update, allocator)
+	for &r in refs {
+		if !spec.plain_path(r.pins_path) {
+			base.report(findings, "bad_value", .Error, r.name, "source %s: its pins %s are outside the song's folder; not written", r.name, r.pins_path)
+			continue
+		}
+		dir := strings.concatenate({source_dir(root, &r.source), "/"}, context.temp_allocator)
+		old, _ := host_text(host, r.pins_path)
+		rows := make([dynamic]Pin_Row, context.temp_allocator)
+		for row in pins_from_text(old) {
+			if spec.plain_path(row.path) && len(row.sha256) == 64 && row.size >= 0 {
+				append(&rows, row)
+			}
+		}
+		added := 0
+		for f in bank.files {
+			if f.url == "" || f.sha256 == "" || !strings.has_prefix(f.path, dir) {
+				continue
+			}
+			rel := f.path[len(dir):]
+			known := false
+			for x in rows {
+				known ||= x.path == rel
+			}
+			if !known && spec.plain_path(rel) {
+				append(&rows, Pin_Row{sha256 = f.sha256, size = f.size, path = rel})
+				added += 1
+			}
+		}
+		slice.sort_by(rows[:], proc(x, y: Pin_Row) -> bool {return x.path < y.path})
+		append(&out, Pin_Update {
+			source = strings.clone(r.name, allocator),
+			licence = strings.clone(r.licence, allocator),
+			pins_path = strings.clone(r.pins_path, allocator),
+			total = len(rows),
+			added = added,
+			text = pins_text(rows[:], allocator),
+		})
+	}
+	return out[:]
 }

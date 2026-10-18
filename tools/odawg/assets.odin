@@ -125,57 +125,26 @@ run_credits :: proc(a: ^Args) -> bool {
 run_pin :: proc(a: ^Args) -> bool {
 	l: Loaded
 	ok := load(a, &l, pinning = true)
-	print_findings(l.findings[:])
 	if !ok {
-		return false
-	}
-	root, err := assets.data_dir(context.temp_allocator)
-	if err != nil {
-		fmt.eprintfln("odawg pin: %s", err.?)
+		print_findings(l.findings[:])
 		return false
 	}
 	host := assets.Bank_Host{root = filepath.dir(a.positional[0])}
-	refs := make([dynamic]spec.Source_Ref, context.temp_allocator)
-	spec.source_refs(&l.spec, &refs)
-	if len(refs) == 0 {
-		fmt.println("odawg pin: the song names no sources")
-		return true
+	updates := assets.pins_update(&l.bank, &l.spec, &host, &l.findings, context.temp_allocator)
+	print_findings(l.findings[:])
+	if len(updates) == 0 {
+		fmt.println("odawg pin: no pins to write (the song names no sources in its folder)")
+		return !base.has_errors(l.findings[:])
 	}
 	all := true
-	for &r in refs {
-		if !spec.plain_path(r.pins_path) {
-			// a style's folder out of the song's (style = "../x.json"): read, never written
-			fmt.eprintfln("odawg pin: %s: its pins %s are outside the song's folder; not written", r.name, r.pins_path)
-			all = false
-			continue
-		}
-		dir := strings.concatenate({assets.source_dir(root, &r.source), "/"}, context.temp_allocator)
-		path := assets.host_path(&host, r.pins_path)
-		old, _ := os.read_entire_file(path, context.temp_allocator)
-		rows := make([dynamic]assets.Pin_Row, context.temp_allocator)
-		append(&rows, ..assets.pins_from_text(string(old)))
-		added := 0
-		for f in l.bank.files {
-			if f.url == "" || f.sha256 == "" || !strings.has_prefix(f.path, dir) {
-				continue
-			}
-			rel := f.path[len(dir):]
-			known := false
-			for x in rows {
-				known ||= x.path == rel
-			}
-			if !known {
-				append(&rows, assets.Pin_Row{sha256 = f.sha256, size = f.size, path = rel})
-				added += 1
-			}
-		}
-		slice.sort_by(rows[:], proc(x, y: assets.Pin_Row) -> bool {return x.path < y.path})
-		if werr := os.write_entire_file(path, assets.pins_text(rows[:])); werr != nil {
+	for u in updates {
+		path := assets.host_path(&host, u.pins_path)
+		if werr := os.write_entire_file(path, u.text); werr != nil {
 			fmt.eprintfln("odawg pin: can't write %s: %v", path, werr)
 			all = false
 			continue
 		}
-		fmt.printfln("%s: %d pinned (%d new) in %s, licence %s", r.name, len(rows), added, path, r.licence)
+		fmt.printfln("%s: %d pinned (%d new) in %s, licence %s", u.source, u.total, u.added, path, u.licence)
 	}
 	return all
 }
