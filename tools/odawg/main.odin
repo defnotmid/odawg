@@ -47,7 +47,7 @@ Command_Row :: struct {
 }
 
 COMMAND_TABLE := []Command_Row {
-	{"render", "render SPEC -o OUT.wav [--range R] [--master streaming|podcast|broadcast] [--stems DIR] [--float]", "the mix (and a WAV per part with --stems)", run_render},
+	{"render", "render SPEC -o OUT.wav [--range R] [--master streaming|podcast|broadcast] [--stems DIR] [--float]", "the mix (and a WAV per stem with --stems: each part, return and bus)", run_render},
 	{"timeline", "timeline SPEC [--json]", "sections (start, bars, tempo, style), parts and tracks, markers, findings", run_timeline},
 	{"show", "show SPEC PATH [--json]", "one thing: sections/NAME, parts/NAME (its notes), style/NAME (its source)", run_show},
 	{"at", "at SPEC POSITION", "what plays at a position: the section and bar, the chord, the notes sounding", run_at},
@@ -223,10 +223,11 @@ run_render :: proc(a: ^Args) -> bool {
 	opts.stems = a.stems != ""
 	if opts.stems {
 		os.make_directory(a.stems)
-		files.stems = make([]render.Wav_Writer, len(s.parts))
-		for name, i in s.parts {
-			stem, _ := filepath.join({a.stems, strings.concatenate({name, ".wav"}, context.temp_allocator)}, context.temp_allocator)
-			render.wav_open(&files.stems[i], stem, a.float)
+		// a WAV per stem: each part, return and bus the master sums
+		files.stems = make([]render.Wav_Writer, render.stem_count(s))
+		for &w, i in files.stems {
+			stem, _ := filepath.join({a.stems, strings.concatenate({render.stem_name(s, i), ".wav"}, context.temp_allocator)}, context.temp_allocator)
+			render.wav_open(&w, stem, a.float)
 		}
 	}
 	loud := render.master_export(s, opts, m, {&files, proc(data: rawptr, at: i64, l, r: []f32, stems: [][2][]f32) {

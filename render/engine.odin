@@ -5,6 +5,7 @@ import "core:math"
 import "core:mem"
 import "core:mem/virtual"
 import "core:slice"
+import "core:strings"
 import base "../base"
 import device "../device"
 import song "../song"
@@ -673,6 +674,18 @@ engine_process :: proc(e: ^Engine, l, r: []f32, stems: [][2][]f32 = nil) {
 		copy(r[done:], mr)
 		done += n
 	}
+}
+
+// Stem `p`'s name, for a file: a part's own ("drums"), a return's or a
+// bus's with its kind ("return-hall", "bus-glue").
+stem_name :: proc(s: ^song.Song, p: int, allocator := context.temp_allocator) -> string {
+	switch {
+	case p < len(s.parts):
+		return s.parts[p]
+	case p < len(s.parts) + len(s.returns):
+		return strings.concatenate({"return-", s.returns[p - len(s.parts)].name}, allocator)
+	}
+	return strings.concatenate({"bus-", s.buses[p - len(s.parts) - len(s.returns)].name}, allocator)
 }
 
 // The stems an export gives: every node between the tracks and the master

@@ -207,3 +207,23 @@ test_route_latency :: proc(t: ^testing.T) {
 	through, straight := first(out.stems[bus][0]), first(out.stems[song.part_index(s, "b")][0])
 	testing.expectf(t, through > 0 && abs(through - straight) <= 1, "through the limiter at %d, straight at %d", through, straight)
 }
+
+// Every stem has a name a file can take: the parts by theirs, the returns
+// and buses by kind and name, as many as stem_count.
+@(test)
+test_stem_names :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	s := compose_text(t, `{ bpm: 120, sections: [ { name: "a", duration: "1m" } ],
+		returns: { hall: [ { name: "Reverb", decay: 1 } ] },
+		buses: { glue: {} },
+		parts: { lead: { instrument: "pluck", to: "glue", sends: { hall: -6 }, play: [ { name: "a", notes: "C5" } ] } } }`, &arena)
+	names := make([dynamic]string, context.temp_allocator)
+	for p in 0 ..< stem_count(s) {
+		append(&names, stem_name(s, p))
+	}
+	testing.expect_value(t, len(names), len(s.parts) + 2)
+	testing.expect_value(t, names[song.part_index(s, "lead")], "lead")
+	testing.expect_value(t, names[len(s.parts)], "return-hall")
+	testing.expect_value(t, names[len(s.parts) + 1], "bus-glue")
+}
