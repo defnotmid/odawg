@@ -161,6 +161,7 @@ nodes_init :: proc "contextless" () {
 			{name = "fade_out", unit = .Seconds},
 			{name = "curve", unit = .Choice, choices = CURVE_CHOICES},
 			{name = "mono", unit = .Number},
+			{name = "rate", unit = .Number, default = 1},
 		},
 	})
 }
@@ -1008,8 +1009,11 @@ tail_sampler_node :: proc(c: ^Node_Call, lane: ^Lane) -> f64 {
 // sample: its envelope is onimite's track_envelope): the first sample of
 // bank set `set`, from `offset` seconds in, for the note's gate, with fades
 // in and out (each at least DECLICK, so nothing clicks) of `curve`'s shape,
-// `mono` folding the sides together. Its output is a function of where the
-// note is (a seek jumps there).
+// `mono` folding the sides together, at `rate` (a tape's: 2 plays twice as
+// fast an octave up, -1 backwards from `offset`; beyond the recording's
+// ends, silence) through the Sampler's kernel. Its output is a function of
+// where the note is (a seek jumps there): sample k of the note reads frame
+// offset + k * rate, never a sum of steps. The fades are the note's.
 
 // The shortest fade a clip starts and ends with: 3 ms.
 DECLICK :: RATE * 3 / 1000
@@ -1020,6 +1024,7 @@ CLIP_FADE_IN :: 5
 CLIP_FADE_OUT :: 6
 CLIP_CURVE :: 7
 CLIP_MONO :: 8
+CLIP_RATE :: 9
 
 @(private = "file")
 process_clip :: proc(c: ^Node_Call) {
@@ -1055,6 +1060,10 @@ clip_run :: proc(v: ^[MAX_FIELDS]f32, lane: ^Lane, data: []$T, channels: int, sc
 	curve := Curve(clamp(int(v[CLIP_CURVE]), 0, len(Curve) - 1))
 	mono := v[CLIP_MONO] > 0.5
 	right := channels > 1 ? 1 : 0
+	if rate := f64(v[CLIP_RATE]); rate != 1 {
+		clip_run_rate(data, channels, scale, frames, first, rate, length, fade_in, fade_out, curve, mono, lane.at, l, r)
+		return
+	}
 	for i in 0 ..< i64(len(l)) {
 		k := lane.at + i
 		src := first + k
@@ -1064,6 +1073,30 @@ clip_run :: proc(v: ^[MAX_FIELDS]f32, lane: ^Lane, data: []$T, channels: int, sc
 		g := fade_gain(k, fade_in, curve) * fade_gain(length - 1 - k, fade_out, curve)
 		a := f32(data[src * i64(channels)]) * scale
 		b := f32(data[src * i64(channels) + i64(right)]) * scale
+		if mono {
+			a = a * 0.70710678 + b * 0.70710678
+			b = a
+		}
+		l[i] = a * g
+		r[i] = b * g
+	}
+}
+
+// The clip away from rate 1: sample k reads frame first + k * rate through
+// the kernel, widened (and lowered) when it plays faster so nothing aliases.
+@(private = "file")
+clip_run_rate :: proc(data: []$T, channels: int, scale: f32, frames, first: i64, rate: f64, length, fade_in, fade_out: i64, curve: Curve, mono: bool, at: i64, l, r: []f32) {
+	cutoff := clamp(1 / abs(rate), 1.0 / SINC_MAX_STRETCH, 1)
+	taps := i64(math.ceil(SINC_HALF / cutoff))
+	right := i64(channels > 1 ? 1 : 0)
+	for i in 0 ..< i64(len(l)) {
+		k := at + i
+		pos := f64(first) + f64(k) * rate
+		if k >= length || pos < 0 || pos >= f64(frames) {
+			continue
+		}
+		a, b := sinc_frame(data, i64(channels), right, frames, pos, cutoff, taps, scale)
+		g := fade_gain(k, fade_in, curve) * fade_gain(length - 1 - k, fade_out, curve)
 		if mono {
 			a = a * 0.70710678 + b * 0.70710678
 			b = a

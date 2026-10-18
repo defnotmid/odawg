@@ -83,6 +83,33 @@ kernel :: #force_inline proc "contextless" (x: f64) -> f32 {
 	return sinc_table[i] + (sinc_table[i + 1] - sinc_table[i]) * f
 }
 
+// Both sides of interleaved `data` (`frames` of `channels`, `right` the
+// channel read as the right) at frame `pos` (fractional, >= 0) through the
+// kernel at `cutoff` (`taps` on each side), times `scale`; frames past its
+// edges read as silence. A whole `pos` at a cutoff of 1 is its own frame.
+@(private = "package")
+sinc_frame :: #force_inline proc "contextless" (data: []$T, channels, right, frames: i64, pos, cutoff: f64, taps: i64, scale: f32) -> (sl, sr: f32) {
+	centre := i64(pos)
+	frac := pos - f64(centre)
+	if frac == 0 && cutoff == 1 && centre < frames {
+		return f32(data[channels * centre]) * scale, f32(data[channels * centre + right]) * scale
+	}
+	c := f32(cutoff)
+	gain := f32(cutoff) * scale
+	f := f32(frac)
+	lo := max(1 - taps, -centre)
+	hi := min(taps, frames - 1 - centre)
+	#no_bounds_check for d in lo ..= hi {
+		x := abs((f - f32(d)) * c) * SINC_STEPS
+		ti := int(x)
+		w := (sinc_table[ti] + (sinc_table[ti + 1] - sinc_table[ti]) * (x - f32(ti))) * gain
+		fi := centre + d
+		sl += f32(data[channels * fi]) * w
+		sr += f32(data[channels * fi + right]) * w
+	}
+	return
+}
+
 Sampler_State :: struct {
 	zone:      i32, // into the bank's zones (-1: nothing to play)
 	length:    i64, // its frames

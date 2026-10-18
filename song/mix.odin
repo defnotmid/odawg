@@ -113,7 +113,8 @@ append_song :: proc(m: ^Song, s: ^Song, at: f64, prefix: string, gain_db: f64 = 
 }
 
 // A clip on the mix: a bank set played from `offset` seconds in, from
-// `start` to `stop` seconds on the mix, with onimite's track options.
+// `start` to `stop` seconds on the mix, with onimite's track options. At
+// `rate`, mix time t plays the set at offset + (t - start) * rate.
 Clip :: struct {
 	name:     string, // its part ("music.mp3", "intro")
 	set:      i32, // into bank.sets
@@ -126,6 +127,7 @@ Clip :: struct {
 	fade_out: f64,
 	curve:    device.Curve,
 	mono:     bool,
+	rate:     f64, // playback rate, a tape's (pitch moves with it; -1: backwards from offset); 0 reads as 1
 	voice:    bool, // speech: ducks the ducked
 	ducked:   bool,
 	duck:     struct {
@@ -150,6 +152,7 @@ append_clip :: proc(m: ^Song, c: Clip) -> i32 {
 	node.values[device.CLIP_FADE_OUT] = f32(c.fade_out)
 	node.values[device.CLIP_CURVE] = f32(c.curve)
 	node.values[device.CLIP_MONO] = c.mono ? 1 : 0
+	node.values[device.CLIP_RATE] = c.rate == 0 ? 1 : f32(c.rate)
 	desc := device.Program_Desc{nodes = {node}, out = "clip", velocity = true, path = c.name}
 	p := device.params_from_kind(.Voice)
 	p[.Program] = f32(device.compile_program(&m.programs, &desc, &m.findings))

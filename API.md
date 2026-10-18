@@ -256,7 +256,10 @@ A row:
   (nodes, mods, pads, keys, controls as plain data) without JSON; spec reads rows into one.
 - **A clip** is a program of one `Clip` node (`song.append_clip`, or the built-in `Player`
   row): a set played from `offset`, for the note's length, with `fade_in`, `fade_out`,
-  `curve`, `mono`. A seek starts it where it is.
+  `curve`, `mono`, and `rate` (the row's `playback_rate`; `song.Clip.rate`, 0 reading as
+  1): a tape's, so 2 plays an octave up in half the time and -1 plays backwards from
+  `offset`. Sample k of the note reads frame offset + k × rate through the Sampler's sinc,
+  never a sum of steps, so a seek starts it where it is; beyond the recording, silence.
 
 ### 3.5 Styles
 

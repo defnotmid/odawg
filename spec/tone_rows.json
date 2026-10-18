@@ -142,8 +142,8 @@
     }
   },
   "Player": {
-    "description": "Tone's Player: a recording played as it was made, from `offset` seconds in, for the note's length, with fades in and out (`curve`: linear or equal_power) and `mono` folding its sides together; velocity is its level.",
-    "options": { "set": "clip/set", "offset": "clip/offset", "fade_in": "clip/fade_in", "fade_out": "clip/fade_out", "curve": "clip/curve", "mono": "clip/mono" },
+    "description": "Tone's Player: a recording played as it was made, from `offset` seconds in, for the note's length, with fades in and out (`curve`: linear or equal_power), `mono` folding its sides together, and `playback_rate` (a tape's: 2 is twice as fast an octave up, -1 backwards from `offset`); velocity is its level.",
+    "options": { "set": "clip/set", "offset": "clip/offset", "fade_in": "clip/fade_in", "fade_out": "clip/fade_out", "curve": "clip/curve", "mono": "clip/mono", "playback_rate": "clip/rate" },
     "out": "clip",
     "nodes": { "clip": { "class": "Clip" } }
   }

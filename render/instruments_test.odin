@@ -269,6 +269,57 @@ test_clip :: proc(t: ^testing.T) {
 	testing.expectf(t, moved > 0.05, "the filter changed the clip by %g", moved)
 }
 
+// A clip at a rate reads frame offset + k * rate for its sample k: at 2
+// and 0.5 a slow sine comes out as the sine at those positions (through
+// the kernel), at -1 the source exactly, backwards from the offset, then
+// silence past the recording's start; and each the same cut into segments.
+@(test)
+test_clip_rate :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	_ = virtual.arena_init_growing(&arena)
+	context.allocator = virtual.arena_allocator(&arena)
+	// 20 s of a 110 Hz sine on the left, a 70 Hz one on the right
+	frames := 20 * RATE
+	wave :: proc(hz, frame: f64) -> f32 {return f32(0.5 * math.sin(2 * math.PI * hz * frame / RATE))}
+	audio := make([]f32, 2 * frames)
+	for i in 0 ..< frames {
+		audio[2 * i], audio[2 * i + 1] = wave(110, f64(i)), wave(70, f64(i))
+	}
+	bank: device.Bank
+	set := device.bank_borrow(&bank, "sines", audio)
+	for rate in ([]f64{2, 0.5, -1}) {
+		m: song.Song
+		song.mix_init(&m)
+		m.bank = &bank
+		song.append_clip(&m, {name = "bed", set = set, start = 1, stop = 9, offset = 4, rate = rate})
+		song.mix_end(&m)
+		straight := output_from_song(&m, {threads = 1, segment = 1000})
+		cut := output_from_song(&m, {threads = 3, segment = 37})
+		worst: f32
+		for v, i in straight.left {
+			worst = max(worst, abs(v - cut.left[i]), abs(straight.right[i] - cut.right[i]))
+		}
+		testing.expectf(t, worst == 0, "rate %v: cut into segments the clip differs by %g", rate, worst)
+		// past the declick fades, the source at offset + k * rate (a 2x clip
+		// runs out of recording at 8 s in, a backwards one at 4 s)
+		off: f32
+		for k in RATE / 100 ..< 8 * RATE - RATE / 100 {
+			pos := 4 * f64(RATE) + f64(k) * rate
+			want_l, want_r: f32
+			if pos >= 0 && pos < f64(frames) {
+				want_l, want_r = wave(110, pos), wave(70, pos)
+			}
+			if abs(pos - f64(frames)) < 64 || abs(pos) < 64 {
+				continue // the kernel at the recording's edges
+			}
+			off = max(off, abs(straight.left[RATE + k] - want_l), abs(straight.right[RATE + k] - want_r))
+		}
+		limit: f32 = rate == -1 ? 0 : 2e-4
+		testing.expectf(t, off <= limit, "rate %v: off the source at offset + k * rate by %g", rate, off)
+	}
+}
+
 // A Lua table of entries alone is a list but where a row or one name goes.
 @(test)
 test_positional_list :: proc(t: ^testing.T) {
