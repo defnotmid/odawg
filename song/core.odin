@@ -15,26 +15,24 @@ import theory "../theory"
 
 Span :: base.Span
 
+// What happens into a section: nothing unless the section asks. A riser, an
+// impact and a fill play on the part the section names (`transition_part`).
 Transition :: enum u8 {
-	Auto,
 	None,
 	Cut,
 	Riser,
 	Fill,
 	Impact,
 	Pause,
-	Filter,
 }
 
 TRANSITION_NAMES := [Transition]string {
-	.Auto   = "",
 	.None   = "none",
 	.Cut    = "cut",
 	.Riser  = "riser",
 	.Fill   = "fill",
 	.Impact = "impact",
 	.Pause  = "pause",
-	.Filter = "filter",
 }
 
 Section :: struct {
@@ -48,6 +46,7 @@ Section :: struct {
 	energy:        f64,
 	chords:        Span, // into chords: one per bar, cycled
 	transition:    Transition, // into this section
+	transition_part: string, // what a riser, impact or fill plays on
 }
 
 Marker :: struct {
@@ -95,12 +94,20 @@ Track :: struct {
 	muted:      bool, // heard by nothing (still ducking the ducked: one track heard alone)
 	window:     Window, // where it is let through, with fades (a placed song's)
 	room:       f64, // dB it dips by where the song makes room
-	pad_gain_db: [device.Pad]f32, // each drum pad's level (Pad_Gain_Set)
+	pad_gains:  [PAD_GAINS]Pad_Gain, // pads at a level of their own (Pad_Gain_Set)
 	chain:      Span, // into chain: its effects in order
 	sends:      Span, // into sends
 	sidechains: Span, // into sidechains: what ducks it (a part's kick and a voice, both)
 	notes:      Span, // into notes
 }
+
+// A pad's level on a track (pad 0: an unused row).
+Pad_Gain :: struct {
+	pad: u32,
+	db:  f32,
+}
+
+PAD_GAINS :: 16
 
 // What ducks a track, and how: under each hit of a part (synth.lua's: the
 // gain falls by `depth` at a hit and recovers with time constant
@@ -116,7 +123,7 @@ Sidechain_Mode :: enum u8 {
 Sidechain :: struct {
 	mode:    Sidechain_Mode,
 	part:    i32, // Hits: the source part
-	pad:     device.Pad,
+	pad:     u32, // Hits: the pad (0: any)
 	pitch:   f32, // Hits: -1 any note of the part
 	depth:   f64, // Hits: 0..1; Spans: dB
 	attack:  f64,
@@ -154,7 +161,8 @@ Note_Row :: struct {
 	beat:           f64,
 	pitch:          f32,
 	velocity:       f32,
-	pad:            device.Pad,
+	pad:            u32, // base.name_id of its name (0: a pitched note)
+	accent:         f32, // 0..1: an accented step (X), a note's !
 	track:          u16,
 }
 
@@ -169,10 +177,13 @@ Song :: struct {
 	sections: [dynamic]Section,
 	chords:   [dynamic]theory.Chord,
 	markers:  [dynamic]Marker,
-	parts:    [dynamic]string, // names: the spec's sorted, then its styles', then "fx" (transitions) unless the spec has one
+	parts:    [dynamic]string, // names: the spec's and its styles', sorted
 	tracks:   [dynamic]Track,
 	devices:  [dynamic]device.Device_Kind,
 	params:   [dynamic]device.Params, // parallel to devices: the resolved values
+	labels:   [dynamic]string, // parallel to devices: an instrument's name as written ("MonoSynth", "machines/909.json"; a clip's "Player"), an effect's kind
+	programs: device.Programs, // the Voices' instruments (a Voice's `Program` param indexes them)
+	pad_names: [dynamic]string, // every pad a note or a question names (its id: base.name_id)
 	chain:    [dynamic]i32, // device indices
 	sends:    [dynamic]Send,
 	returns:  [dynamic]Return,
@@ -249,9 +260,43 @@ song_from_spec :: proc(s: ^spec.Spec, out: ^Song, bank: ^device.Bank = nil) -> b
 	work: Work
 	work.notes = make([dynamic][dynamic]Note_Row, context.temp_allocator)
 	arrange(s, out, &work)
-	add_transitions(out, &work)
+	add_transitions(s, out, &work)
 	index_notes(out, &work)
 	sort_regions(out)
 	graph_build(out)
 	return true
+}
+
+// What the song's voices read beyond their notes.
+voice_env :: proc(s: ^Song) -> device.Voice_Env {
+	return {bank = s.bank, programs = &s.programs}
+}
+
+// A pad's id, its name kept for what prints it.
+pad_intern :: proc(s: ^Song, name: string) -> u32 {
+	id := base.name_id(name)
+	for n in s.pad_names {
+		if n == name {
+			return id
+		}
+		if base.name_id(n) == id {
+			base.report(&s.findings, "pad_collision", .Error, "", "pads %q and %q have the same id: rename one", n, name)
+			return id
+		}
+	}
+	append(&s.pad_names, name)
+	return id
+}
+
+// A pad's name ("" none or unknown).
+pad_name :: proc(s: ^Song, id: u32) -> string {
+	if id == 0 {
+		return ""
+	}
+	for n in s.pad_names {
+		if base.name_id(n) == id {
+			return n
+		}
+	}
+	return "?"
 }

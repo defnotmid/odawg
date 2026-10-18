@@ -13,7 +13,7 @@ oksl, odecs and ottis, built the same way:
   keeps renders the way `speech/` keeps lines.
 - **Data-oriented**: layers as packages
   (`base`, `tempo`, `theory`, `dsp`, `analyze`, `assets`, `spec`, `song`, `render`, `check`,
-  then `tools/odawg`), imported as `deps:odawg/song` etc.; every kind (instrument, preset,
+  then `tools/odawg`), imported as `deps:odawg/song` etc.; every kind (node kind,
   effect, play pattern, transition, check, mastering target, command) is a table row and
   its behaviour a rule table; flat tables with spans; `/` names. README.md lists the rules.
 - **Realtime first.** The engine streams any block from anywhere, deterministically and
@@ -73,9 +73,11 @@ Added in odawg:
 - **Structure:** sections, styles (as data), `energy`, `transition`.
 - **Patterns:** step strings (`"x...x..."`), chord progressions (`"Am7 F C G"`), chord
   degrees (`degrees = "1 . 5 ."`).
-- **Instruments:** the presets `examples/common/synth.lua` has today, plus a `DrumKit`.
+- **Instruments as data:** a row of nodes over a registry of node kinds, with options
+  (controls) that set or scale its fields; a machine of pads (§3.4). Tone's classes are
+  built-in rows; the TR-808, TR-909, a TB-303 and `synth.lua`'s voices are example files.
 - **Mixing:** `sidechain`, `room` (the arrangement makes space for another sound),
-  `master` presets.
+  `master` targets.
 - **Checking:** checks that stand in for listening, and analysis (loudness, onsets, beat),
   moved out of onimite.
 
@@ -123,7 +125,7 @@ song { "score",
   bpm = 120, time_signature = 4, key = "A minor", seed = 1, swing = 0,
   duration = nil,                    -- optional target length in seconds (§3.2)
   gain_db = -10,                     -- the whole song's level, headroom for a mix: replaces -10, isn't added to it
-  from = nil,                        -- "track.mp3" | "score.odawg": a song from a file (§3.6)
+  from = nil,                        -- "track.mp3" | "score.odawg": a song from a file (§3.7)
 
   sections = {
     { "intro", duration = "8m", bpm = 84, style = "lofi", energy = 0.3, chords = "Am7 Fmaj7 C G" },
@@ -131,8 +133,8 @@ song { "score",
     { "drop",  duration = "8m", flex = { "4m", "8m" }, bpm = 124, style = "house", energy = 1 },
   },
 
-  parts = {                          -- override or add to the style's parts, by role name
-    drums = { instrument = { "DrumKit", kit = "909" },
+  parts = {                          -- override or add to the style's parts, by name
+    drums = { instrument = { "machines/909.json", tone = 0.55 },
       play = { { "drop", steps = { kick = "x...x...x...x...", clap = "....x.......x..." } } } },
     bass = { instrument = "sub_bass", gain_db = -8, sidechain = "drums/kick",
       play = { { "drop", degrees = "1 . . 1 . . 5 . 1 . . 1 . 8 . .", subdivision = "16n" } } },
@@ -174,7 +176,7 @@ silent compromise.
 
 ### 3.3 Parts and play entries
 
-A part takes `instrument` (a preset name, or `{ "Class", ...Tone options }`), `gain_db`,
+A part takes `instrument` (a row's name or file, or `{ "Class", ...its options }`: §3.4), `gain_db`,
 `pan`, `effects`, `sends`, `sidechain = "part/note"`, `mute = "range"` and `play`.
 
 A play entry is `{ range, ... }` with one of:
@@ -190,23 +192,82 @@ A play entry is `{ range, ... }` with one of:
 
 Entries can also take `velocity`, `octave` and `humanize`.
 
-### 3.4 Styles
+### 3.4 Instruments
+
+An instrument is data, never code: a row of nodes wired by name, read into a program where
+a part plays it. A part's `instrument` is one of:
+
+- a name: a row the spec (or its style) declares in `instruments = { name = row }` or in a
+  file of rows (`instruments = "instruments/classic.json"`), else a built-in row (Tone's
+  classes: `Synth`, `MonoSynth`, `FMSynth`, `AMSynth`, `MembraneSynth`, `MetalSynth`,
+  `NoiseSynth`, `PluckSynth`, `Sampler`, `Player`; `odawg show instrument/MonoSynth` prints
+  one, to copy);
+- a file of one row: `"instruments/tb303.json"`, `"machines/909.json"` (`spec.instrument_files`
+  lists what a host reads and hands back with `spec_add_instrument_text`);
+- a name and changes: `{ "MonoSynth", filter = { q = 4 } }` (its options) or
+  `{ "pad", nodes = { env = { release = 2 } } }` (by node).
+
+A row:
+
+```lua
+{
+  nodes = {
+    osc = { "Osc", wave = "sawtooth", frequency = { by = "lfo", octaves = 0.02 } },
+    env = { "Env", attack = 0.01, release = 0.3 },
+    lfo = { "Lfo", rate = "4n" },
+    out = { "Filter", "osc", frequency = { base = 300, by = "env", octaves = 3 }, amp = "env" },
+  },
+  out = "out", mono = false, portamento = 0, length = 0, note = "C4", velocity = "amp",
+  options = { cutoff = "out/frequency", decay = { { "env/decay" }, { "env/release", op = "mul", scale = 2 } } },
+}
+```
+
+- **Nodes** are kinds of the registry (`device.register_node`; a host adds its own the
+  same way): Osc, Noise, Random, Env, Decay, Ramp, Lfo, Filter, Drive, Slew, Map, Mix, Mul,
+  Comb, Sampler, Clip. Their order means nothing: a program runs them after what they read,
+  and leaves out what the out doesn't hear.
+- **A field** is a number, a choice, a Tone length, or what moves it: `{ base, by, octaves
+  | ratio | sweep | index | amount | depth | at_most, exponent }` (a list of those). `by` is
+  a node or the note's `velocity`, `accent`, `slide`, `gate`. `at_most` caps the field
+  (by the source: an accent's shorter decay). Every node has `gain_db`, `pan` and `amp`.
+- **Steady values:** a node reading only what holds for the note (velocity, accent, a
+  Random, another such node) through a stateless kind (Map, Mul, Mix, Drive) runs one
+  sample a chunk.
+- **Options** are controls: a name and its targets, each `"node/field"` (set) or
+  `{ path, op = set | mul | add | octaves, scale = 1, offset = 0 }` (the value x = value ×
+  scale + offset sets the field to x, base × x, base + x, base × 2^x). A path may end at a
+  modulator's field (`ladder/frequency/octaves`), and on a machine reach its pads
+  (`pads/*/amp*/time`; a part ending `*` is a prefix). A row gives an option's value by
+  its name (`cutoff = 600`); `envelope = { attack = 0.1 }` is `envelope/attack`. A control
+  named as a node's field it doesn't simply set is a warning (`control_shadows_field`), a
+  target reaching nothing is too (`unknown_option_target`).
+- **A machine** is `{ pads = { kick = { instrument, key, choke, gain_db } } }`: each pad
+  its own row; a note plays its pad by name (`steps = { kick = ... }`), else the pad at its
+  pitch; a pad cuts those it chokes. The example 808 and 909 take `decay` (1: as built),
+  `tone` (0.5) and `tune` (semitones), v0.0.7's DrumMachine knobs.
+- **After compose**, a command sets a control by name (`Param_Set "bass/cutoff"`), else a
+  node's field (`"bass/out/q"`); a change that would make a mono node stereo is refused.
+- **In memory:** `device.compile_program(progs, &desc, findings)` places a `Program_Desc`
+  (nodes, mods, pads, keys, controls as plain data) without JSON; spec reads rows into one.
+- **A clip** is a program of one `Clip` node (`song.append_clip`, or the built-in `Player`
+  row): a set played from `offset`, for the note's length, with `fade_in`, `fade_out`,
+  `curve`, `mono`. A seek starts it where it is.
+
+### 3.5 Styles
 
 A style is a partial spec: its parts with play entries for each energy band, plus a mix
 template. A band `{ 0.4, 0.7 }` runs from 0.4 up to, not including, 0.7 (a band ending at 1
-includes it), so two bands that touch never both play. There's no new schema. `odawg show style/house` prints one, so an agent can read
-it, copy it into `parts`, or write a new one as data: a song's own `styles = { name = {
-parts, returns, swing } }` join the shipped ones by name (a name of its own wins). The
-shipped set: `acid_house`, `ambient`, `booty_house`, `chicago_house`, `house`, `lofi`,
-`synthwave`.
+includes it), so two bands that touch never both play. There's no new schema, and none ship in the library: a song's own `styles = { name = {
+parts, returns, swing } }`, or files. `examples/styles/` has seven to copy: `acid_house`,
+`ambient`, `booty_house`, `chicago_house`, `house`, `lofi`, `synthwave`.
 
 A style can also be a file: a section's `style = "styles/french_disco.json"` (a name with a
-`/` or ending in `.json`) is read from the song's folder, in the same shape as odawg's
-`styles/*.json`. `spec.style_files` lists the ones a song names, and the host hands each
+`/` or ending in `.json`) is read from the song's folder, in the same shape as
+`examples/styles/*.json`. `spec.style_files` lists the ones a song names, and the host hands each
 one's text back with `spec.spec_add_style_text` before composing. A style the song defines
 itself under `styles` wins over a file of the same name.
 
-### 3.5 Sample sets of your own
+### 3.6 Sample sets of your own
 
 A Sampler's `set` names a set from one of three places, tried in this order:
 
@@ -285,7 +346,7 @@ parts = { bass = { instrument = { "Sampler", set = "fashionbass/fashionbass_clea
 - A style file can bring its own sources and sets, so a style, its mappings and its pins
   can be shared as one folder.
 
-### 3.6 From a file
+### 3.7 From a file
 
 `from = "track.mp3"` builds a song from audio. Tempo, beats and energy come from analysis,
 and `sections = { { "verse", at = 0 }, { "chorus", at = "16m" } }` names spans in the file's
@@ -294,7 +355,7 @@ sections.
 
 `from = "score.odawg"` opens a project a GUI saved. Its sections still resize.
 
-### 3.7 Routing
+### 3.8 Routing
 
 A song is a graph of nodes: each track (its voices and effects), each part (its tracks
 summed), each return, each bus the spec names, and the master. Edges carry sound from one
@@ -336,7 +397,7 @@ New globals, in onimite's idiom:
 
 ```lua
 local score = song { "score", ... }     -- registers clip "score" (and "score/<part>"), its sections and markers as cues
-local name  = sound { "whoosh", duration = 0.5 }                 -- a one-shot: a preset, or
+local name  = sound { "whoosh", duration = 0.5 }                 -- a one-shot: a row by name, or
 local blip  = sound { { "Synth", oscillator = { type = "sine" } }, note = "E6", duration = "16n" }
 -- sound{} returns a clip name, content-hashed, built once however often it plays
 ```

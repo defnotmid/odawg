@@ -220,7 +220,7 @@ table_row :: proc(t: ^Table, step: int) -> []f32 {
 // tails).
 sounding_from_song :: proc(s: ^song.Song, part: i32) -> [][2]f64 {
 	out := make([dynamic][2]f64, context.temp_allocator)
-	env := device.Voice_Env{bank = s.bank}
+	env := song.voice_env(s)
 	for r in s.regions {
 		if part >= 0 && r.part != part {
 			continue

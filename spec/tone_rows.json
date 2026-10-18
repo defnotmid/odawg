@@ -1,0 +1,150 @@
+{
+  "Synth": {
+    "description": "Tone's Synth: an oscillator through an envelope.",
+    "options": {
+      "oscillator/type": "osc/wave", "oscillator/count": "osc/count", "oscillator/spread": "osc/spread", "oscillator/width": "osc/width",
+      "envelope/attack": "env/attack", "envelope/decay": "env/decay", "envelope/sustain": "env/sustain", "envelope/release": "env/release"
+    },
+    "out": "osc",
+    "nodes": {
+      "env": { "class": "Env", "attack": 0.005, "decay": 0.1, "sustain": 0.3, "release": 1 },
+      "osc": { "class": "Osc", "wave": "triangle", "count": 3, "spread": 20, "width": 0.5, "amp": "env" }
+    }
+  },
+  "MonoSynth": {
+    "description": "Tone's MonoSynth: an oscillator through a filter whose cutoff its filter envelope sweeps (linearly from base_frequency to `octaves` above, the envelope raised to `exponent`), then the amplitude envelope.",
+    "options": {
+      "oscillator/type": "osc/wave", "oscillator/count": "osc/count", "oscillator/spread": "osc/spread", "oscillator/width": "osc/width",
+      "envelope/attack": "env/attack", "envelope/decay": "env/decay", "envelope/sustain": "env/sustain", "envelope/release": "env/release",
+      "filter/type": "filter/type", "filter/q": "filter/q", "filter/rolloff": "filter/rolloff", "filter/gain": "filter/gain",
+      "filter_envelope/attack": "fenv/attack", "filter_envelope/decay": "fenv/decay", "filter_envelope/sustain": "fenv/sustain", "filter_envelope/release": "fenv/release",
+      "filter_envelope/base_frequency": "filter/frequency", "filter_envelope/octaves": "filter/frequency/sweep", "filter_envelope/exponent": "filter/frequency/exponent"
+    },
+    "out": "filter",
+    "nodes": {
+      "osc": { "class": "Osc", "wave": "square", "count": 3, "spread": 20, "width": 0.5 },
+      "fenv": { "class": "Env", "attack": 0.6, "decay": 0.2, "sustain": 0.5, "release": 2 },
+      "env": { "class": "Env", "attack": 0.005, "decay": 0.1, "sustain": 0.9, "release": 1 },
+      "filter": {
+        "class": "Filter", "input": "osc", "type": "lowpass", "q": 1, "rolloff": -12,
+        "frequency": { "base": 200, "by": "fenv", "sweep": 3, "exponent": 2 }, "amp": "env"
+      }
+    }
+  },
+  "FMSynth": {
+    "description": "Tone's FMSynth: a modulator at harmonicity times the pitch, through its own envelope, moving the carrier's frequency by modulation_index times its pitch.",
+    "options": {
+      "oscillator/type": "osc/wave", "oscillator/count": "osc/count", "oscillator/spread": "osc/spread", "oscillator/width": "osc/width",
+      "envelope/attack": "env/attack", "envelope/decay": "env/decay", "envelope/sustain": "env/sustain", "envelope/release": "env/release",
+      "modulation/type": "mod/wave",
+      "modulation_envelope/attack": "menv/attack", "modulation_envelope/decay": "menv/decay", "modulation_envelope/sustain": "menv/sustain", "modulation_envelope/release": "menv/release",
+      "harmonicity": "mod/ratio", "modulation_index": "osc/frequency/index"
+    },
+    "out": "osc",
+    "nodes": {
+      "menv": { "class": "Env", "attack": 0.5, "decay": 0, "sustain": 1, "release": 0.5 },
+      "mod": { "class": "Osc", "wave": "square", "count": 3, "spread": 20, "ratio": 3, "amp": "menv" },
+      "env": { "class": "Env", "attack": 0.01, "decay": 0.01, "sustain": 1, "release": 0.5 },
+      "osc": { "class": "Osc", "wave": "sine", "count": 3, "spread": 20, "frequency": { "by": "mod", "index": 10 }, "amp": "env" }
+    }
+  },
+  "AMSynth": {
+    "description": "Tone's AMSynth: a modulator at harmonicity times the pitch, through its own envelope, taken to 0..1 and scaling the carrier's level.",
+    "options": {
+      "oscillator/type": "osc/wave", "oscillator/count": "osc/count", "oscillator/spread": "osc/spread", "oscillator/width": "osc/width",
+      "envelope/attack": "env/attack", "envelope/decay": "env/decay", "envelope/sustain": "env/sustain", "envelope/release": "env/release",
+      "modulation/type": "mod/wave",
+      "modulation_envelope/attack": "menv/attack", "modulation_envelope/decay": "menv/decay", "modulation_envelope/sustain": "menv/sustain", "modulation_envelope/release": "menv/release",
+      "harmonicity": "mod/ratio"
+    },
+    "out": "osc",
+    "nodes": {
+      "menv": { "class": "Env", "attack": 0.5, "decay": 0, "sustain": 1, "release": 0.5 },
+      "mod": { "class": "Osc", "wave": "square", "count": 3, "spread": 20, "ratio": 3, "amp": "menv" },
+      "env": { "class": "Env", "attack": 0.01, "decay": 0.01, "sustain": 1, "release": 0.5 },
+      "osc": { "class": "Osc", "wave": "sine", "count": 3, "spread": 20, "amp": ["env", "mod"] }
+    }
+  },
+  "MembraneSynth": {
+    "description": "Tone's MembraneSynth: its pitch starts `octaves` times higher and falls to the note over pitch_decay; the attack is exponential.",
+    "options": {
+      "oscillator/type": "osc/wave", "oscillator/count": "osc/count", "oscillator/spread": "osc/spread", "oscillator/width": "osc/width",
+      "envelope/attack": "env/attack", "envelope/decay": "env/decay", "envelope/sustain": "env/sustain", "envelope/release": "env/release",
+      "pitch_decay": "fall/time", "octaves": "osc/frequency/ratio"
+    },
+    "out": "osc",
+    "note": 36,
+    "nodes": {
+      "fall": { "class": "Ramp", "from": 1, "to": 0, "time": 0.05 },
+      "env": { "class": "Env", "attack": 0.001, "decay": 0.4, "sustain": 0.01, "release": 1.4, "attack_curve": "exponential" },
+      "osc": { "class": "Osc", "wave": "sine", "count": 3, "spread": 20, "frequency": { "by": "fall", "ratio": 10 }, "amp": "env" }
+    }
+  },
+  "MetalSynth": {
+    "description": "Tone's MetalSynth: six FM pairs of squares at inharmonic ratios of the pitch (harmonicity and modulation_index as in FMSynth), summed through a high-pass the envelope sweeps from `resonance` up `octaves`, and the same envelope on the level.",
+    "options": {
+      "envelope/attack": "env/attack", "envelope/decay": "env/decay", "envelope/sustain": "env/sustain", "envelope/release": "env/release",
+      "harmonicity": [{ "path": "m1/ratio", "scale": 1 }, { "path": "m2/ratio", "scale": 1.483 }, { "path": "m3/ratio", "scale": 1.932 }, { "path": "m4/ratio", "scale": 2.546 }, { "path": "m5/ratio", "scale": 2.63 }, { "path": "m6/ratio", "scale": 3.897 }],
+      "modulation_index": ["c1/frequency/index", "c2/frequency/index", "c3/frequency/index", "c4/frequency/index", "c5/frequency/index", "c6/frequency/index"],
+      "resonance": "filter/frequency", "octaves": "filter/frequency/sweep"
+    },
+    "out": "filter",
+    "note": 55.35,
+    "nodes": {
+      "m1": { "class": "Osc", "wave": "square", "ratio": 5.1 },
+      "m2": { "class": "Osc", "wave": "square", "ratio": 7.5633 },
+      "m3": { "class": "Osc", "wave": "square", "ratio": 9.8532 },
+      "m4": { "class": "Osc", "wave": "square", "ratio": 12.9846 },
+      "m5": { "class": "Osc", "wave": "square", "ratio": 13.413 },
+      "m6": { "class": "Osc", "wave": "square", "ratio": 19.8747 },
+      "c1": { "class": "Osc", "wave": "square", "ratio": 1, "frequency": { "by": "m1", "index": 32 } },
+      "c2": { "class": "Osc", "wave": "square", "ratio": 1.483, "frequency": { "by": "m2", "index": 32 } },
+      "c3": { "class": "Osc", "wave": "square", "ratio": 1.932, "frequency": { "by": "m3", "index": 32 } },
+      "c4": { "class": "Osc", "wave": "square", "ratio": 2.546, "frequency": { "by": "m4", "index": 32 } },
+      "c5": { "class": "Osc", "wave": "square", "ratio": 2.63, "frequency": { "by": "m5", "index": 32 } },
+      "c6": { "class": "Osc", "wave": "square", "ratio": 3.897, "frequency": { "by": "m6", "index": 32 } },
+      "sum": { "class": "Mix", "inputs": ["c1", "c2", "c3", "c4", "c5", "c6"] },
+      "env": { "class": "Env", "attack": 0.001, "decay": 1.4, "sustain": 0, "release": 0.2 },
+      "filter": {
+        "class": "Filter", "input": "sum", "type": "highpass", "q": 0, "rolloff": -12,
+        "frequency": { "base": 4000, "by": "env", "sweep": 1.5 }, "amp": "env", "gain_db": -13.979400086720377
+      }
+    }
+  },
+  "NoiseSynth": {
+    "description": "Tone's NoiseSynth: white, pink or brown noise through an envelope.",
+    "options": {
+      "noise/type": "noise/color",
+      "envelope/attack": "env/attack", "envelope/decay": "env/decay", "envelope/sustain": "env/sustain", "envelope/release": "env/release"
+    },
+    "out": "noise",
+    "nodes": {
+      "env": { "class": "Env", "attack": 0.005, "decay": 0.1, "sustain": 0, "release": 1 },
+      "noise": { "class": "Noise", "color": "white", "amp": "env" }
+    }
+  },
+  "PluckSynth": {
+    "description": "Tone's PluckSynth: Karplus-Strong. A burst of pink noise `attack_noise` periods long into a comb tuned to the note, its feedback `resonance` through a low-pass at `dampening`, fading out over `release` after the gate.",
+    "options": { "attack_noise": "burst/periods", "dampening": "string/damp", "resonance": "string/feedback", "release": "string/release" },
+    "out": "string",
+    "nodes": {
+      "burst": { "class": "Decay", "periods": 1, "time": 0.00005 },
+      "noise": { "class": "Noise", "color": "pink", "amp": "burst" },
+      "string": { "class": "Comb", "input": "noise", "feedback": 0.7, "damp": 4000, "release": 1 }
+    }
+  },
+  "Sampler": {
+    "description": "Tone's Sampler: a sample set's zones, picked by key and velocity and played at the note's pitch, faded in over `attack` and out over `release`.",
+    "options": { "set": "out/set", "attack": "out/attack", "release": "out/release" },
+    "velocity": "none",
+    "nodes": {
+      "out": { "class": "Sampler", "release": 0.1 }
+    }
+  },
+  "Player": {
+    "description": "Tone's Player: a recording played as it was made, from `offset` seconds in, for the note's length, with fades in and out (`curve`: linear or equal_power) and `mono` folding its sides together; velocity is its level.",
+    "options": { "set": "clip/set", "offset": "clip/offset", "fade_in": "clip/fade_in", "fade_out": "clip/fade_out", "curve": "clip/curve", "mono": "clip/mono" },
+    "out": "clip",
+    "nodes": { "clip": { "class": "Clip" } }
+  }
+}

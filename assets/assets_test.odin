@@ -270,8 +270,9 @@ test_register_sanity :: proc(t: ^testing.T) {
 	// a kit answers every pad a song names
 	kit, ok := set_row_from_name("virtuosity/drums")
 	testing.expect(t, ok)
-	for pad in ([]device.Pad{.Kick, .Snare, .Rim, .Hat, .Open_Hat, .Crash, .Ride, .Tom_Low, .Tom_Mid, .Tom_High}) {
-		key := u8(device.note_from_pad(pad))
+	for pad in ([]string{"kick", "snare", "rim", "hat", "open_hat", "crash", "ride", "tom_low", "tom_mid", "tom_high"}) {
+		gm, _ := device.gm_key(pad)
+		key := u8(gm)
 		found := false
 		for z in set_zones(kit) {
 			found ||= z.lo_key <= key && key <= z.hi_key && z.one_shot

@@ -44,7 +44,7 @@ Sink :: struct {
 // Seconds of sound past the last section: release tails and reverbs.
 tail_from_song :: proc(s: ^song.Song) -> f64 {
 	end := s.duration
-	env := device.Voice_Env{bank = s.bank}
+	env := song.voice_env(s)
 	for t in s.tracks {
 		fx := chain_tail(s, t.chain)
 		ret := 0.0
@@ -86,7 +86,7 @@ chain_tail :: proc(s: ^song.Song, c: base.Span) -> f64 {
 
 note_from_row :: proc(s: ^song.Song, i: int) -> device.Note {
 	n := s.notes[i]
-	return {n.time, n.duration, n.pitch, n.velocity, n.pad}
+	return {n.time, n.duration, n.pitch, n.velocity, n.pad, n.accent}
 }
 
 // The master's lookahead in samples (its chain's latency).

@@ -3,6 +3,7 @@ package odawg_spec
 import "core:mem/virtual"
 import "core:testing"
 import base "../base"
+import device "../device"
 import dsp "../dsp"
 
 @(private = "file")
@@ -42,31 +43,95 @@ test_read :: proc(t: ^testing.T) {
 	testing.expect(t, toks[3].text == "." && toks[3].at == 2)
 }
 
-// A device is read from dsp's tables alone: nested options by `/` path among
-// the params its kind reads, a string for a table's type, Tone lengths kept
-// in beats until the part's tempo is known, defaults for the rest.
+// An instrument is a row: a built-in one's options by Tone's paths (a
+// string for a table's type, Tone lengths in beats until the part's tempo is
+// known), the rest its nodes' defaults; an option it hasn't is a finding at
+// the part, and a name that isn't an instrument too. An effect is still a
+// device from its table.
 @(test)
-test_devices :: proc(t: ^testing.T) {
+test_rows :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	_ = virtual.arena_init_growing(&arena)
 	defer virtual.arena_destroy(&arena)
 	context.allocator = virtual.arena_allocator(&arena)
 	s: Spec
 	fs := make(base.Findings)
-	spec_init(&s)
-	r := Reader{&s, &fs}
-	d := device_from_value(&r, map_value(`{ name: "MonoSynth", oscillator: { type: "fatsawtooth", count: 5 }, envelope: { release: "8n" }, filter: { cutoff: 3 } }`), "x")
-	testing.expect(t, d >= 0)
-	testing.expect(t, find(fs, "unknown_key", "x/filter/cutoff"))
-	p, _ := params_from_device(&s, d, 0.5)
-	testing.expect_value(t, dsp.Wave(p[.Oscillator_Type]), dsp.Wave.Fat_Sawtooth)
-	testing.expect_value(t, p[.Oscillator_Count], 5)
-	testing.expect_value(t, p[.Envelope_Release], 0.25) // half a beat at 0.5 s a beat
-	testing.expect_value(t, p[.Envelope_Attack], 0.005) // Tone's default
-	n := device_from_value(&r, map_value(`{ name: "NoiseSynth", noise: "pink" }`), "y")
-	pn, _ := params_from_device(&s, n, 0.5)
-	testing.expect_value(t, dsp.Noise_Type(pn[.Noise_Type]), dsp.Noise_Type.Pink)
-	testing.expect_value(t, device_from_value(&r, map_value(`"Theremin"`), "z"), -1)
+	testing.expect(t, spec_from_json(`{ parts: {
+		x: { instrument: { name: "MonoSynth", oscillator: { type: "fatsawtooth", count: 5 }, envelope: { release: "8n" }, filter: { cutoff: 3 } } },
+		y: { instrument: { name: "NoiseSynth", noise: "pink" } },
+		z: { instrument: "Theremin" },
+		w: { instrument: "Synth", effects: [ { name: "Reverb", decay: 3 } ] } } }`, &s, &fs))
+	progs: device.Programs
+	at :: proc(s: ^Spec, part: string) -> i32 {
+		for p in s.parts {
+			if p.name == part {
+				return p.instrument
+			}
+		}
+		return -1
+	}
+	node :: proc(progs: ^device.Programs, program: i32, kind: string) -> ^device.Graph_Node {
+		p := progs.programs[program]
+		for &n in progs.nodes[p.nodes.first:base.span_end(p.nodes)] {
+			if device.node_row(n.kind).name == kind {
+				return &n
+			}
+		}
+		return nil
+	}
+	x := instrument_program(&s, at(&s, "x"), 0.5, nil, &progs, &fs)
+	testing.expect(t, x >= 0)
+	testing.expect(t, find(fs, "unknown_key", "parts/x/instrument/filter/cutoff"))
+	osc := node(&progs, x, "Osc")
+	testing.expect_value(t, dsp.Wave(osc.values[3]), dsp.Wave.Fat_Sawtooth)
+	testing.expect_value(t, osc.values[4], 5)
+	testing.expect(t, osc.stereo)
+	release := 0
+	for &n in progs.nodes[progs.programs[x].nodes.first:base.span_end(progs.programs[x].nodes)] {
+		if device.node_row(n.kind).name == "Env" && n.values[6] == 0.25 { // half a beat at 0.5 s a beat
+			release += 1
+		}
+	}
+	testing.expect_value(t, release, 1)
+	y := instrument_program(&s, at(&s, "y"), 0.5, nil, &progs, &fs)
+	testing.expect_value(t, dsp.Noise_Type(node(&progs, y, "Noise").values[3]), dsp.Noise_Type.Pink)
+	testing.expect_value(t, instrument_program(&s, at(&s, "z"), 0.5, nil, &progs, &fs), -1)
+	testing.expect(t, find(fs, "unknown_instrument", "parts/z/instrument"))
+	for p in s.parts {
+		if p.name == "w" {
+			testing.expect_value(t, s.devices[s.chain[p.effects.first]].kind, device.Device_Kind.Reverb)
+		}
+	}
+}
+
+// A row's meaning doesn't hang on the order of its keys: the same nodes
+// written in any order place into the same program (only what reads what
+// orders them).
+@(test)
+test_row_order :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	_ = virtual.arena_init_growing(&arena)
+	defer virtual.arena_destroy(&arena)
+	context.allocator = virtual.arena_allocator(&arena)
+	orders := [?]string {
+		`{ parts: { a: { instrument: { nodes: { out: { class: "Filter", input: "saw", frequency: { base: 300, by: "env", octaves: 3 }, amp: "env" }, env: { class: "Env", decay: 0.3 }, saw: { class: "Osc", wave: "sawtooth" }, lfo: { class: "Lfo", rate: 5 }, vib: { class: "Mix", inputs: ["lfo"] } } } } } }`,
+		`{ parts: { a: { instrument: { nodes: { saw: { class: "Osc", wave: "sawtooth" }, vib: { class: "Mix", inputs: ["lfo"] }, env: { class: "Env", decay: 0.3 }, lfo: { class: "Lfo", rate: 5 }, out: { amp: "env", frequency: { by: "env", octaves: 3, base: 300 }, input: "saw", class: "Filter" } } } } } }`,
+	}
+	got: [2][dynamic]device.Graph_Node
+	for text, k in orders {
+		s: Spec
+		fs := make(base.Findings)
+		testing.expect(t, spec_from_json(text, &s, &fs))
+		progs: device.Programs
+		p := instrument_program(&s, s.parts[0].instrument, 0.5, nil, &progs, &fs)
+		testing.expect(t, p >= 0)
+		got[k] = progs.nodes
+		testing.expect_value(t, progs.programs[p].nodes.count, 3) // the unheard lfo and vib left out
+	}
+	testing.expect_value(t, len(got[0]), len(got[1]))
+	for n, i in got[0] {
+		testing.expectf(t, n == got[1][i], "node %d differs", i)
+	}
 }
 
 @(private = "file")

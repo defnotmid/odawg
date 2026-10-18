@@ -2,6 +2,7 @@ package odawg_device
 
 import "core:math"
 import "core:testing"
+import base "../base"
 
 // A bank built by hand: one set whose samples are sines (or noise), so a
 // test knows what a note must sound like.
@@ -36,20 +37,27 @@ add_set :: proc(b: ^Bank, name: string, zones: []Zone) -> int {
 // Renders a note into a buffer of `total` samples in blocks of `block` (0:
 // one call), as the engine does.
 @(private = "file")
-play :: proc(b: ^Bank, set: int, n: Note, total: int, block := 0, seed: u64 = 1, p: Maybe(Params) = nil) -> (l, r: []f32, calls_alive: bool) {
-	params := p.? or_else params_from_kind(.Sampler)
-	params[.Sample_Set] = f32(set)
+play :: proc(b: ^Bank, set: int, n: Note, total: int, block := 0, seed: u64 = 1, p: Maybe(Params) = nil, key: f32 = 0) -> (l, r: []f32, calls_alive: bool) {
+	params := p.? or_else sampler_params()
 	l = make([]f32, total, context.temp_allocator)
 	r = make([]f32, total, context.temp_allocator)
-	state := new(Voice_State, context.temp_allocator)
+	state: Sampler_State
 	env := Voice_Env{bank = b}
+	sampler_start(&state, i32(set), params[.Attack], params[.Release], key > 0 ? key : n.pitch, n, seed, &env)
 	step := block > 0 ? block : total
 	alive := true
 	for at := 0; at < total && alive; at += step {
 		end := min(at + step, total)
-		alive = voice_sampler(state, &params, n, seed, i64(at), &env, l[at:end], r[at:end])
+		alive = sampler_play(&state, i64(at), &env, l[at:end], r[at:end])
 	}
 	return l, r, alive
+}
+
+// The Sampler node's defaults: no attack, a 0.1 s release.
+@(private = "file")
+sampler_params :: proc() -> (p: Params) {
+	p[.Release] = 0.1
+	return
 }
 
 // Frequency from zero crossings (linear interpolation between samples).
@@ -155,11 +163,12 @@ test_sampler_block_split :: proc(t: ^testing.T) {
 		{sample = s, lo_key = 0, hi_key = 63, root = 60, hi_velocity = 127, gain = 0.8, pan = 0.3},
 		{sample = looped, lo_key = 64, hi_key = 127, root = 64, hi_velocity = 127, gain = 1, loop_from = 192, loop_to = 192 + 192 * 40},
 	})
-	p := params_from_kind(.Sampler)
+	p := sampler_params()
 	p[.Attack] = 0.01
 	p[.Release] = 0.05
 	for n in ([]Note{{pitch = 63.3, velocity = 0.7, duration = 0.2}, {pitch = 70, velocity = 0.9, duration = 0.5}, {pitch = 48, velocity = 0.4, duration = 0.05}}) {
-		total := int(note_tail(.Sampler, &p, n) * RATE) + 100
+		env := Voice_Env{bank = &b}
+		total := int(tail_sampler(0, p[.Release], n.pitch, n, &env) * RATE) + 100
 		wl, wr, _ := play(&b, 0, n, total, 0, 9, p)
 		for block in ([]int{1, 37, 64, 1000, 4097}) {
 			l, r, _ := play(&b, 0, n, total, block, 9, p)
@@ -187,7 +196,7 @@ test_sampler_envelope_and_end :: proc(t: ^testing.T) {
 		{sample = looped, lo_key = 60, hi_key = 70, root = 60, hi_velocity = 127, gain = 1, loop_from = 240, loop_to = 240 * 41},
 		{sample = s, lo_key = 71, hi_key = 127, root = 71, hi_velocity = 127, gain = 1, one_shot = true},
 	})
-	p := params_from_kind(.Sampler)
+	p := sampler_params()
 	p[.Release] = 0.1
 	// held past its sample's end: an unlooped sample stops with it
 	l, _, alive := play(&b, set, {pitch = 59, velocity = 1, duration = 1}, RATE, 512, 1, p)
@@ -220,24 +229,22 @@ test_sampler_pads :: proc(t: ^testing.T) {
 		{sample = kick, lo_key = 36, hi_key = 36, root = 36, hi_velocity = 127, gain = 1, one_shot = true},
 		{sample = snare, lo_key = 38, hi_key = 38, root = 38, hi_velocity = 127, gain = 1, one_shot = true},
 	})
-	l, _, _ := play(&b, set, {pad = .Snare, velocity = 1, duration = 0.01}, RATE / 10)
+	l, _, _ := play(&b, set, {pad = base.name_id("snare"), velocity = 1, duration = 0.01}, RATE / 10, key = 38)
 	testing.expect(t, abs(frequency(l[100:]) - 300) < 1)
-	l2, _, _ := play(&b, set, {pad = .Kick, velocity = 1, duration = 0.01}, RATE / 10)
+	l2, _, _ := play(&b, set, {pad = base.name_id("kick"), velocity = 1, duration = 0.01}, RATE / 10, key = 36)
 	testing.expect(t, abs(frequency(l2[100:]) - 60) < 0.5)
 	// a pad with a pitch plays the pad's sample at that pitch
-	l3, _, _ := play(&b, set, {pad = .Snare, pitch = 50, velocity = 1, duration = 0.01}, RATE / 10)
+	l3, _, _ := play(&b, set, {pad = base.name_id("snare"), pitch = 50, velocity = 1, duration = 0.01}, RATE / 10, key = 38)
 	testing.expect(t, abs(frequency(l3[100:]) - 600) < 2)
-	params := params_from_kind(.Sampler)
-	testing.expect(t, tail_sampler(&params, {pad = .Kick}, nil) == SAMPLER_ONE_SHOT_TAIL) // not loaded: a guess
+	testing.expect(t, tail_sampler(i32(set), 0.1, 36, {pad = base.name_id("kick")}, nil) == SAMPLER_ONE_SHOT_TAIL) // not loaded: a guess
 	// loaded: the sample's own length (and the kernel's reach), and nothing after it
-	params[.Sample_Set] = f32(set)
 	env := Voice_Env{bank = &b}
-	kick_tail := tail_sampler(&params, {pad = .Kick, velocity = 1}, &env)
+	kick_tail := tail_sampler(i32(set), 0.1, 36, {pad = base.name_id("kick"), velocity = 1}, &env)
 	testing.expectf(t, kick_tail >= 0.2 && kick_tail < 0.21, "a 0.2 s kick's tail is %f", kick_tail)
-	l4, _, _ := play(&b, set, {pad = .Kick, velocity = 1, duration = 0.01}, RATE / 2)
+	l4, _, _ := play(&b, set, {pad = base.name_id("kick"), velocity = 1, duration = 0.01}, RATE / 2, key = 36)
 	testing.expect(t, rms(l4[int(math.ceil(kick_tail * RATE)):]) == 0)
 	// a held note on a sample that doesn't loop: cut by the sample's end
-	held := tail_sampler(&params, {pitch = 36, velocity = 1, duration = 2}, &env)
+	held := tail_sampler(i32(set), 0.1, 36, {pitch = 36, velocity = 1, duration = 2}, &env)
 	testing.expectf(t, abs(held - kick_tail) < 1e-9, "held %f", held)
 }
 

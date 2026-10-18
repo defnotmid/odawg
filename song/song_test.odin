@@ -8,6 +8,27 @@ import base "../base"
 import device "../device"
 import spec "../spec"
 
+// The example files (examples/): styles, instruments and machines, at the
+// paths a song in examples/ names them by.
+@(private = "file")
+FILES := [?]struct {
+	path, text: string,
+	style:      bool,
+} {
+	{"styles/acid_house.json", #load("../examples/styles/acid_house.json", string), true},
+	{"styles/ambient.json", #load("../examples/styles/ambient.json", string), true},
+	{"styles/booty_house.json", #load("../examples/styles/booty_house.json", string), true},
+	{"styles/chicago_house.json", #load("../examples/styles/chicago_house.json", string), true},
+	{"styles/house.json", #load("../examples/styles/house.json", string), true},
+	{"styles/lofi.json", #load("../examples/styles/lofi.json", string), true},
+	{"styles/synthwave.json", #load("../examples/styles/synthwave.json", string), true},
+	{"instruments/classic.json", #load("../examples/instruments/classic.json", string), false},
+	{"instruments/tb303.json", #load("../examples/instruments/tb303.json", string), false},
+	{"instruments/808_bass.json", #load("../examples/instruments/808_bass.json", string), false},
+	{"machines/808.json", #load("../examples/machines/808.json", string), false},
+	{"machines/909.json", #load("../examples/machines/909.json", string), false},
+}
+
 @(private = "file")
 compose :: proc(t: ^testing.T, text: string, arena: ^virtual.Arena) -> ^Song {
 	_ = virtual.arena_init_growing(arena)
@@ -15,6 +36,13 @@ compose :: proc(t: ^testing.T, text: string, arena: ^virtual.Arena) -> ^Song {
 	s := new(spec.Spec)
 	findings := make(base.Findings)
 	testing.expect(t, spec.spec_from_json(text, s, &findings))
+	for f in FILES {
+		if f.style {
+			spec.spec_add_style_text(s, f.path, f.text, &findings)
+		} else {
+			spec.spec_add_instrument_text(s, f.path, f.text, &findings)
+		}
+	}
 	out := new(Song)
 	testing.expect(t, song_from_spec(s, out))
 	append(&out.findings, ..findings[:])
@@ -87,7 +115,7 @@ test_arrangement :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	defer virtual.arena_destroy(&arena)
 	s := compose(t, `{ key: "A minor", sections: [
-		{ name: "drop", duration: "2m", bpm: 120, style: "house", energy: 1, chords: "Am F" } ],
+		{ name: "drop", duration: "2m", bpm: 120, style: "styles/house.json", energy: 1, chords: "Am F" } ],
 		parts: { bass: { play: [ { name: "drop", steps: "xxxx", note: "A1" } ] } } }`, &arena)
 	kicks := make([dynamic]i32, context.temp_allocator)
 	testing.expect(t, notes_from_filter(s, {part = "drums", note = "kick"}, &kicks))
@@ -108,7 +136,7 @@ test_arrangement :: proc(t: ^testing.T) {
 // The same spec composes to the same notes.
 @(test)
 test_deterministic :: proc(t: ^testing.T) {
-	text := `{ seed: 3, sections: [ { name: "a", duration: "4m", style: "lofi", energy: 0.6, chords: "Am7 Fmaj7" } ] }`
+	text := `{ seed: 3, sections: [ { name: "a", duration: "4m", style: "styles/lofi.json", energy: 0.6, chords: "Am7 Fmaj7" } ] }`
 	a1, a2: virtual.Arena
 	defer virtual.arena_destroy(&a1)
 	defer virtual.arena_destroy(&a2)
@@ -125,7 +153,7 @@ test_deterministic :: proc(t: ^testing.T) {
 test_energy_bands :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	defer virtual.arena_destroy(&arena)
-	s := compose(t, `{ sections: [ { name: "a", duration: "2m", bpm: 120, style: "house", energy: 0.7, chords: "Am F" } ] }`, &arena)
+	s := compose(t, `{ sections: [ { name: "a", duration: "2m", bpm: 120, style: "styles/house.json", energy: 0.7, chords: "Am F" } ] }`, &arena)
 	kicks := make([dynamic]i32, context.temp_allocator)
 	notes_from_filter(s, {part = "drums", note = "kick"}, &kicks)
 	testing.expect_value(t, len(kicks), 8) // one a beat, not the two bands' both
@@ -133,7 +161,10 @@ test_energy_bands :: proc(t: ^testing.T) {
 	styles: virtual.Arena
 	_ = virtual.arena_init_growing(&styles)
 	defer virtual.arena_destroy(&styles)
-	for style in STYLE_TABLE {
+	for style in FILES {
+		if !style.style {
+			continue
+		}
 		context.allocator = virtual.arena_allocator(&styles)
 		st := new(spec.Spec)
 		findings := make(base.Findings)
@@ -144,12 +175,12 @@ test_energy_bands :: proc(t: ^testing.T) {
 				continue
 			}
 			a: virtual.Arena
-			x := compose(t, fmt.tprint(`{ sections: [ { name: "a", duration: "4m", bpm: 120, style: "`, style.name, `", energy: `, e, `, chords: "Am F C G" } ] }`, sep = ""), &a)
+			x := compose(t, fmt.tprint(`{ sections: [ { name: "a", duration: "4m", bpm: 120, style: "`, style.path, `", energy: `, e, `, chords: "Am F C G" } ] }`, sep = ""), &a)
 			seen := make(map[[4]f64]bool, context.temp_allocator)
 			for i in 0 ..< len(x.notes) {
 				n := x.notes[i]
 				key := [4]f64{f64(n.track), n.beat, f64(n.pad), f64(n.pitch)}
-				if !testing.expectf(t, !seen[key], "%s at %v: %s plays twice at beat %v", style.name, e, x.parts[x.tracks[n.track].part], n.beat) {
+				if !testing.expectf(t, !seen[key], "%s at %v: %s plays twice at beat %v", style.path, e, x.parts[x.tracks[n.track].part], n.beat) {
 					break
 				}
 				seen[key] = true
@@ -159,53 +190,68 @@ test_energy_bands :: proc(t: ^testing.T) {
 	}
 }
 
-// A fill rolls the snare on a drum machine as on a kit.
+// A fill rolls the pad its transition_part names, on any instrument that
+// has it (here the 909 written out), in place of that pad's hits there.
 @(test)
 test_fill_drum_machine :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	defer virtual.arena_destroy(&arena)
 	s := compose(t, `{ sections: [
-		{ name: "a", duration: "2m", bpm: 120, style: "house", energy: 0.8, chords: "Am" },
-		{ name: "b", duration: "2m" } ],
-		parts: { drums: { instrument: { name: "DrumMachine", machine: "909" } } } }`, &arena)
+		{ name: "a", duration: "2m", bpm: 120, style: "styles/house.json", energy: 0.8, chords: "Am" },
+		{ name: "b", duration: "2m", transition: "fill", transition_part: "drums/snare" } ],
+		parts: { drums: { instrument: "machines/909.json" } } }`, &arena)
 	roll := 0
 	for i in 0 ..< len(s.notes) {
 		n := s.notes[i]
 		tr := s.tracks[n.track]
-		if s.parts[tr.part] == "drums" && n.pad == .Snare && n.beat >= 7 - 1e-9 && n.beat < 8 {
-			testing.expect_value(t, s.devices[tr.instrument], device.Device_Kind.Drum_Machine)
+		if s.parts[tr.part] == "drums" && n.pad == base.name_id("snare") && n.beat >= 7 - 1e-9 && n.beat < 8 {
 			roll += 1
 		}
 	}
 	testing.expect_value(t, roll, 4)
 }
 
-// The transitions play on the song's own fx part, at its level, through its
-// effects and sends, rather than on a second "fx".
+// Transitions are opt-in: a rise in energy adds nothing by itself. A riser
+// and an impact play on the section's transition_part, at its level,
+// through its effects and sends, on the root of the chord they land on; a
+// riser without a part is a finding.
 @(test)
-test_fx_part :: proc(t: ^testing.T) {
+test_transition_part :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	defer virtual.arena_destroy(&arena)
-	s := compose(t, `{ sections: [
-		{ name: "a", duration: "2m", bpm: 120, style: "house", energy: 0.2, chords: "Am" },
-		{ name: "b", duration: "2m", energy: 1 } ],
-		parts: { fx: { gain_db: -20, effects: [ { name: "Filter", type: "lowpass", frequency: 2000 } ], sends: { hall: -12 } } } }`, &arena)
-	fx := 0
-	for n in s.parts {
-		fx += n == "fx" ? 1 : 0
+	plain := compose(t, `{ sections: [
+		{ name: "a", duration: "2m", bpm: 120, style: "styles/house.json", energy: 0.2, chords: "Am" },
+		{ name: "b", duration: "2m", energy: 1, chords: "F" } ] }`, &arena)
+	testing.expect_value(t, part_index(plain, "fx"), -1)
+	for r in plain.regions {
+		testing.expect(t, r.source != "sections/b/transition")
 	}
-	testing.expect_value(t, fx, 1)
-	sounds := 0
+
+	arena2: virtual.Arena
+	defer virtual.arena_destroy(&arena2)
+	s := compose(t, `{ sections: [
+		{ name: "a", duration: "2m", bpm: 120, style: "styles/house.json", energy: 0.2, chords: "Am" },
+		{ name: "b", duration: "2m", energy: 1, chords: "F", transition: "riser", transition_part: "sweep" },
+		{ name: "c", duration: "2m", transition: "impact", transition_part: "sweep" },
+		{ name: "d", duration: "2m", transition: "riser" } ],
+		parts: { sweep: { instrument: { name: "NoiseSynth", envelope: { attack: 2, sustain: 1 } }, octave: 3, gain_db: -20,
+			effects: [ { name: "Filter", type: "lowpass", frequency: 2000 } ], sends: { hall: -12 } } } }`, &arena2)
+	sweep := part_index(s, "sweep")
+	notes := 0
 	for tr in s.tracks {
-		if s.parts[tr.part] != "fx" || tr.notes.count == 0 {
+		if int(tr.part) != sweep {
 			continue
 		}
-		sounds += 1 // the riser, the impact and the crash
 		testing.expect_value(t, tr.gain_db, -20 + s.gain_db)
 		testing.expect_value(t, tr.chain.count, 1)
 		testing.expect_value(t, tr.sends.count, 1)
+		for i in tr.notes.first ..< base.span_end(tr.notes) {
+			testing.expect_value(t, s.notes.pitch[i], 53) // F3: the chord b lands on
+			notes += 1
+		}
 	}
-	testing.expect_value(t, sounds, 3)
+	testing.expect_value(t, notes, 2) // the riser into b, the impact at c
+	testing.expect(t, has(s, "transition_needs_part")) // d's
 }
 
 // A pulse with a range reads only the notes in it.
@@ -214,7 +260,7 @@ test_pulse_range :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	defer virtual.arena_destroy(&arena)
 	s := compose(t, `{ sections: [
-		{ name: "a", duration: "2m", bpm: 120, style: "house", energy: 1, chords: "Am" },
+		{ name: "a", duration: "2m", bpm: 120, style: "styles/house.json", energy: 1, chords: "Am" },
 		{ name: "b", duration: "2m" } ] }`, &arena)
 	testing.expect_value(t, pulse_from_seconds(s, 0.5, {part = "drums", note = "kick"}, 8), 1)
 	testing.expect_value(t, pulse_from_seconds(s, 0.5, {part = "drums", note = "kick", range = "b"}, 8), 0)
@@ -228,15 +274,15 @@ test_own_style :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	defer virtual.arena_destroy(&arena)
 	s := compose(t, `{ styles: { footwork: { swing: 0.1, parts: {
-		drums: { instrument: { name: "DrumMachine", machine: "808" }, play: [ { steps: { kick: "x..x..x.x..x..x.", clap: "....x.......x..." } } ] },
-		bass: { instrument: "sub", play: [ { degrees: "1 - - 5", subdivision: "4n" } ] } } } },
+		drums: { instrument: "machines/808.json", play: [ { steps: { kick: "x..x..x.x..x..x.", clap: "....x.......x..." } } ] },
+		bass: { instrument: { name: "Synth", oscillator: { type: "sine" } }, play: [ { degrees: "1 - - 5", subdivision: "4n" } ] } } } },
 		sections: [ { name: "a", duration: "2m", bpm: 160, style: "footwork", chords: "Fm Db" } ] }`, &arena)
 	testing.expect(t, !has(s, "unknown_style"))
 	testing.expect(t, part_index(s, "drums") >= 0 && part_index(s, "bass") >= 0)
 	kicks := 0
 	for ti in s.tracks {
 		for i in ti.notes.first ..< base.span_end(ti.notes) {
-			if s.notes.pad[i] == .Kick {
+			if s.notes.pad[i] == base.name_id("kick") {
 				kicks += 1
 			}
 		}
@@ -256,10 +302,12 @@ test_regions :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	defer virtual.arena_destroy(&arena)
 	s := compose(t, `{ bpm: 120, sections: [
-		{ name: "a", duration: "2m", style: "house", energy: 0.5 },
-		{ name: "b", duration: "2m", style: "house", energy: 0.5 },
-		{ name: "c", duration: "2m", style: "house", energy: 1, transition: "impact" } ],
-		parts: { lead: { instrument: "pluck", play: [ { name: "a", notes: "C5 E5" }, { name: "c", notes: "G5" } ] } } }`, &arena)
+		{ name: "a", duration: "2m", style: "styles/house.json", energy: 0.5 },
+		{ name: "b", duration: "2m", style: "styles/house.json", energy: 0.5 },
+		{ name: "c", duration: "2m", style: "styles/house.json", energy: 1, transition: "riser", transition_part: "fx" } ],
+		parts: {
+			fx: { instrument: { name: "NoiseSynth" } },
+			lead: { instrument: { name: "Synth" }, play: [ { name: "a", notes: "C5 E5" }, { name: "c", notes: "G5" } ] } } }`, &arena)
 	lead := part_index(s, "lead")
 	drums := part_index(s, "drums")
 	fx := part_index(s, "fx")
@@ -283,31 +331,151 @@ test_regions :: proc(t: ^testing.T) {
 		found ||= x == {0, 8}
 	}
 	testing.expectf(t, found, "drums regions %v", d)
-	testing.expect(t, len(spans(s, fx)) == 2) // the riser into c, the impact at it
+	testing.expect(t, len(spans(s, fx)) == 1) // the riser into c
 	for i in 1 ..< len(s.regions) {
 		a, b := s.regions[i - 1], s.regions[i]
 		testing.expect(t, a.part < b.part || (a.part == b.part && a.start <= b.start))
 	}
 }
 
-// A section's fill rolls on the drums part, not on another drum machine
+// A section's fill rolls on the part it names, not on another drum machine
 // that happens to come first (a crash of its own).
 @(test)
 test_fill_on_drums :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	defer virtual.arena_destroy(&arena)
-	s := compose(t, `{ bpm: 120, sections: [ { name: "a", duration: "2m", energy: 0.6 }, { name: "b", duration: "2m", energy: 0.6 } ],
+	s := compose(t, `{ bpm: 120, sections: [ { name: "a", duration: "2m", energy: 0.6 }, { name: "b", duration: "2m", energy: 0.6, transition: "fill", transition_part: "drums/snare" } ],
 		parts: {
-			crash: { instrument: { name: "DrumMachine", machine: "909" }, play: [ { name: "a..b", steps: { crash: "x..............." } } ] },
-			drums: { instrument: { name: "DrumMachine", machine: "909" }, play: [ { name: "a..b", steps: { kick: "x...x...x...x...", snare: "....x.......x..." } } ] } } }`, &arena)
+			crash: { instrument: "machines/909.json", play: [ { name: "a..b", steps: { crash: "x..............." } } ] },
+			drums: { instrument: "machines/909.json", play: [ { name: "a..b", steps: { kick: "x...x...x...x...", snare: "....x.......x..." } } ] } } }`, &arena)
 	rolls := [2]int{}
 	last := 8.0 - 1 // the beat before b
 	for tr in s.tracks {
 		for i in tr.notes.first ..< base.span_end(tr.notes) {
-			if s.notes.pad[i] == .Snare && s.notes.beat[i] >= last - 1e-9 && s.notes.beat[i] < 8 - 1e-9 {
+			if s.notes.pad[i] == base.name_id("snare") && s.notes.beat[i] >= last - 1e-9 && s.notes.beat[i] < 8 - 1e-9 {
 				rolls[0 if s.parts[tr.part] == "drums" else 1] += 1
 			}
 		}
 	}
 	testing.expectf(t, rolls[0] == 4 && rolls[1] == 0, "the roll's snares: %d on drums, %d elsewhere", rolls[0], rolls[1])
+}
+
+// A part's name means nothing: two parts written the same play the same
+// (one level, octave and room for what they leave out), and a part with no
+// instrument doesn't play, with a finding at its path.
+@(test)
+test_no_meaning_in_names :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	s := compose(t, `{ sections: [ { name: "a", duration: "1m", bpm: 120, chords: "Am" } ],
+		parts: {
+			bass: { instrument: { name: "Synth" }, play: [ { name: "a", degrees: "1 . . .", subdivision: "4n" } ] },
+			zz: { instrument: { name: "Synth" }, play: [ { name: "a", degrees: "1 . . .", subdivision: "4n" } ] },
+			lead: { play: [ { name: "a", notes: "C5" } ] } } }`, &arena)
+	bass, zz := part_index(s, "bass"), part_index(s, "zz")
+	tb, tz := -1, -1
+	for tr, i in s.tracks {
+		if int(tr.part) == bass {
+			tb = i
+		}
+		if int(tr.part) == zz {
+			tz = i
+		}
+		testing.expect(t, s.parts[tr.part] != "lead")
+	}
+	testing.expect(t, tb >= 0 && tz >= 0)
+	a, b := s.tracks[tb], s.tracks[tz]
+	testing.expect(t, a.gain_db == b.gain_db && a.room == b.room && a.gain_db == PART_GAIN_DB + s.gain_db && a.room == PART_ROOM_DB)
+	testing.expect_value(t, s.notes.pitch[a.notes.first], s.notes.pitch[b.notes.first])
+	testing.expect_value(t, s.notes.pitch[a.notes.first], f32(69)) // A4: octave 4
+	found := false
+	for f in s.findings {
+		found ||= f.code == "no_instrument" && f.path == "parts/lead" && f.severity == .Warning
+	}
+	testing.expect(t, found)
+}
+
+// A machine plays what its row writes: its pads by any name at their keys
+// (a GM name's, else the lowest free), each a program of its own, with what
+// they choke; steps naming a pad it hasn't are a finding at the entry, and
+// don't play; a mix moves the programs past those already there.
+@(test)
+test_machine :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	s := compose(t, `{ sections: [ { name: "a", duration: "1m", bpm: 120 } ],
+		parts: { foley: { instrument: { pads: {
+			door: { nodes: { out: { class: "Noise", amp: "env" }, env: { class: "Decay", time: 0.05 } } },
+			kick: { name: "MembraneSynth", envelope: { decay: 0.2 } },
+			glass: { key: "C6", choke: "door", nodes: { out: { class: "Osc", wave: "sine", frequency: 2000, amp: "env" }, env: { class: "Decay", time: 0.3 } } } } },
+			play: [ { name: "a", steps: { door: "x...x...x...x...", glass: "..x...x...x...x.", kick: "x.......", pot: "x" } } ] } } }`, &arena)
+	testing.expect_value(t, len(s.tracks), 1)
+	program := i32(s.params[s.tracks[0].instrument][.Program])
+	machine := s.programs.programs[program]
+	testing.expect_value(t, machine.pads.count, 3)
+	keys := make(map[u32]f32, context.temp_allocator)
+	for pr in s.programs.pads[machine.pads.first:base.span_end(machine.pads)] {
+		keys[pr.pad] = pr.key
+		if pr.pad == base.name_id("glass") {
+			testing.expect_value(t, s.programs.chokes[pr.chokes.first], base.name_id("door"))
+		}
+	}
+	testing.expect_value(t, keys[base.name_id("kick")], 36) // General MIDI's
+	testing.expect_value(t, keys[base.name_id("glass")], 84)
+	testing.expect_value(t, keys[base.name_id("door")], 0) // the lowest free
+	testing.expect_value(t, len(s.notes), 4 + 4 + 1)
+	found := false
+	for f in s.findings {
+		found ||= f.code == "unknown_pad" && f.path == "parts/foley/play/1/steps/pot"
+	}
+	testing.expect(t, found)
+
+	context.allocator = virtual.arena_allocator(&arena)
+	m: Song
+	mix_init(&m)
+	append_song(&m, s, 0, "a")
+	append_song(&m, s, 2, "b")
+	testing.expect_value(t, len(m.programs.programs), 2 * len(s.programs.programs))
+	second := i32(m.params[m.tracks[1].instrument][.Program])
+	testing.expect_value(t, second, program + i32(len(s.programs.programs)))
+	for pr in m.programs.pads[m.programs.programs[second].pads.first:][:3] {
+		testing.expect(t, pr.program >= i32(len(s.programs.programs)))
+	}
+}
+
+// What a row gets wrong is a finding at the path where it was written: a
+// node kind that isn't one, a wire to nothing, a loop, no out, a name that
+// isn't an instrument here (with the ones that are).
+@(test)
+test_row_findings :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	s := compose(t, `{ sections: [ { name: "a", duration: "1m", bpm: 120 } ],
+		instruments: {
+			kick: { nodes: { out: { class: "Mix", inputs: ["body"] }, body: { class: "Osc", frequency: { by: "fall", octaves: 2 } } } },
+			loop: { nodes: { out: { class: "Mix", inputs: ["a"] }, a: { class: "Filter", input: "b" }, b: { class: "Filter", input: "a" } } },
+			odd: { nodes: { out: { class: "Wobble" } } },
+			mute: { nodes: { x: { class: "Osc" } } } },
+		parts: {
+			a: { instrument: "kick", play: [ { name: "a", notes: "C4" } ] },
+			b: { instrument: "loop", play: [ { name: "a", notes: "C4" } ] },
+			c: { instrument: "odd", play: [ { name: "a", notes: "C4" } ] },
+			d: { instrument: "mute", play: [ { name: "a", notes: "C4" } ] },
+			e: { instrument: "nope", play: [ { name: "a", notes: "C4" } ] } } }`, &arena)
+	want := [?]struct {
+		code, path: string,
+	} {
+		{"unknown_input", "instruments/kick/nodes/body/frequency/by"},
+		{"voice_cycle", "instruments/loop"},
+		{"unknown_node", "instruments/odd/nodes/out"},
+		{"no_out", "instruments/mute"},
+		{"unknown_instrument", "parts/e/instrument"},
+	}
+	for w in want {
+		found := false
+		for f in s.findings {
+			found ||= f.code == w.code && f.path == w.path
+		}
+		testing.expectf(t, found, "no %s at %s", w.code, w.path)
+	}
 }

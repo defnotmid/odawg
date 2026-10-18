@@ -13,8 +13,8 @@ speed:
 
 test:
 	@mkdir -p $(BUILD_DIR)
-	@for pkg in tempo theory dsp device analyze assets spec song render; do \
-		$(ODIN) test $$pkg $(FLAGS) -o:speed -out:$(BUILD_DIR)/test_$$pkg || exit 1; \
+	@for pkg in tempo theory dsp device analyze assets spec song render tests/registry; do \
+		$(ODIN) test $$pkg $(FLAGS) -o:speed -out:$(BUILD_DIR)/test_$$(echo $$pkg | tr / _) || exit 1; \
 	done
 
 clean:

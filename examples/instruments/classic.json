@@ -1,0 +1,163 @@
+{
+  "bass": {
+    "description": "A saw through a one-pole low-pass at 420 Hz, a sine at its phase under it (the saw's own fundamental turned over: the two partly cancel, as in synth.lua's bass).",
+    "nodes": {
+      "saw": { "class": "Osc", "wave": "sawtooth" },
+      "sine": { "class": "Osc", "wave": "sine" },
+      "lp": { "class": "Filter", "input": "saw", "type": "onepole", "frequency": 420 },
+      "env": { "class": "Env", "attack": 0.0025, "decay": 0, "sustain": 1, "release": 0.01 },
+      "out": { "class": "Mix", "inputs": [ "lp", "under" ], "amp": "env" },
+      "under": { "class": "Map", "input": "sine", "scale": -0.6 }
+    }
+  },
+  "sub_bass": {
+    "description": "A sine and a little of its octave, gently saturated, a soft attack and an 80 ms release.",
+    "nodes": {
+      "f1": { "class": "Osc", "wave": "sine" },
+      "f2": { "class": "Osc", "wave": "sine", "ratio": 2, "gain_db": -18.42 },
+      "sum": { "class": "Mix", "inputs": [ "f1", "f2" ], "gain_db": -0.9844 },
+      "drive": { "class": "Drive", "input": "sum", "amount": 1.6 },
+      "env": { "class": "Env", "attack": 0.01, "decay": 0, "sustain": 1, "release": 0.08 },
+      "out": { "class": "Mix", "inputs": [ "drive" ], "amp": "env", "gain_db": -0.9151 }
+    }
+  },
+  "pad": {
+    "description": "Two saws a few cents apart, each side one and half the other, slow in, the one-pole low-pass opening from 600 Hz to 2400 over the note: synth.lua's chord as a pad.",
+    "nodes": {
+      "up": { "class": "Osc", "wave": "sawtooth", "ratio": 1.006, "phase": "random" },
+      "down": { "class": "Osc", "wave": "sawtooth", "ratio": 0.994036, "phase": "random" },
+      "half_up": { "class": "Mix", "inputs": [ "up" ], "gain_db": -6.021 },
+      "half_down": { "class": "Mix", "inputs": [ "down" ], "gain_db": -6.021 },
+      "left": { "class": "Mix", "inputs": [ "up", "half_down" ], "pan": -1, "gain_db": -6.021 },
+      "right": { "class": "Mix", "inputs": [ "down", "half_up" ], "pan": 1, "gain_db": -6.021 },
+      "both": { "class": "Mix", "inputs": [ "left", "right" ] },
+      "open": { "class": "Ramp", "from": 0, "to": 1 },
+      "lp": {
+        "class": "Filter",
+        "input": "both",
+        "type": "onepole",
+        "frequency": { "base": 600, "by": "open", "sweep": 2 }
+      },
+      "env": { "class": "Env", "attack": 0.3, "decay": 0, "sustain": 1, "release": 0.05 },
+      "out": { "class": "Mix", "inputs": [ "lp" ], "amp": "env" }
+    }
+  },
+  "stab": {
+    "description": "The same saw pair, quick in and decaying, low-passed at 2600 Hz: synth.lua's chord as a stab.",
+    "nodes": {
+      "up": { "class": "Osc", "wave": "sawtooth", "ratio": 1.006, "phase": "random" },
+      "down": { "class": "Osc", "wave": "sawtooth", "ratio": 0.994036, "phase": "random" },
+      "half_up": { "class": "Mix", "inputs": [ "up" ], "gain_db": -6.021 },
+      "half_down": { "class": "Mix", "inputs": [ "down" ], "gain_db": -6.021 },
+      "left": { "class": "Mix", "inputs": [ "up", "half_down" ], "pan": -1, "gain_db": -6.021 },
+      "right": { "class": "Mix", "inputs": [ "down", "half_up" ], "pan": 1, "gain_db": -6.021 },
+      "both": { "class": "Mix", "inputs": [ "left", "right" ] },
+      "lp": { "class": "Filter", "input": "both", "type": "onepole", "frequency": 2600 },
+      "env": { "class": "Decay", "attack": 0.003, "time": 0.14286, "release": 0.012 },
+      "out": { "class": "Mix", "inputs": [ "lp" ], "amp": "env" }
+    }
+  },
+  "pluck": {
+    "description": "A square through a one-pole low-pass at 2500 Hz, dying fast: synth.lua's pluck.",
+    "length": 0.18,
+    "nodes": {
+      "square": { "class": "Osc", "wave": "square" },
+      "lp": { "class": "Filter", "input": "square", "type": "onepole", "frequency": 2500 },
+      "env": { "class": "Decay", "time": 0.0625 },
+      "out": { "class": "Mix", "inputs": [ "lp" ], "amp": "env" }
+    }
+  },
+  "lead": {
+    "description": "A saw pair and a square an octave down, low-passed at 3500 Hz, a little vibrato once the note settles, falling slowly: synth.lua's lead.",
+    "nodes": {
+      "settle": { "class": "Ramp", "from": 0, "to": 1, "time": 0.1667 },
+      "vibrato": { "class": "Lfo", "rate": 5.5, "amp": "settle" },
+      "up": { "class": "Osc", "wave": "sawtooth", "ratio": 1.004, "frequency": { "by": "vibrato", "octaves": 0.005759 } },
+      "down": {
+        "class": "Osc",
+        "wave": "sawtooth",
+        "ratio": 0.996016,
+        "phase": "random",
+        "frequency": { "by": "vibrato", "octaves": 0.005759 }
+      },
+      "sub": { "class": "Osc", "wave": "square", "ratio": 0.5, "gain_db": -4.437 },
+      "lp": { "class": "Filter", "input": "sum", "type": "onepole", "frequency": 3500 },
+      "sum": { "class": "Mix", "inputs": [ "up", "down", "sub" ] },
+      "fall": { "class": "Decay", "time": 0.83333 },
+      "env": { "class": "Env", "attack": 0.005, "decay": 0, "sustain": 1, "release": 0.008 },
+      "out": { "class": "Mix", "inputs": [ "lp" ], "amp": [ "env", "fall" ] }
+    }
+  },
+  "bell": {
+    "description": "A struck bell: the note, a stretched partial and a high one that dies fast, ringing at 2.5 per second: synth.lua's bell.",
+    "length": 3.2,
+    "nodes": {
+      "f1": { "class": "Osc", "wave": "sine" },
+      "d2": { "class": "Decay", "time": 0.26667 },
+      "f2": { "class": "Osc", "wave": "sine", "ratio": 2.01, "amp": "d2", "gain_db": -9.119 },
+      "d3": { "class": "Decay", "time": 0.13333 },
+      "f3": { "class": "Osc", "wave": "sine", "ratio": 3.5, "amp": "d3", "gain_db": -13.98 },
+      "env": { "class": "Decay", "attack": 0.002, "time": 0.4 },
+      "out": { "class": "Mix", "inputs": [ "f1", "f2", "f3" ], "amp": "env" }
+    }
+  },
+  "synth_kit": {
+    "description": "synth.lua's kit: a sine kick sweeping down from 178 Hz to 48 with a click, a snare of a dropping 190 Hz body, band-passed noise and a click, a hat of twice-differenced noise.",
+    "pads": {
+      "kick": {
+        "key": 36,
+        "length": 0.4,
+        "nodes": {
+          "fall": { "class": "Decay", "time": 0.033333 },
+          "body": { "class": "Osc", "wave": "sine", "frequency": { "base": 48, "by": "fall", "amount": 130 }, "amp": "env" },
+          "env": { "class": "Decay", "time": 0.14286 },
+          "tick": { "class": "Decay", "time": 0.0016667 },
+          "click": { "class": "Noise", "amp": "tick", "gain_db": -12.04 },
+          "out": { "class": "Mix", "inputs": [ "body", "click" ] }
+        }
+      },
+      "snare": {
+        "key": 38,
+        "length": 0.35,
+        "note": 54.6,
+        "nodes": {
+          "drop": { "class": "Decay", "time": 0.028571 },
+          "body_env": { "class": "Decay", "time": 0.055556 },
+          "body": {
+            "class": "Osc",
+            "wave": "sine",
+            "frequency": { "by": "drop", "index": 0.45 },
+            "amp": "body_env",
+            "gain_db": -6.936
+          },
+          "noise": { "class": "Noise" },
+          "snap_env": { "class": "Decay", "time": 0.076923 },
+          "snap": {
+            "class": "Filter",
+            "input": "noise",
+            "type": "bandpass",
+            "frequency": 3200,
+            "q": 0.7,
+            "amp": "snap_env",
+            "gain_db": -1.938
+          },
+          "tick": { "class": "Decay", "time": 0.0014286 },
+          "click": { "class": "Mix", "inputs": [ "noise" ], "amp": "tick", "gain_db": -18.42 },
+          "out": { "class": "Mix", "inputs": [ "body", "snap", "click" ] }
+        }
+      },
+      "hat": {
+        "key": 42,
+        "length": 0.045,
+        "gain_db": -9.119,
+        "nodes": {
+          "noise": { "class": "Noise" },
+          "once": { "class": "Filter", "input": "noise", "type": "difference" },
+          "twice": { "class": "Filter", "input": "once", "type": "difference" },
+          "env": { "class": "Decay", "time": 0.011111 },
+          "out": { "class": "Mix", "inputs": [ "twice" ], "amp": "env", "gain_db": -12.04, "pan": 0.12 }
+        }
+      }
+    }
+  }
+}

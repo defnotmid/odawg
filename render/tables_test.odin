@@ -9,7 +9,7 @@ import spec "../spec"
 
 @(private = "file")
 SPEC :: `{ key: "A minor", seed: 3, sections: [
-	{ name: "a", duration: "2m", bpm: 110, style: "house", energy: 0.8, chords: "Am F" } ] }`
+	{ name: "a", duration: "2m", bpm: 110, style: "styles/house.json", energy: 0.8, chords: "Am F" } ] }`
 
 @(private = "file")
 compose :: proc(t: ^testing.T, arena: ^virtual.Arena) -> ^song.Song {
@@ -18,6 +18,7 @@ compose :: proc(t: ^testing.T, arena: ^virtual.Arena) -> ^song.Song {
 	s := new(spec.Spec)
 	findings := make(base.Findings)
 	testing.expect(t, spec.spec_from_json(SPEC, s, &findings))
+	add_examples(s, &findings)
 	out := new(song.Song)
 	testing.expect(t, song.song_from_spec(s, out))
 	return out
@@ -142,6 +143,7 @@ test_tables_shape :: proc(t: ^testing.T) {
 	testing.expect(t, spec.spec_from_json(`{ bpm: 120, sections: [ { name: "a", duration: "2m" }, { name: "b", duration: "2m" }, { name: "c", duration: "2m" }, { name: "d", duration: "2m" } ],
 		parts: { lead: { instrument: "pluck", play: [ { name: "a", notes: "C5 E5" }, { name: "c", notes: "G5" } ] },
 		         pad: { instrument: "pad", play: [ { name: "a..d", chords: true } ] } } }`, sp, &findings))
+	add_examples(sp, &findings)
 	s := new(song.Song)
 	testing.expect(t, song.song_from_spec(sp, s))
 	lead: Table

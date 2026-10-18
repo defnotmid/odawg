@@ -51,7 +51,10 @@ Spec :: struct {
 	room:              [dynamic][2]f64, // spans (outside clock) another sound needs room in
 	room_from:         string, // or a sound the host places, by name ("voice"): its spans
 	strings:           [dynamic]string, // an `.Asset` param's name ("vcsl/upright_piano"): its value is the index here
-	styles:            [dynamic]Style_Spec, // the song's own, beside the ones odawg ships
+	styles:            [dynamic]Style_Spec, // the song's own (and style files the host read)
+	instruments:       [dynamic]Instrument_Spec, // rows its parts can name
+	instrument_includes: [dynamic]string, // files of rows its parts can name too (`instruments = "classic.json"`)
+	instrument_files:  [dynamic]Instrument_File, // the files of rows the host read (the song's: every one its styles name too)
 	buses:             [dynamic]Bus_Spec,
 	sets:              [dynamic]Set_Spec, // the song's own sample sets
 	set_zones:         [dynamic]Set_Zone_Spec,
@@ -63,10 +66,18 @@ Spec :: struct {
 	folder:            string,
 }
 
-// A style the song brings: a partial spec like the shipped ones (its parts,
-// returns, swing), kept as the value it was given and read where a section
-// uses it, the way a shipped style's text is.
+// A style the song brings: a partial spec (its parts, returns, swing, its
+// own instruments and sets), kept as the value it was given and read where
+// a section uses it.
 Style_Spec :: struct {
+	name:  string,
+	value: json.Value,
+}
+
+// An instrument a spec declares (`instruments = { name = row }`): kept as
+// the value it was given, read into a program where a part plays it (its
+// times at that part's tempo), so a part can name it and change some of it.
+Instrument_Spec :: struct {
 	name:  string,
 	value: json.Value,
 }
@@ -81,6 +92,7 @@ Section_Spec :: struct {
 	energy:        f64, // UNSET: carry over
 	chords:        string,
 	transition:    string,
+	transition_part: string, // the part a fill, riser or impact plays on
 	flex:          [2]Time_Spec,
 	optional:      bool,
 	stretch:       string, // "tempo"
@@ -89,10 +101,11 @@ Section_Spec :: struct {
 
 Part_Spec :: struct {
 	name:       string,
-	instrument: i32, // a device; -1: the style's, or the part's role's
+	instrument: i32, // a device (a Voice: its row); -1: the style's (none: the part doesn't play)
 	gain_db:    f64,
 	pan:        f64,
 	octave:     f64,
+	room_db:    f64, // dB it dips by where the song makes room
 	effects:    Span, // into chain; count -1: not given (the style's)
 	sends:      Span,
 	sidechain:  Sidechain_Spec,
@@ -113,12 +126,14 @@ Set_Spec :: struct {
 	loop:    bool, // its zones' files' loops play (a sustained instrument's)
 }
 
-// A file of a set and what it answers: a drum pad (its General MIDI key, a
-// one-shot) or a key range around its root (UNSET lo and hi: split with
-// the set's other roots at their midpoints), a velocity range.
+// A file of a set and what it answers: a pad (by any name, at its `key`: a
+// General MIDI name's when it gives none, else the lowest key no other pad
+// of the set has; a one-shot) or a key range around its root (UNSET lo and
+// hi: split with the set's other roots at their midpoints), a velocity range.
 Set_Zone_Spec :: struct {
 	file:        string,
-	pad:         device.Pad,
+	pad:         string,
+	key:         f64, // a pad's
 	root:        f64, // MIDI (UNSET: the pad's key, else 60)
 	lo, hi:      f64, // MIDI keys (UNSET: split)
 	lo_velocity: f64,
@@ -336,6 +351,7 @@ Event_Spec :: struct {
 	note:     string,
 	duration: Time_Spec,
 	velocity: f64,
+	accent:   f64,
 }
 
 // An instrument or effect: its kind, the values the spec set (the rest are
@@ -346,6 +362,7 @@ Device_Spec :: struct {
 	values: Span, // into values
 	beats:  device.Param_Set,
 	path:   string,
+	row:    json.Value, // a Voice's: the instrument as written (a name, a name and changes, a row)
 }
 
 // A sample set a Sampler names, and the spec that says what it is (a set
@@ -371,7 +388,11 @@ asset_refs :: proc(s: ^Spec, out: ^[dynamic]Asset_Ref) {
 		own.outer, own.folder = s, style_folder(st.name)
 		asset_refs(own, out)
 	}
-	for d in s.devices {
+	for d, i in s.devices {
+		if d.kind == .Voice {
+			instrument_sets(s, i32(i), out)
+			continue
+		}
 		for v in s.values[d.values.first:base.span_end(d.values)] {
 			if device.PARAM_TABLE[v.param].unit != .Asset {
 				continue
@@ -427,7 +448,8 @@ asset_key :: proc(s: ^Spec, name: string, allocator := context.temp_allocator) -
 	h = base.hash_combine(h, u64(set.loop))
 	for z in owner.set_zones[set.zones.first:base.span_end(set.zones)] {
 		h = base.hash_combine(h, base.hash_string(z.file))
-		h = base.hash_combine(h, u64(z.pad))
+		h = base.hash_combine(h, base.hash_string(z.pad))
+		h = base.hash_combine(h, transmute(u64)z.key)
 		for x in ([?]f64{z.root, z.lo, z.hi, z.lo_velocity, z.hi_velocity, z.gain_db, z.one_shot, z.offset}) {
 			h = base.hash_combine(h, transmute(u64)x)
 		}

@@ -1,9 +1,0 @@
-{
-  "name": "booty", "key": "G minor", "seed": 5,
-  "sections": [
-    { "name": "intro", "duration": "4m", "bpm": 134, "style": "booty_house", "energy": 0.5, "chords": "Gm Gm Eb F" },
-    { "name": "jack", "duration": "8m", "energy": 0.9 },
-    { "name": "break", "duration": "2m", "energy": 0.3 },
-    { "name": "peak", "duration": "8m", "energy": 1 }
-  ]
-}

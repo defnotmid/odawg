@@ -9,8 +9,8 @@ import song "../song"
 
 @(private = "file")
 SPEC :: `{ key: "A minor", seed: 5, sections: [
-	{ name: "a", duration: "2m", bpm: 100, style: "lofi", energy: 0.6, chords: "Am7 Fmaj7" },
-	{ name: "b", duration: "2m", bpm: 124, style: "house", energy: 1, chords: "Am F" } ] }`
+	{ name: "a", duration: "2m", bpm: 100, style: "styles/lofi.json", energy: 0.6, chords: "Am7 Fmaj7" },
+	{ name: "b", duration: "2m", bpm: 124, style: "styles/house.json", energy: 1, chords: "Am F" } ] }`
 
 @(private = "file")
 compose :: proc(t: ^testing.T, arena: ^virtual.Arena) -> ^song.Song {
@@ -19,6 +19,7 @@ compose :: proc(t: ^testing.T, arena: ^virtual.Arena) -> ^song.Song {
 	s := new(spec.Spec)
 	findings := make(base.Findings)
 	testing.expect(t, spec.spec_from_json(SPEC, s, &findings))
+	add_examples(s, &findings)
 	out := new(song.Song)
 	testing.expect(t, song.song_from_spec(s, out))
 	return out

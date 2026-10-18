@@ -1,5 +1,6 @@
 package odawg_song
 
+import "core:encoding/json"
 import "core:math"
 import "core:slice"
 import "core:strconv"
@@ -15,63 +16,11 @@ import theory "../theory"
 // in the sections the spec leaves to the style; notes land on a track per
 // style; then the transitions between sections, then the note table.
 
-// What a part sounds like when nothing says, by its name.
-Role_Row :: struct {
-	name:    string,
-	device:  device.Device_Kind,
-	octave:  int, // where its chords and degrees sit
-	gain_db: f64, // its level in the mix (the presets play at synth.lua's raw levels)
-	room:    f64, // dB it dips by under a voice
-}
-
-ROLE_TABLE := []Role_Row {
-	{"drums", .Drum_Kit, 3, 0, 0},
-	{"bass", .Bass, 2, -4, 0},
-	{"sub", .Sub_Bass, 1, -4, 0},
-	{"pad", .Pad, 3, -8, -2},
-	{"strings", .Pad, 3, -8, -2},
-	{"keys", .Stab, 4, -8, -3},
-	{"chords", .Stab, 4, -8, -3},
-	{"lead", .Lead, 5, -12, -6},
-	{"melody", .Lead, 5, -12, -6},
-	{"arp", .Pluck, 4, -10, -6},
-	{"pluck", .Pluck, 4, -10, -6},
-	{"bells", .Bell, 5, -10, -6},
-	{"fx", .Riser, 4, -4, 0},
-}
-
-ROLE_DEFAULT :: Role_Row{"", .Synth, 4, -6, -3}
-
-role_from_name :: proc(name: string) -> Role_Row {
-	for r in ROLE_TABLE {
-		if r.name == name {
-			return r
-		}
-	}
-	return ROLE_DEFAULT
-}
-
-// The styles odawg ships: partial specs (their parts, returns and swing).
-STYLE_TABLE := [?]struct {
-	name, text: string,
-} {
-	{"acid_house", #load("../styles/acid_house.json", string)},
-	{"ambient", #load("../styles/ambient.json", string)},
-	{"booty_house", #load("../styles/booty_house.json", string)},
-	{"chicago_house", #load("../styles/chicago_house.json", string)},
-	{"house", #load("../styles/house.json", string)},
-	{"lofi", #load("../styles/lofi.json", string)},
-	{"synthwave", #load("../styles/synthwave.json", string)},
-}
-
-style_source :: proc(name: string) -> (string, bool) {
-	for s in STYLE_TABLE {
-		if s.name == name {
-			return s.text, true
-		}
-	}
-	return "", false
-}
+// What a part is when nothing says: the same for every part, whatever its
+// name. A part with no instrument doesn't play (a finding says so).
+PART_OCTAVE :: 4 // where its chords and degrees sit
+PART_GAIN_DB :: 0 // its level in the mix
+PART_ROOM_DB :: 0 // what it dips by where the song makes room
 
 // The specs a song reads parts from: its own, then each style it uses.
 @(private = "file")
@@ -89,7 +38,7 @@ style_spec :: proc(src: ^Sources, name: string, findings: ^base.Findings) -> ^sp
 		}
 	}
 	append(&src.names, name)
-	// the song's own styles first: a name of its own wins over a shipped one
+	// the song's own, by name, or a style file the host read
 	for own in src.own.styles {
 		if own.name == name {
 			st := new(spec.Spec)
@@ -99,24 +48,14 @@ style_spec :: proc(src: ^Sources, name: string, findings: ^base.Findings) -> ^sp
 			return st
 		}
 	}
-	text, known := style_source(name)
-	if !known {
-		names := make([dynamic]string, context.temp_allocator)
-		for st in STYLE_TABLE {
-			append(&names, st.name)
-		}
-		for own in src.own.styles {
-			append(&names, own.name)
-		}
-		base.report(findings, "unknown_style", .Error, "", "style %q is not one of %s (or the song's own `styles`)", name, strings.join(names[:], ", ", context.temp_allocator))
-		append(&src.styles, nil)
-		return nil
+	names := make([dynamic]string, context.temp_allocator)
+	for own in src.own.styles {
+		append(&names, own.name)
 	}
-	st := new(spec.Spec)
-	spec.spec_from_json(text, st, findings)
-	st.outer = src.own
-	append(&src.styles, st)
-	return st
+	known := len(names) > 0 ? strings.concatenate({" (it has ", strings.join(names[:], ", ", context.temp_allocator), ")"}, context.temp_allocator) : ""
+	base.report(findings, "unknown_style", .Error, "", "style %q is not one of the song's `styles`%s, or a style file (\"styles/house.json\")", name, known)
+	append(&src.styles, nil)
+	return nil
 }
 
 @(private = "file")
@@ -269,18 +208,108 @@ arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 			}
 			append(&song.regions, Region{i32(pi), start, stop, tr.source})
 		}
-		// a track per style the notes fall in
+		// a track per style the notes fall in (none: no instrument, no notes)
+		styles := make([dynamic]string, context.temp_allocator)
+		tracks := make([dynamic]int, context.temp_allocator)
 		for p in pending {
 			style := song.sections[section_from_beat(song, p.beat)].style
-			ti := track_for(song, &src, work, i32(pi), name, style)
+			k, found := slice.linear_search(styles[:], style)
+			if !found {
+				append(&styles, style)
+				append(&tracks, track_for(song, &src, work, i32(pi), name, style))
+				k = len(tracks) - 1
+			}
+			if tracks[k] < 0 {
+				continue
+			}
 			row := p
-			row.track = u16(ti)
-			append(&work.notes[ti], row)
+			row.track = u16(tracks[k])
+			append(&work.notes[tracks[k]], row)
 		}
 		if len(pending) == 0 && own != nil {
 			track_for(song, &src, work, i32(pi), name, len(song.sections) > 0 ? song.sections[0].style : "")
 		}
+		for ti in tracks {
+			if ti >= 0 {
+				check_pads(song, s, &src, ti, work)
+			}
+		}
 	}
+}
+
+// A track's notes on pads its instrument has: one it hasn't is a finding
+// at the entry naming it (with the pads it has), and doesn't play.
+@(private = "file")
+check_pads :: proc(song: ^Song, s: ^spec.Spec, src: ^Sources, ti: int, work: ^Work) {
+	t := &song.tracks[ti]
+	if song.devices[t.instrument] != .Voice {
+		return
+	}
+	program := i32(song.params[t.instrument][.Program])
+	has := make([dynamic]u32, context.temp_allocator)
+	spec.program_pads(&song.programs, program, &has)
+	reported := make([dynamic]u32, context.temp_allocator)
+	notes := &work.notes[ti]
+	#reverse for n, k in notes {
+		if n.pad == 0 || slice.contains(has[:], n.pad) {
+			continue
+		}
+		ordered_remove(notes, k)
+		if slice.contains(reported[:], n.pad) {
+			continue
+		}
+		append(&reported, n.pad)
+		name := pad_name(song, n.pad)
+		names := make([dynamic]string, context.temp_allocator)
+		for id in has {
+			append(&names, pad_name_or_id(song, id))
+		}
+		slice.sort(names[:])
+		path := pad_play_path(s, src, song.parts[t.part], t.variant, name)
+		what := len(names) > 0 ? strings.concatenate({"it has ", strings.join(names[:], ", ", context.temp_allocator)}, context.temp_allocator) : "it plays pitches, not pads"
+		base.report(&song.findings, "unknown_pad", .Error, path, "%s: %q is not a pad of the part's instrument (%s)", path, name, what)
+	}
+}
+
+// A pad's name, or the id when no note or question named it.
+@(private = "file")
+pad_name_or_id :: proc(song: ^Song, id: u32) -> string {
+	if n := pad_name(song, id); n != "?" {
+		return n
+	}
+	for g in device.GM_PADS {
+		if base.name_id(g.name) == id {
+			return g.name
+		}
+	}
+	buf := make([]u8, 9, context.temp_allocator)
+	buf[0] = '#'
+	for k in 0 ..< 8 {
+		digits := "0123456789abcdef"
+		buf[1 + k] = digits[(id >> (28 - 4 * u32(k))) & 15]
+	}
+	return string(buf)
+}
+
+// The play entry whose steps name a pad: the spec's, else the style's.
+@(private = "file")
+pad_play_path :: proc(s: ^spec.Spec, src: ^Sources, part, style, pad: string) -> string {
+	specs := [2]^spec.Spec{s, style != "" ? style_spec(src, style, nil) : nil}
+	for from, k in specs {
+		p := part_in(from, part)
+		if p == nil {
+			continue
+		}
+		for pl in from.plays[p.plays.first:base.span_end(p.plays)] {
+			for lane in from.lanes[pl.rows.first:base.span_end(pl.rows)] {
+				if pl.kind == .Steps && lane.pad == pad {
+					path := strings.concatenate({strings.trim_prefix(pl.path, "song/"), "/steps/", pad})
+					return k == 0 ? path : strings.concatenate({"style/", style, "/", path})
+				}
+			}
+		}
+	}
+	return base.path_join("parts", part)
 }
 
 // An energy band is [lo, hi), the top one closed at 1: a section on the line
@@ -307,15 +336,45 @@ add_return :: proc(song: ^Song, from: ^spec.Spec, ret: spec.Return_Spec) {
 @(private = "file")
 device_into_song :: proc(song: ^Song, from: ^spec.Spec, d: i32, beat_seconds: f64) -> i32 {
 	p, ok := spec.params_from_device(from, d, beat_seconds, song.bank)
-	if !ok {
+	if !ok && from.devices[d].kind != .Voice {
 		base.report(&song.findings, "asset_unavailable", .Error, from.devices[d].path, "%s: a sample set it plays is not loaded (offline, or not in the register)", from.devices[d].path)
+	}
+	if from.devices[d].kind == .Voice {
+		// its row, read into a program at this tempo
+		program := spec.instrument_program(from, d, beat_seconds, song.bank, &song.programs, &song.findings)
+		if program < 0 {
+			return -1
+		}
+		p[.Program] = f32(program)
 	}
 	append(&song.devices, from.devices[d].kind)
 	append(&song.params, p)
+	append(&song.labels, device_label(from.devices[d]))
 	return i32(len(song.devices) - 1)
 }
 
+// A device's label: an instrument's row as named (its name, or a table's
+// name or class; "" written out in full), an effect's kind.
 @(private = "file")
+device_label :: proc(d: spec.Device_Spec) -> string {
+	if d.kind != .Voice {
+		return device.DEVICE_TABLE[d.kind].name
+	}
+	#partial switch x in d.row {
+	case json.String:
+		return strings.clone(x)
+	case json.Object:
+		if s, ok := x["name"].(json.String); ok {
+			return strings.clone(s)
+		}
+		if s, ok := x["class"].(json.String); ok {
+			return strings.clone(s)
+		}
+	}
+	return ""
+}
+
+@(private)
 chain_into_song :: proc(song: ^Song, from: ^spec.Spec, c: Span, beat_seconds: f64) -> Span {
 	devices := make([dynamic]i32, context.temp_allocator)
 	for d in from.chain[c.first:base.span_end(c)] {
@@ -327,7 +386,8 @@ chain_into_song :: proc(song: ^Song, from: ^spec.Spec, c: Span, beat_seconds: f6
 }
 
 // The track part `pi` plays style `variant` on, made the first time: the
-// spec's settings over the style's over the role's.
+// spec's settings over the style's over the part defaults; -1 when neither
+// gives it an instrument.
 @(private = "file")
 track_for :: proc(song: ^Song, src: ^Sources, work: ^Work, pi: i32, name, variant: string) -> int {
 	for t, i in song.tracks {
@@ -335,7 +395,6 @@ track_for :: proc(song: ^Song, src: ^Sources, work: ^Work, pi: i32, name, varian
 			return i
 		}
 	}
-	role := role_from_name(name)
 	beat_seconds := 60 / song.sections[0].bpm0
 	for sec in song.sections {
 		if sec.style == variant {
@@ -343,19 +402,26 @@ track_for :: proc(song: ^Song, src: ^Sources, work: ^Work, pi: i32, name, varian
 			break
 		}
 	}
-	t := Track{part = pi, variant = variant, gain_db = role.gain_db + src.own.gain_db, room = role.room, instrument = -1}
+	t := Track{part = pi, variant = variant, gain_db = PART_GAIN_DB + src.own.gain_db, room = PART_ROOM_DB, instrument = -1}
 	style := variant != "" ? style_spec(src, variant, &song.findings) : nil
 	layers := [2]^spec.Spec{style, src.own}
+	instrument: struct {
+		from: ^spec.Spec,
+		d:    i32,
+	}
 	for from in layers {
 		p := part_in(from, name)
 		if p == nil {
 			continue
 		}
 		if p.instrument >= 0 {
-			t.instrument = device_into_song(song, from, p.instrument, beat_seconds)
+			instrument = {from, p.instrument}
 		}
 		if !math.is_nan(p.gain_db) {
 			t.gain_db = p.gain_db + src.own.gain_db
+		}
+		if !math.is_nan(p.room_db) {
+			t.room = p.room_db
 		}
 		if !math.is_nan(p.pan) {
 			t.pan = p.pan
@@ -374,10 +440,14 @@ track_for :: proc(song: ^Song, src: ^Sources, work: ^Work, pi: i32, name, varian
 			}
 		}
 	}
+	if instrument.from == nil {
+		path := part_in(src.own, name) != nil ? base.path_join("parts", name) : strings.concatenate({"style/", variant, "/parts/", name})
+		base.report(&song.findings, "no_instrument", .Warning, path, "%s: no instrument, so it doesn't play: give it one (`instrument = { \"Synth\", ... }`)", path)
+		return -1
+	}
+	t.instrument = device_into_song(song, instrument.from, instrument.d, beat_seconds)
 	if t.instrument < 0 {
-		append(&song.devices, role.device)
-		append(&song.params, device.params_from_kind(role.device))
-		t.instrument = i32(len(song.devices) - 1)
+		return -1
 	}
 	append(&song.tracks, t)
 	append(&work.notes, make([dynamic]Note_Row, context.temp_allocator))
@@ -444,12 +514,10 @@ sidechain_from_spec :: proc(song: ^Song, sc: spec.Sidechain_Spec, path: string) 
 		return {}
 	}
 	if note != "" {
-		if pad, is_pad := device.pad_from_name(note); is_pad {
-			out.pad = pad
-		} else if p, is_note := theory.pitch_from_string(note); is_note {
+		if p, is_note := theory.pitch_from_string(note); is_note {
 			out.pitch = p
 		} else {
-			base.report(&song.findings, "bad_value", .Error, base.path_join(path, "sidechain"), "%s/sidechain: %q is not a pad or note", path, note)
+			out.pad = pad_intern(song, note)
 		}
 	}
 	return out
@@ -487,7 +555,7 @@ EXPANDERS := [spec.Play_Kind]Expand_Proc {
 
 @(private = "file")
 expand :: proc(song: ^Song, from_spec: ^spec.Spec, name: string, own: ^spec.Part_Spec, style: ^spec.Spec, pl: ^spec.Play_Spec, from, to: f64, out: ^[dynamic]Note_Row) {
-	octave := role_from_name(name).octave
+	octave := PART_OCTAVE
 	if sp := part_in(style, name); sp != nil && !math.is_nan(sp.octave) {
 		octave = int(sp.octave)
 	}
@@ -517,7 +585,7 @@ bpb_at :: proc(song: ^Song, beat: f64) -> int {
 
 // Adds a note at `beat` lasting `beats`, swung and humanized.
 @(private = "file")
-emit :: proc(x: ^Expand, beat, beats: f64, pitch: f32, velocity: f64, pad: device.Pad) {
+emit :: proc(x: ^Expand, beat, beats: f64, pitch: f32, velocity: f64, pad: u32, accent: f32 = 0) {
 	if beat < x.from - 1e-9 || beat >= x.to - 1e-9 {
 		return
 	}
@@ -538,7 +606,7 @@ emit :: proc(x: ^Expand, beat, beats: f64, pitch: f32, velocity: f64, pad: devic
 		// a note at or under an accent's line (0.8) stays under it
 		vel = vel <= 0.8 ? min(jittered, 0.8) : jittered
 	}
-	append(x.out, Note_Row{time = max(t0, 0), duration = max(t1 - t0, 0.001), beat = beat, pitch = pitch, velocity = f32(clamp(vel, 0, 1)), pad = pad})
+	append(x.out, Note_Row{time = max(t0, 0), duration = max(t1 - t0, 0.001), beat = beat, pitch = pitch, velocity = f32(clamp(vel, 0, 1)), pad = pad, accent = accent})
 }
 
 // A note token ("A2") or a chord degree ("5") at a beat.
@@ -587,15 +655,7 @@ extend_last :: proc(x: ^Expand, beats: f64) {
 expand_steps :: proc(x: ^Expand) {
 	s := x.from_spec
 	for lane in s.lanes[x.play.rows.first:base.span_end(x.play.rows)] {
-		pad := device.Pad.None
-		if lane.pad != "" {
-			p, ok := device.pad_from_name(lane.pad)
-			if !ok {
-				bad_play(x, "%s/steps: %q is not a pad (kick, snare, clap, rim, hat, open_hat, crash, ride, tom_low, tom_mid, tom_high, shaker)", x.play.path, lane.pad)
-				continue
-			}
-			pad = p
-		}
+		pad := lane.pad != "" ? pad_intern(x.song, lane.pad) : 0
 		bars := s.bars[lane.bars.first:base.span_end(lane.bars)]
 		if len(bars) == 0 {
 			continue
@@ -614,11 +674,12 @@ expand_steps :: proc(x: ^Expand) {
 			for c, i in cells {
 				b := start + f64(i) * step
 				vel: f64
+				accent: f32
 				switch c {
 				case 'x':
 					vel = x.play.velocity
 				case 'X':
-					vel = min(1, x.play.velocity * 1.25)
+					vel, accent = x.play.velocity, 1
 				case 'o':
 					vel = x.play.velocity * 0.45
 				case '-':
@@ -634,7 +695,7 @@ expand_steps :: proc(x: ^Expand) {
 					return
 				}
 				pitch: f32
-				if pad == .None {
+				if pad == 0 {
 					tok := x.play.note == "" ? "1" : x.play.note
 					p, ok := token_pitch(x, tok, b, !strings.contains_any(tok, "ABCDEFGabcdefg"))
 					if !ok {
@@ -644,7 +705,7 @@ expand_steps :: proc(x: ^Expand) {
 					pitch = p
 				}
 				before := len(x.out)
-				emit(x, b, hit_length(x, step, b), pitch, vel, pad)
+				emit(x, b, hit_length(x, step, b), pitch, vel, pad, accent)
 				held = len(x.out) > before
 			}
 			start += f64(bpb)
@@ -689,9 +750,10 @@ expand_sequence :: proc(x: ^Expand) {
 				// voice slides), "E5!~" both
 				text, vel, beats := t.text, x.play.velocity, hit_length(x, t.length * l.value, b)
 				slide := false
+				accent: f32
 				for len(text) > 1 && (text[len(text) - 1] == '!' || text[len(text) - 1] == '~') {
 					if text[len(text) - 1] == '!' {
-						vel = 1
+						accent = 1
 					} else {
 						slide = true
 					}
@@ -703,7 +765,7 @@ expand_sequence :: proc(x: ^Expand) {
 					return
 				}
 				before := len(x.out)
-				emit(x, b, beats, p, vel, .None)
+				emit(x, b, beats, p, vel, 0, accent)
 				held = len(x.out) > before
 				if held && slide {
 					append(&slides, len(x.out) - 1)
@@ -741,15 +803,13 @@ expand_events :: proc(x: ^Expand) {
 				return
 			}
 			vel := math.is_nan(e.velocity) ? x.play.velocity : e.velocity
+			accent := f32(e.accent)
 			if e.note == "" {
-				emit(x, c + at, dur, 0, vel, .None) // the instrument's own pitch
-			} else if pad, is_pad := device.pad_from_name(e.note); is_pad {
-				emit(x, c + at, dur, 0, vel, pad)
+				emit(x, c + at, dur, 0, vel, 0, accent) // the instrument's own pitch
 			} else if p, is_note := theory.pitch_from_string(e.note); is_note {
-				emit(x, c + at, dur, p, vel, .None)
+				emit(x, c + at, dur, p, vel, 0, accent)
 			} else {
-				bad_play(x, "%s/events: %q is not a note or pad", x.play.path, e.note)
-				return
+				emit(x, c + at, dur, 0, vel, pad_intern(x.song, e.note), accent) // a pad
 			}
 		}
 		if loop == 0 {
@@ -818,7 +878,7 @@ expand_arpeggio :: proc(x: ^Expand) {
 			bad_play(x, "%s/arpeggio/pattern: %q is not up, down, upDown, downUp or random", x.play.path, a.pattern)
 			return
 		}
-		emit(x, b, hit_length(x, l.value, b), tones[k], x.play.velocity, .None)
+		emit(x, b, hit_length(x, l.value, b), tones[k], x.play.velocity, 0)
 		i += 1
 	}
 }
@@ -856,7 +916,7 @@ expand_chords :: proc(x: ^Expand) {
 			end = min(end, x.to)
 			voiced(x, b, &previous, &notes)
 			for n in notes {
-				emit(x, b, end - b, n, x.play.velocity, .None)
+				emit(x, b, end - b, n, x.play.velocity, 0)
 			}
 			b = end
 		}
@@ -879,9 +939,9 @@ expand_chords :: proc(x: ^Expand) {
 			}
 			b := start + f64(i) * step
 			voiced(x, b, &previous, &notes)
-			vel := c == 'X' ? min(1, x.play.velocity * 1.25) : x.play.velocity
+			accent: f32 = c == 'X' ? 1 : 0
 			for n in notes {
-				emit(x, b, hit_length(x, step, b), n, vel, .None)
+				emit(x, b, hit_length(x, step, b), n, x.play.velocity, 0, accent)
 			}
 		}
 	}
@@ -889,125 +949,84 @@ expand_chords :: proc(x: ^Expand) {
 
 // ---- transitions ---------------------------------------------------------------------
 
-// The instruments a fill plays on: those with a snare pad. (An 808 playing
-// a sub line is one too, so the fill takes the track that plays pads.)
-FILL_INSTRUMENTS :: bit_set[device.Device_Kind]{.Drum_Kit, .Drum_Machine}
-
-@(private = "file")
-plays_pads :: proc(notes: []Note_Row) -> bool {
-	for n in notes {
-		if n.pad != .None {
-			return true
-		}
-	}
-	return false
-}
-
-// Between sections: a riser into a rise in energy (and an impact with a
-// crash when it lands high), a fill when the groove carries on, a beat of
-// silence for "pause". Risers and impacts go on the "fx" part: the song's
-// own when it has one (each sound on a track of its own with that part's
-// level, effects and sends), else one added last at its role's level.
-add_transitions :: proc(song: ^Song, work: ^Work) {
-	fx_track :: proc(song: ^Song, work: ^Work, kind: device.Device_Kind) -> int {
-		fx := -1
-		for n, i in song.parts {
-			if n == "fx" {
-				fx = i
-			}
-		}
-		if fx < 0 {
-			append(&song.parts, "fx")
-			fx = len(song.parts) - 1
-		}
-		role := role_from_name("fx")
-		t := Track{part = i32(fx), gain_db = role.gain_db + song.gain_db, room = role.room}
-		name := device.DEVICE_TABLE[kind].name
-		#reverse for x, i in song.tracks {
-			if x.part != i32(fx) {
-				continue
-			}
-			if x.variant == name {
-				return i
-			}
-			t = x // the part's mix, from its first track
-		}
-		append(&song.devices, kind)
-		append(&song.params, device.params_from_kind(kind))
-		t.variant, t.instrument, t.notes = name, i32(len(song.devices) - 1), {}
-		append(&song.tracks, t)
-		append(&work.notes, make([dynamic]Note_Row, context.temp_allocator))
-		return len(song.tracks) - 1
-	}
-	note :: proc(song: ^Song, t0, duration: f64, pitch, velocity: f32, pad: device.Pad = .None) -> Note_Row {
+// Into a section, when it asks: a riser over the last two bars before it,
+// an impact on its downbeat (each one note: the root of the chord it lands
+// on at the part's octave, or the pad named), a roll of a pad over the beat
+// before it (in place of that pad's hits there), a beat of silence for
+// "pause". A riser, an impact and a fill play on the section's
+// `transition_part` ("fx", "drums/snare": a part and a pad of it; a fill
+// needs the pad): its track for the style the outgoing section plays, else
+// its first.
+add_transitions :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
+	note :: proc(song: ^Song, t0, duration: f64, pitch, velocity: f32, pad: u32 = 0) -> Note_Row {
 		return {time = t0, duration = duration, beat = tempo.beat_from_seconds(&song.tempo, t0), pitch = pitch, velocity = velocity, pad = pad}
 	}
 	for i in 1 ..< len(song.sections) {
 		prev, next := song.sections[i - 1], song.sections[i]
 		kind := next.transition
-		if kind == .Auto {
-			rise := next.energy - prev.energy
-			switch {
-			case rise >= 0.3:
-				kind = next.energy >= 0.8 ? .Impact : .Riser
-			case math.abs(rise) < 0.3 && prev.energy >= 0.5 && next.energy >= 0.5 && next.style == prev.style:
-				kind = .Fill
-			case:
-				kind = .None
-			}
+		if kind == .None || kind == .Cut {
+			continue
 		}
 		at := next.start
+		path := base.path_join(base.path_join("sections", next.name), "transition_part")
+		ti := -1
+		part, pad_name := next.transition_part, ""
+		if slash := strings.index_byte(part, '/'); slash >= 0 {
+			part, pad_name = part[:slash], part[slash + 1:]
+		}
+		pad := pad_name != "" ? pad_intern(song, pad_name) : 0
+		if kind != .Pause {
+			if part == "" || (kind == .Fill && pad == 0) {
+				want := kind == .Fill ? "a part and the pad it rolls (\"drums/snare\")" : "a part (\"fx\")"
+				base.report(&song.findings, "transition_needs_part", .Warning, path, "section %s: a %s plays on %s: give `transition_part`", next.name, TRANSITION_NAMES[kind], want)
+				continue
+			}
+			for t, k in song.tracks {
+				if song.parts[t.part] != part {
+					continue
+				}
+				if ti < 0 || (t.variant == prev.style && song.tracks[ti].variant != prev.style) {
+					ti = k
+				}
+			}
+			if ti < 0 {
+				base.report(&song.findings, "bad_value", .Error, path, "section %s: %q is not a part that plays (one with an instrument)", next.name, part)
+				continue
+			}
+		}
+		octave := PART_OCTAVE
+		for p in s.parts {
+			if p.name == part && !math.is_nan(p.octave) {
+				octave = int(p.octave)
+			}
+		}
+		root := pad != 0 ? 0 : theory.pitch_from_degree(song.key, chord_from_beat(song, next.beat), 1, octave)
+		source := strings.concatenate({"sections/", next.name, "/transition"})
 		switch kind {
-		case .Riser, .Impact:
+		case .Riser:
 			from_beat := max(prev.beat, next.beat - 2 * f64(prev.beats_per_bar))
 			t0 := tempo.seconds_from_beat(&song.tempo, from_beat)
-			ti := fx_track(song, work, .Riser)
-			append(&work.notes[ti], note(song, t0, at - t0, 60, 0.35))
-			source := strings.concatenate({"sections/", next.name, "/transition"})
+			append(&work.notes[ti], note(song, t0, at - t0, root, 0.8, pad))
 			append(&song.regions, Region{song.tracks[ti].part, t0, at, source})
-			if kind == .Impact {
-				ti = fx_track(song, work, .Impact)
-				append(&work.notes[ti], note(song, at, 2.5, 36, 0.8))
-				ti = fx_track(song, work, .Crash)
-				append(&work.notes[ti], note(song, at, 1.6, 60, 0.7))
-				append(&song.regions, Region{song.tracks[ti].part, at, at + 2.5, source})
-			}
+		case .Impact:
+			bar := tempo.seconds_from_beat(&song.tempo, next.beat + f64(next.beats_per_bar)) - at
+			append(&work.notes[ti], note(song, at, bar, root, 0.8, pad))
+			append(&song.regions, Region{song.tracks[ti].part, at, at + bar, source})
 		case .Fill:
-			// a snare roll over the last beat, on the outgoing groove's kit: the
-			// drums part's track of a fill instrument that plays pads there, else
-			// the first such track (a crash on a drum machine of its own isn't
-			// the kit)
-			kit := -1
-			for t, ti in song.tracks {
-				if song.devices[t.instrument] not_in FILL_INSTRUMENTS || t.variant != prev.style || !plays_pads(work.notes[ti][:]) {
-					continue
-				}
-				if song.parts[t.part] == "drums" {
-					kit = ti
-					break
-				}
-				if kit < 0 {
-					kit = ti
+			last := next.beat - 1
+			notes := &work.notes[ti]
+			#reverse for n, k in notes {
+				if n.beat >= last - 1e-9 && n.beat < next.beat - 1e-9 && n.pad == pad {
+					ordered_remove(notes, k)
 				}
 			}
-			for t, ti in song.tracks {
-				if ti != kit {
-					continue
-				}
-				last := next.beat - 1
-				notes := &work.notes[ti]
-				#reverse for n, k in notes {
-					if n.beat >= last - 1e-9 && n.beat < next.beat - 1e-9 && (n.pad == .Hat || n.pad == .Snare || n.pad == .Clap) {
-						ordered_remove(notes, k)
-					}
-				}
-				for s in 0 ..< 4 {
-					b := last + f64(s) * 0.25
-					t0 := tempo.seconds_from_beat(&song.tempo, b)
-					append(notes, note(song, t0, tempo.seconds_from_beat(&song.tempo, b + 0.25) - t0, 0, f32(0.35 + 0.15 * f64(s)), .Snare))
-				}
-				break
+			for st in 0 ..< 4 {
+				b := last + f64(st) * 0.25
+				t0 := tempo.seconds_from_beat(&song.tempo, b)
+				append(notes, note(song, t0, tempo.seconds_from_beat(&song.tempo, b + 0.25) - t0, 0, f32(0.35 + 0.15 * f64(st)), pad))
 			}
+			t0 := tempo.seconds_from_beat(&song.tempo, last)
+			append(&song.regions, Region{song.tracks[ti].part, t0, at, source})
 		case .Pause:
 			last := tempo.seconds_from_beat(&song.tempo, next.beat - 1)
 			for &notes in work.notes {
@@ -1017,9 +1036,7 @@ add_transitions :: proc(song: ^Song, work: ^Work) {
 					}
 				}
 			}
-		case .Filter:
-			base.report(&song.findings, "not_supported", .Info, base.path_join("sections", next.name), "section %s: the filter transition is not built yet; it plays as none", next.name)
-		case .None, .Cut, .Auto:
+		case .None, .Cut:
 		}
 	}
 }

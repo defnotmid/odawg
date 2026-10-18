@@ -1,10 +1,11 @@
-// device: the instruments and effects. Every instrument, preset and effect is a row of
-// DEVICE_TABLE (its name, which params it reads, Tone's defaults, and its
-// procs); every option any of them reads is a row of PARAM_TABLE (its `/`
-// path in a spec, its unit, its choices). A device's values are a `Params`
-// filled from its row; the procs read them by Param. Nothing here parses or
-// knows songs: a reader fills Params from the tables, the engine calls the
-// procs over buffers.
+// device: the instruments and effects. Every device is a row of DEVICE_TABLE
+// (its name, which params it reads, Tone's defaults, and its procs); every
+// option any of them reads is a row of PARAM_TABLE (its `/` path in a spec,
+// its unit, its choices). A device's values are a `Params` filled from its
+// row; the procs read them by Param. An instrument is a Voice playing a
+// Program (graph.odin): a row of data over the primitives of NODE_TABLE.
+// Nothing here parses or knows songs: a reader fills Params and Programs
+// from the tables, the engine calls the procs over buffers.
 package odawg_device
 
 import dsp "../dsp"
@@ -26,61 +27,14 @@ Unit :: enum u8 {
 
 Param :: enum u8 {
 	None,
-	// Tone's OmniOscillator: "fatsawtooth" is the sawtooth with `count` copies
-	// `spread` cents apart.
-	Oscillator_Type,
-	Oscillator_Count,
-	Oscillator_Spread,
-	Oscillator_Width,
-	Envelope_Attack,
-	Envelope_Decay,
-	Envelope_Sustain,
-	Envelope_Release,
-	// An instrument's filter (MonoSynth) and AutoFilter's.
+	// AutoFilter's filter and range.
 	Filter_Type,
-	Filter_Frequency,
 	Filter_Q,
 	Filter_Rolloff,
-	Filter_Gain,
-	Filter_Envelope_Attack,
-	Filter_Envelope_Decay,
-	Filter_Envelope_Sustain,
-	Filter_Envelope_Release,
-	Filter_Envelope_Base_Frequency,
-	Filter_Envelope_Octaves,
-	Filter_Envelope_Exponent,
-	// FMSynth's and AMSynth's modulator.
-	Modulation_Type,
-	Modulation_Envelope_Attack,
-	Modulation_Envelope_Decay,
-	Modulation_Envelope_Sustain,
-	Modulation_Envelope_Release,
-	Harmonicity,
-	Modulation_Index,
-	Pitch_Decay, // MembraneSynth
-	Octaves, // MembraneSynth's sweep, MetalSynth's and AutoFilter's range
-	Resonance, // MetalSynth's high-pass (Hz), PluckSynth's feedback (0..1)
-	Attack_Noise,
-	Dampening,
-	Release, // PluckSynth, Limiter, Gate, Compressor
-	Noise_Type,
-	Portamento,
-	// The presets' knobs (0: the preset's own value).
-	Cutoff,
-	Cutoff2,
-	Decay, // a preset's decay rate (per second); Reverb's decay (seconds)
-	Tone,
-	Kit, // DrumKit
-	Sample_Set, // Sampler: which set of the Bank it plays
-	Machine, // DrumMachine: which machine's circuits
-	Tune, // semitones
-	Accent, // AcidSynth: how much an accented note (velocity > 0.8) opens and lifts
-	// Player: a clip played as recorded.
-	Offset, // seconds into the clip it starts from
-	Fade_In,
-	Fade_Out,
-	Curve, // the fades' shape
-	Mono, // 1: L and R folded to 0.707 (L + R)
+	Octaves,
+	Release, // Limiter, Gate, Compressor
+	Decay, // Reverb's (seconds)
+	Program, // Voice: its program's index in Voice_Env.programs (set by the song, not a spec)
 	// Effects.
 	Wet,
 	Type, // Filter
@@ -120,8 +74,6 @@ Param_Row :: struct {
 WAVE_CHOICES := []string{"sine", "triangle", "sawtooth", "square", "pulse", "fatsine", "fattriangle", "fatsawtooth", "fatsquare"}
 FILTER_CHOICES := []string{"lowpass", "highpass", "bandpass", "lowshelf", "highshelf", "notch", "allpass", "peaking"}
 NOISE_CHOICES := []string{"white", "pink", "brown"}
-KIT_CHOICES := []string{"synth", "808", "909"}
-MACHINE_CHOICES := []string{"808", "909"}
 CURVE_CHOICES := []string{"linear", "equal_power"}
 
 Curve :: enum u8 {
@@ -129,67 +81,15 @@ Curve :: enum u8 {
 	Equal_Power,
 }
 
-// Indices into WAVE_CHOICES and FILTER_CHOICES, for the procs.
-
-
-
-Kit :: enum u8 {
-	Synth,
-	R808,
-	R909,
-}
-
 PARAM_TABLE := [Param]Param_Row {
 	.None                           = {"", .Number, nil},
-	.Oscillator_Type                = {"oscillator/type", .Choice, WAVE_CHOICES},
-	.Oscillator_Count               = {"oscillator/count", .Number, nil},
-	.Oscillator_Spread              = {"oscillator/spread", .Cents, nil},
-	.Oscillator_Width               = {"oscillator/width", .Number, nil},
-	.Envelope_Attack                = {"envelope/attack", .Seconds, nil},
-	.Envelope_Decay                 = {"envelope/decay", .Seconds, nil},
-	.Envelope_Sustain               = {"envelope/sustain", .Number, nil},
-	.Envelope_Release               = {"envelope/release", .Seconds, nil},
 	.Filter_Type                    = {"filter/type", .Choice, FILTER_CHOICES},
-	.Filter_Frequency               = {"filter/frequency", .Hz, nil},
 	.Filter_Q                       = {"filter/q", .Number, nil},
 	.Filter_Rolloff                 = {"filter/rolloff", .Number, nil},
-	.Filter_Gain                    = {"filter/gain", .Db, nil},
-	.Filter_Envelope_Attack         = {"filter_envelope/attack", .Seconds, nil},
-	.Filter_Envelope_Decay          = {"filter_envelope/decay", .Seconds, nil},
-	.Filter_Envelope_Sustain        = {"filter_envelope/sustain", .Number, nil},
-	.Filter_Envelope_Release        = {"filter_envelope/release", .Seconds, nil},
-	.Filter_Envelope_Base_Frequency = {"filter_envelope/base_frequency", .Hz, nil},
-	.Filter_Envelope_Octaves        = {"filter_envelope/octaves", .Number, nil},
-	.Filter_Envelope_Exponent       = {"filter_envelope/exponent", .Number, nil},
-	.Modulation_Type                = {"modulation/type", .Choice, WAVE_CHOICES},
-	.Modulation_Envelope_Attack     = {"modulation_envelope/attack", .Seconds, nil},
-	.Modulation_Envelope_Decay      = {"modulation_envelope/decay", .Seconds, nil},
-	.Modulation_Envelope_Sustain    = {"modulation_envelope/sustain", .Number, nil},
-	.Modulation_Envelope_Release    = {"modulation_envelope/release", .Seconds, nil},
-	.Harmonicity                    = {"harmonicity", .Number, nil},
-	.Modulation_Index               = {"modulation_index", .Number, nil},
-	.Pitch_Decay                    = {"pitch_decay", .Seconds, nil},
 	.Octaves                        = {"octaves", .Number, nil},
-	.Resonance                      = {"resonance", .Number, nil},
-	.Attack_Noise                   = {"attack_noise", .Number, nil},
-	.Dampening                      = {"dampening", .Hz, nil},
 	.Release                        = {"release", .Seconds, nil},
-	.Noise_Type                     = {"noise/type", .Choice, NOISE_CHOICES},
-	.Portamento                     = {"portamento", .Seconds, nil},
-	.Cutoff                         = {"cutoff", .Hz, nil},
-	.Cutoff2                        = {"cutoff2", .Hz, nil},
 	.Decay                          = {"decay", .Number, nil},
-	.Tone                           = {"tone", .Number, nil},
-	.Kit                            = {"kit", .Choice, KIT_CHOICES},
-	.Sample_Set                     = {"set", .Asset, nil},
-	.Machine                        = {"machine", .Choice, MACHINE_CHOICES},
-	.Tune                           = {"tune", .Number, nil},
-	.Accent                         = {"accent", .Number, nil},
-	.Offset                         = {"offset", .Seconds, nil},
-	.Fade_In                        = {"fade_in", .Seconds, nil},
-	.Fade_Out                       = {"fade_out", .Seconds, nil},
-	.Curve                          = {"curve", .Choice, CURVE_CHOICES},
-	.Mono                           = {"mono", .Number, nil},
+	.Program                        = {"", .Number, nil},
 	.Wet                            = {"wet", .Number, nil},
 	.Type                           = {"type", .Choice, FILTER_CHOICES},
 	.Frequency                      = {"frequency", .Hz, nil},
@@ -223,93 +123,54 @@ Note :: struct {
 	duration: f64, // how long the gate is held; the release follows
 	pitch:    f32, // MIDI, 60 = C4; drums: 0 means the pad's own tuning
 	velocity: f32, // 0..1
-	pad:      Pad,
+	pad:      u32, // the pad it plays (name_id of its name; 0: none)
+	accent:   f32, // 0..1
 }
 
-// A DrumKit's pads.
-Pad :: enum u8 {
-	None,
-	Kick,
-	Snare,
-	Clap,
-	Rim,
-	Hat,
-	Open_Hat,
-	Crash,
-	Ride,
-	Tom_Low,
-	Tom_Mid,
-	Tom_High,
-	Shaker,
-	Cowbell,
-	Conga_Low,
-	Conga_Mid,
-	Conga_High,
-	Clave,
-	Maracas,
-	Tambourine,
+// General MIDI's drum names and keys: what a sample set's pad of one of
+// these names answers when it gives no key (a sampled kit's zones, an SFZ
+// keyed to General MIDI).
+GM_PADS := [?]struct {
+	name: string,
+	key:  f32,
+} {
+	{"kick", 36}, {"rim", 37}, {"snare", 38}, {"clap", 39}, {"tom_low", 41}, {"hat", 42}, {"tom_mid", 45},
+	{"open_hat", 46}, {"tom_high", 48}, {"crash", 49}, {"ride", 51}, {"tambourine", 54}, {"cowbell", 56},
+	{"conga_high", 62}, {"conga_mid", 63}, {"conga_low", 64}, {"maracas", 70}, {"clave", 75}, {"shaker", 82},
 }
 
-PAD_NAMES := [Pad]string {
-	.None     = "",
-	.Kick     = "kick",
-	.Snare    = "snare",
-	.Clap     = "clap",
-	.Rim      = "rim",
-	.Hat      = "hat",
-	.Open_Hat = "open_hat",
-	.Crash    = "crash",
-	.Ride     = "ride",
-	.Tom_Low  = "tom_low",
-	.Tom_Mid  = "tom_mid",
-	.Tom_High = "tom_high",
-	.Shaker   = "shaker",
-	.Cowbell  = "cowbell",
-	.Conga_Low = "conga_low",
-	.Conga_Mid = "conga_mid",
-	.Conga_High = "conga_high",
-	.Clave    = "clave",
-	.Maracas  = "maracas",
-	.Tambourine = "tambourine",
-}
-
-// A pad that cuts others on its track when it starts (a closed hat chokes
-// a ringing open one), as rows.
-PAD_CHOKES := #partial [Pad]bit_set[Pad] {
-	.Hat = {.Open_Hat},
+gm_key :: proc(name: string) -> (f32, bool) {
+	for g in GM_PADS {
+		if g.name == name {
+			return g.key, true
+		}
+	}
+	return 0, false
 }
 
 // The fade a choked note takes: 5 ms.
 CHOKE_SAMPLES :: RATE * 5 / 1000
 
-pad_from_name :: proc(name: string) -> (Pad, bool) {
-	for n, p in PAD_NAMES {
-		if p != .None && n == name {
-			return p, true
-		}
-	}
-	return .None, false
-}
-
 // ---- devices -----------------------------------------------------------------------
 
 Device_Category :: enum u8 {
 	Instrument, // a Tone class
-	Preset, // one of onimite's synth.lua voices
 	Effect,
 }
 
 // A playing note's state: a fixed slot (nothing is allocated while playing).
 // A kind keeps its own state struct in it (#assert size_of(X) <= size_of(Voice_State)).
-VOICE_STATE_SIZE :: 16 * 1024
+VOICE_STATE_SIZE :: 32 * 1024 // the most a voice keeps: a program's state is checked against it (voice_too_big)
 
 Voice_State :: struct #align (16) {
 	bytes: [VOICE_STATE_SIZE]u8,
 }
 
-// What a voice may read beyond its note: the sample bank.
+// What a voice may read beyond its note: the sample bank, the song's
+// instruments.
 Voice_Env :: struct {
-	bank: ^Bank,
+	bank:     ^Bank,
+	programs: ^Programs,
 }
 
 // Plays a note's next len(l) samples, adding into l and r. `at` is how many
@@ -356,9 +217,6 @@ Device_Row :: struct {
 	// (its state kept, `at` 0 again), which reads from its state whether the
 	// last gate was still open (a slide, legato) or not (a new attack).
 	mono:        bool,
-	// Its output is a function of the note's sample index alone (a sample
-	// read at a position): a seek starts it where it is, nothing rendered.
-	jump:        bool,
 	effect:      Effect_Proc,
 	effect_size: Effect_Size_Proc,
 	effect_reset: Effect_Reset_Proc,
@@ -367,47 +225,8 @@ Device_Row :: struct {
 }
 
 Device_Kind :: enum u8 {
-	// Tone's instruments.
-	Synth,
-	Mono_Synth,
-	FM_Synth,
-	AM_Synth,
-	Membrane_Synth,
-	Metal_Synth,
-	Noise_Synth,
-	Pluck_Synth,
-	Drum_Kit,
-	Sampler,
-	Drum_Machine,
-	Acid_Synth,
-	Player,
-	// onimite's synth.lua voices, and a snare and a sub.
-	Kick,
-	Snare,
-	Clap,
-	Hat,
-	Open_Hat,
-	Crash,
-	Bass,
-	Sub_Bass,
-	Pad,
-	Stab,
-	Pluck,
-	Lead,
-	Bell,
-	Riser,
-	Whoosh,
-	Impact,
-	Tom,
-	Thump,
-	Fall,
-	Tape_Chord,
-	Tick,
-	Beep,
-	Crackle,
-	Glitch,
-	Blip,
-	Done,
+	// An instrument: a program of nodes (graph.odin; a clip's too).
+	Voice,
 	// Tone's effects.
 	Filter,
 	EQ3,
@@ -425,113 +244,10 @@ Device_Kind :: enum u8 {
 }
 
 @(private = "file")
-OSC :: Param_Set{.Oscillator_Type, .Oscillator_Count, .Oscillator_Spread, .Oscillator_Width}
-@(private = "file")
-ENV :: Param_Set{.Envelope_Attack, .Envelope_Decay, .Envelope_Sustain, .Envelope_Release}
-@(private = "file")
-FILTER :: Param_Set{.Filter_Type, .Filter_Frequency, .Filter_Q, .Filter_Rolloff, .Filter_Gain}
-@(private = "file")
-FILTER_ENV :: Param_Set {
-	.Filter_Envelope_Attack,
-	.Filter_Envelope_Decay,
-	.Filter_Envelope_Sustain,
-	.Filter_Envelope_Release,
-	.Filter_Envelope_Base_Frequency,
-	.Filter_Envelope_Octaves,
-	.Filter_Envelope_Exponent,
-}
-@(private = "file")
-MOD :: Param_Set {
-	.Modulation_Type,
-	.Modulation_Envelope_Attack,
-	.Modulation_Envelope_Decay,
-	.Modulation_Envelope_Sustain,
-	.Modulation_Envelope_Release,
-	.Harmonicity,
-}
-@(private = "file")
-KNOBS :: Param_Set{.Cutoff, .Cutoff2, .Decay, .Tone, .Envelope_Attack}
-@(private = "file")
 FX :: Param_Set{.Wet}
 
 DEVICE_TABLE := [Device_Kind]Device_Row {
-	.Synth = {
-		name = "Synth", category = .Instrument, reads = OSC + ENV + {.Portamento},
-		defaults = {{.Oscillator_Type, f32(dsp.Wave.Triangle)}, {.Oscillator_Count, 3}, {.Oscillator_Spread, 20}, {.Oscillator_Width, 0.5}, {.Envelope_Attack, 0.005}, {.Envelope_Decay, 0.1}, {.Envelope_Sustain, 0.3}, {.Envelope_Release, 1}},
-		voice = voice_synth, release = .Envelope_Release,
-	},
-	.Mono_Synth = {
-		name = "MonoSynth", category = .Instrument, reads = OSC + ENV + FILTER + FILTER_ENV + {.Portamento},
-		defaults = {{.Oscillator_Type, f32(dsp.Wave.Square)}, {.Oscillator_Count, 3}, {.Oscillator_Spread, 20}, {.Oscillator_Width, 0.5}, {.Envelope_Attack, 0.005}, {.Envelope_Decay, 0.1}, {.Envelope_Sustain, 0.9}, {.Envelope_Release, 1}, {.Filter_Type, f32(dsp.Filter_Type.Lowpass)}, {.Filter_Q, 1}, {.Filter_Rolloff, -12}, {.Filter_Envelope_Attack, 0.6}, {.Filter_Envelope_Decay, 0.2}, {.Filter_Envelope_Sustain, 0.5}, {.Filter_Envelope_Release, 2}, {.Filter_Envelope_Base_Frequency, 200}, {.Filter_Envelope_Octaves, 3}, {.Filter_Envelope_Exponent, 2}},
-		voice = voice_mono_synth, release = .Envelope_Release,
-	},
-	.FM_Synth = {
-		name = "FMSynth", category = .Instrument, reads = OSC + ENV + MOD + {.Modulation_Index, .Portamento},
-		defaults = {{.Oscillator_Type, f32(dsp.Wave.Sine)}, {.Oscillator_Count, 3}, {.Oscillator_Spread, 20}, {.Envelope_Attack, 0.01}, {.Envelope_Decay, 0.01}, {.Envelope_Sustain, 1}, {.Envelope_Release, 0.5}, {.Modulation_Type, f32(dsp.Wave.Square)}, {.Modulation_Envelope_Attack, 0.5}, {.Modulation_Envelope_Sustain, 1}, {.Modulation_Envelope_Release, 0.5}, {.Harmonicity, 3}, {.Modulation_Index, 10}},
-		voice = voice_fm_synth, release = .Envelope_Release,
-	},
-	.AM_Synth = {
-		name = "AMSynth", category = .Instrument, reads = OSC + ENV + MOD + {.Portamento},
-		defaults = {{.Oscillator_Type, f32(dsp.Wave.Sine)}, {.Oscillator_Count, 3}, {.Oscillator_Spread, 20}, {.Envelope_Attack, 0.01}, {.Envelope_Decay, 0.01}, {.Envelope_Sustain, 1}, {.Envelope_Release, 0.5}, {.Modulation_Type, f32(dsp.Wave.Square)}, {.Modulation_Envelope_Attack, 0.5}, {.Modulation_Envelope_Sustain, 1}, {.Modulation_Envelope_Release, 0.5}, {.Harmonicity, 3}},
-		voice = voice_am_synth, release = .Envelope_Release,
-	},
-	.Membrane_Synth = {
-		name = "MembraneSynth", category = .Instrument, reads = OSC + ENV + {.Pitch_Decay, .Octaves},
-		defaults = {{.Oscillator_Type, f32(dsp.Wave.Sine)}, {.Oscillator_Count, 3}, {.Oscillator_Spread, 20}, {.Envelope_Attack, 0.001}, {.Envelope_Decay, 0.4}, {.Envelope_Sustain, 0.01}, {.Envelope_Release, 1.4}, {.Pitch_Decay, 0.05}, {.Octaves, 10}},
-		voice = voice_membrane_synth, release = .Envelope_Release,
-	},
-	.Metal_Synth = {
-		name = "MetalSynth", category = .Instrument, reads = ENV + {.Harmonicity, .Modulation_Index, .Resonance, .Octaves},
-		defaults = {{.Envelope_Attack, 0.001}, {.Envelope_Decay, 1.4}, {.Envelope_Sustain, 0}, {.Envelope_Release, 0.2}, {.Harmonicity, 5.1}, {.Modulation_Index, 32}, {.Resonance, 4000}, {.Octaves, 1.5}},
-		voice = voice_metal_synth, release = .Envelope_Release,
-	},
-	.Noise_Synth = {
-		name = "NoiseSynth", category = .Instrument, reads = ENV + {.Noise_Type},
-		defaults = {{.Envelope_Attack, 0.005}, {.Envelope_Decay, 0.1}, {.Envelope_Sustain, 0}, {.Envelope_Release, 1}, {.Noise_Type, f32(dsp.Noise_Type.White)}},
-		voice = voice_noise_synth, release = .Envelope_Release,
-	},
-	.Pluck_Synth = {
-		name = "PluckSynth", category = .Instrument, reads = {.Attack_Noise, .Dampening, .Resonance, .Release},
-		defaults = {{.Attack_Noise, 1}, {.Dampening, 4000}, {.Resonance, 0.7}, {.Release, 1}},
-		voice = voice_pluck_synth, tail = tail_pluck_synth,
-	},
-	.Drum_Kit = {name = "DrumKit", category = .Instrument, reads = {.Kit}, voice = voice_drum_kit, tail = tail_drum_kit},
-	.Drum_Machine = {name = "DrumMachine", category = .Instrument, reads = {.Machine, .Decay, .Tone, .Tune}, defaults = {{.Decay, 1}, {.Tone, 0.5}}, voice = voice_drum_machine, tail = tail_drum_machine},
-	.Acid_Synth = {
-		name = "AcidSynth", category = .Instrument, mono = true,
-		reads = {.Oscillator_Type, .Filter_Frequency, .Filter_Q, .Filter_Envelope_Octaves, .Envelope_Decay, .Accent, .Portamento, .Tune},
-		defaults = {{.Oscillator_Type, f32(dsp.Wave.Sawtooth)}, {.Filter_Frequency, 400}, {.Filter_Q, 8}, {.Filter_Envelope_Octaves, 3}, {.Envelope_Decay, 0.3}, {.Accent, 0.5}, {.Portamento, 0.06}},
-		voice = voice_acid_synth, tail = tail_acid_synth,
-	},
-	.Player = {name = "Player", category = .Instrument, reads = {.Sample_Set, .Offset, .Fade_In, .Fade_Out, .Curve, .Mono}, voice = voice_player, tail = tail_player, state = PLAYER_STATE_BYTES, jump = true},
-	.Sampler = {name = "Sampler", category = .Instrument, reads = {.Sample_Set, .Attack, .Release}, defaults = {{.Release, 0.1}}, voice = voice_sampler, tail = tail_sampler, release = .Release, jump = true},
-	// synth.lua's lengths: a fixed one for one-shots, the note's for the rest
-	.Kick = {name = "kick", category = .Preset, reads = KNOBS, voice = voice_kick, length = 0.4},
-	.Snare = {name = "snare", category = .Preset, reads = KNOBS, voice = voice_snare, length = 0.35},
-	.Clap = {name = "clap", category = .Preset, reads = KNOBS, voice = voice_clap, length = 0.3},
-	.Hat = {name = "hat", category = .Preset, reads = KNOBS, voice = voice_hat, tail = tail_hat},
-	.Open_Hat = {name = "open_hat", category = .Preset, reads = KNOBS, voice = voice_open_hat, length = 0.22},
-	.Crash = {name = "crash", category = .Preset, reads = KNOBS, voice = voice_crash, length = 1.6},
-	.Bass = {name = "bass", category = .Preset, reads = KNOBS, voice = voice_bass},
-	.Sub_Bass = {name = "sub_bass", category = .Preset, reads = KNOBS, voice = voice_sub_bass, tail = tail_sub_bass},
-	.Pad = {name = "pad", category = .Preset, reads = KNOBS, voice = voice_pad, tail = tail_chord},
-	.Stab = {name = "stab", category = .Preset, reads = KNOBS, voice = voice_stab, tail = tail_chord},
-	.Pluck = {name = "pluck", category = .Preset, reads = KNOBS, voice = voice_pluck, length = 0.18},
-	.Lead = {name = "lead", category = .Preset, reads = KNOBS, voice = voice_lead},
-	.Bell = {name = "bell", category = .Preset, reads = KNOBS, voice = voice_bell, tail = tail_bell},
-	.Riser = {name = "riser", category = .Preset, reads = KNOBS, voice = voice_riser},
-	.Whoosh = {name = "whoosh", category = .Preset, reads = KNOBS, voice = voice_whoosh},
-	.Impact = {name = "impact", category = .Preset, reads = KNOBS, voice = voice_impact, length = 2.5},
-	.Tom = {name = "tom", category = .Preset, reads = KNOBS, voice = voice_tom, length = 0.5},
-	.Thump = {name = "thump", category = .Preset, reads = KNOBS, voice = voice_thump, length = 0.7},
-	.Fall = {name = "fall", category = .Preset, reads = KNOBS, voice = voice_fall},
-	.Tape_Chord = {name = "tape_chord", category = .Preset, reads = KNOBS, voice = voice_tape_chord},
-	.Tick = {name = "tick", category = .Preset, reads = KNOBS, voice = voice_tick, length = 0.025},
-	.Beep = {name = "beep", category = .Preset, reads = KNOBS, voice = voice_beep, length = 0.03},
-	.Crackle = {name = "crackle", category = .Preset, reads = KNOBS, voice = voice_crackle, length = 0.012},
-	.Glitch = {name = "glitch", category = .Preset, reads = KNOBS, voice = voice_glitch},
-	.Blip = {name = "blip", category = .Preset, reads = KNOBS, voice = voice_blip, length = 0.09},
-	.Done = {name = "done", category = .Preset, reads = KNOBS, voice = voice_done, length = 0.21},
+	.Voice = {name = "", category = .Instrument, voice = voice_graph, tail = tail_graph},
 	// effects: Tone's defaults
 	.Filter = {name = "Filter", category = .Effect, reads = FX + {.Type, .Frequency, .Q, .Rolloff, .Gain}, defaults = {{.Wet, 1}, {.Type, f32(dsp.Filter_Type.Lowpass)}, {.Frequency, 350}, {.Q, 1}, {.Rolloff, -12}}, effect = effect_filter, effect_size = size_filter, effect_reset = reset_filter},
 	.EQ3 = {name = "EQ3", category = .Effect, reads = FX + {.Low, .Mid, .High, .Low_Frequency, .High_Frequency}, defaults = {{.Wet, 1}, {.Low_Frequency, 400}, {.High_Frequency, 2500}}, effect = effect_eq3, effect_size = size_eq3, effect_reset = reset_eq3},
@@ -565,13 +281,14 @@ params_from_kind :: proc(kind: Device_Kind) -> (p: Params) {
 	return
 }
 
-// Seconds a note sounds: the row's proc, else its fixed length, else the
-// gate plus its release (at most 30).
-// Bytes a voice of `kind` needs, a multiple of 16.
-voice_state_bytes :: proc(kind: Device_Kind) -> int {
-	n := DEVICE_TABLE[kind].state
+// Bytes a voice of the device needs, a multiple of 16.
+voice_bytes :: proc(kind: Device_Kind, p: ^Params, env: ^Voice_Env) -> int {
+	n := kind == .Voice ? voice_bytes_graph(p, env) : DEVICE_TABLE[kind].state
 	return ((n > 0 ? n : VOICE_STATE_SIZE) + 15) &~ 15
 }
+
+// Seconds a note sounds: the row's proc, else its fixed length, else the
+// gate plus its release (at most 30).
 
 note_tail :: proc(kind: Device_Kind, p: ^Params, n: Note, env: ^Voice_Env = nil) -> f64 {
 	row := &DEVICE_TABLE[kind]
@@ -584,7 +301,7 @@ note_tail :: proc(kind: Device_Kind, p: ^Params, n: Note, env: ^Voice_Env = nil)
 	case:
 		t = n.duration + (row.release != .None ? f64(p[row.release]) : 0)
 	}
-	return clamp(t, 0, 30)
+	return clamp(t, 0, max(30, n.duration)) // a ring at most 30 s past what is held
 }
 
 effect_tail :: proc(kind: Device_Kind, p: ^Params) -> f64 {
@@ -592,5 +309,3 @@ effect_tail :: proc(kind: Device_Kind, p: ^Params) -> f64 {
 	return row.effect_tail != nil ? row.effect_tail(p) : 0
 }
 
-// synth.lua's hat lasts its `dur` (the note's), 45 ms when none is given.
-tail_hat :: proc(p: ^Params, n: Note, env: ^Voice_Env) -> f64 {return n.duration > 0 ? n.duration : 0.045}

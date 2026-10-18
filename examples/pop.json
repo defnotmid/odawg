@@ -1,0 +1,245 @@
+{
+  "name": "pop",
+  "description": "A pop production written out part by part: an 808 on a glued drum bus, a sub ducked by the kick, a sampled upright through the verses, supersaw chords pumping under the drums' sound (a key edge), a hook through a dotted-eighth echo, sampled strings in the last chorus.",
+  "instruments": "instruments/classic.json",
+  "key": "A minor",
+  "seed": 21,
+  "chords": "Am F C G",
+  "sections": [
+    { "name": "intro", "duration": "4m", "bpm": 116, "energy": 0.3 },
+    { "name": "verse", "duration": "8m", "energy": 0.5 },
+    { "name": "pre", "duration": "4m", "energy": 0.7 },
+    { "name": "chorus", "duration": "8m", "energy": 1 },
+    { "name": "break", "duration": "4m", "energy": 0.4 },
+    { "name": "chorus2", "duration": "8m", "energy": 1 },
+    { "name": "outro", "duration": "4m", "energy": 0.3 }
+  ],
+  "returns": {
+    "room": [ { "name": "Reverb", "decay": 0.8, "pre_delay": 0.005 } ],
+    "hall": [ { "name": "Reverb", "decay": 2.4, "pre_delay": 0.025 } ],
+    "echo": [
+      { "name": "FeedbackDelay", "delay_time": "8n.", "feedback": 0.3 },
+      { "name": "Filter", "type": "highpass", "frequency": 500 }
+    ]
+  },
+  "buses": {
+    "drumbus": { "effects": [ { "name": "Compressor", "threshold": -16, "ratio": 3, "attack": 0.01, "release": 0.15 } ] },
+    "synths": { "effects": [ { "name": "Compressor", "threshold": -20, "ratio": 2, "attack": 0.02, "release": 0.2 } ] }
+  },
+  "parts": {
+    "drums": {
+      "instrument": "machines/808.json",
+      "octave": 3,
+      "gain_db": 0,
+      "room_db": 0,
+      "sends": { "room": -18 },
+      "to": "drumbus",
+      "play": [
+        {
+          "name": "verse",
+          "velocity": 0.75,
+          "humanize": 0.004,
+          "steps": { "kick": "x.......x.x.....", "clap": "....x.......x...", "hat": "x.o.x.o.x.o.x.o." }
+        },
+        {
+          "name": "pre",
+          "velocity": 0.8,
+          "humanize": 0.003,
+          "steps": {
+            "kick": "x...x...x...x...",
+            "hat": "xoxoxoxoxoxoxoxo",
+            "clap": [ "....x.......x...", "....x.......x...", "....x.......x...", "....x...x.x.xXXX" ]
+          }
+        },
+        {
+          "name": "chorus",
+          "velocity": 0.85,
+          "humanize": 0.003,
+          "steps": {
+            "kick": "x...x...x...x...",
+            "clap": "....X.......X...",
+            "hat": "x.x.x.x.x.x.x.x.",
+            "open_hat": "..x...x...x...x."
+          }
+        },
+        { "name": "break", "velocity": 0.6, "steps": { "kick": "x.......x.......", "hat": "....x.......x..." } },
+        {
+          "name": "chorus2",
+          "velocity": 0.85,
+          "humanize": 0.003,
+          "steps": {
+            "kick": "x...x...x...x...",
+            "clap": "....X.......X...",
+            "hat": "x.x.x.x.x.x.x.x.",
+            "open_hat": "..x...x...x...x."
+          }
+        }
+      ]
+    },
+    "sub": {
+      "instrument": "sub_bass",
+      "octave": 1,
+      "gain_db": -14,
+      "room_db": 0,
+      "sidechain": { "name": "drums/kick", "depth": 0.6, "release": 0.1 },
+      "play": [
+        { "name": "verse", "degrees": "1 - - - - - - -", "subdivision": "8n", "velocity": 0.8 },
+        { "name": "pre", "degrees": "1 - 1 - 1 - 1 -", "subdivision": "8n", "velocity": 0.8 },
+        { "name": "chorus", "degrees": "1 - - 1 - - 1 -", "subdivision": "8n", "velocity": 0.85 },
+        { "name": "chorus2", "degrees": "1 - - 1 - - 1 -", "subdivision": "8n", "velocity": 0.85 }
+      ]
+    },
+    "bass": {
+      "instrument": "bass",
+      "octave": 2,
+      "gain_db": -7,
+      "room_db": 0,
+      "sidechain": { "name": "drums/kick", "depth": 0.5, "release": 0.1 },
+      "play": [
+        { "name": "chorus", "degrees": "1 - - 1 - - 1 -", "subdivision": "8n", "velocity": 0.7 },
+        { "name": "chorus2", "degrees": "1 - - 1 - - 1 -", "subdivision": "8n", "velocity": 0.7 }
+      ]
+    },
+    "piano": {
+      "instrument": { "name": "Sampler", "set": "vcsl/upright_piano", "release": 0.5 },
+      "octave": 4,
+      "gain_db": -4,
+      "room_db": -3,
+      "sends": { "hall": -14 },
+      "play": [
+        {
+          "name": "intro",
+          "chords": { "voicing": "open", "rhythm": "x..x..x...x..x.." },
+          "duration": "8n",
+          "velocity": 0.58,
+          "humanize": 0.008
+        },
+        {
+          "name": "verse",
+          "chords": { "voicing": "open", "rhythm": "x..x..x...x..x.." },
+          "duration": "8n",
+          "velocity": 0.6,
+          "humanize": 0.006
+        },
+        {
+          "name": "pre",
+          "chords": { "voicing": "open", "rhythm": "x.x.x.x.x.x.x.x." },
+          "duration": "16n",
+          "velocity": 0.6,
+          "humanize": 0.004
+        },
+        {
+          "name": "chorus",
+          "chords": { "voicing": "open", "rhythm": "x..x..x.x..x..x." },
+          "duration": "8n",
+          "velocity": 0.5
+        },
+        {
+          "name": "break",
+          "chords": { "voicing": "open", "rhythm": "x.......x......." },
+          "duration": "2n",
+          "velocity": 0.5,
+          "humanize": 0.008
+        },
+        {
+          "name": "chorus2",
+          "chords": { "voicing": "open", "rhythm": "x..x..x.x..x..x." },
+          "duration": "8n",
+          "velocity": 0.5
+        },
+        {
+          "name": "outro",
+          "chords": { "voicing": "open", "rhythm": "x.......x......." },
+          "duration": "2n",
+          "velocity": 0.5,
+          "humanize": 0.008
+        }
+      ]
+    },
+    "chords": {
+      "instrument": {
+        "name": "Synth",
+        "oscillator": { "type": "fatsawtooth", "count": 5, "spread": 24 },
+        "envelope": { "attack": 0.02, "decay": 0.3, "sustain": 0.7, "release": 0.4 }
+      },
+      "octave": 4,
+      "gain_db": -4,
+      "room_db": -3,
+      "effects": [
+        { "name": "Filter", "type": "lowpass", "frequency": 5200 },
+        { "name": "Compressor", "threshold": -34, "ratio": 8, "attack": 0.002, "release": 0.14 }
+      ],
+      "sends": { "hall": -10 },
+      "to": "synths",
+      "key": "drums",
+      "play": [
+        {
+          "name": "pre",
+          "chords": { "voicing": "spread", "rhythm": "x.x.x.x.x.x.x.x." },
+          "duration": "16n",
+          "velocity": 0.45
+        },
+        { "name": "chorus", "chords": { "voicing": "spread" }, "velocity": 0.6 },
+        { "name": "chorus2", "chords": { "voicing": "spread" }, "velocity": 0.65 }
+      ]
+    },
+    "arp": {
+      "instrument": "pluck",
+      "octave": 4,
+      "gain_db": -12,
+      "room_db": -6,
+      "sends": { "echo": -12 },
+      "to": "synths",
+      "play": [
+        {
+          "name": "verse@4m..verse",
+          "arpeggio": { "pattern": "upDown", "interval": "8n", "octaves": 2 },
+          "velocity": 0.4
+        },
+        { "name": "pre", "arpeggio": { "pattern": "up", "interval": "16n", "octaves": 2 }, "velocity": 0.4 }
+      ]
+    },
+    "lead": {
+      "instrument": "lead",
+      "octave": 5,
+      "gain_db": -16,
+      "room_db": -6,
+      "sends": { "echo": -9, "hall": -16 },
+      "play": [
+        {
+          "name": "chorus",
+          "subdivision": "8n",
+          "velocity": 0.75,
+          "humanize": 0.004,
+          "notes": "E5! . E5 D5 C5 - A4 . C5 - - . A4 C5 D5 - E5! - G5 . E5 D5 C5 - D5 - - - B4 . G4 ."
+        },
+        {
+          "name": "chorus2",
+          "subdivision": "8n",
+          "velocity": 0.8,
+          "humanize": 0.004,
+          "notes": "E5! . E5 D5 C5 - A4 . C5 - - . A4 C5 D5 - E5! - G5 . E5 D5 C5 - D5 - - - B4 . G4 ."
+        },
+        {
+          "name": "break",
+          "subdivision": "8n",
+          "velocity": 0.5,
+          "notes": "E5 . . . . . . . C5 . . . . . . . E5 . G5 . . . . . D5 . . . . . . ."
+        }
+      ]
+    },
+    "strings": {
+      "instrument": { "name": "Sampler", "set": "vsco2/strings", "attack": 0.35, "release": 1.2 },
+      "octave": 3,
+      "gain_db": -16,
+      "room_db": -2,
+      "sends": { "hall": -8 },
+      "play": [
+        { "name": "intro@2m..intro", "chords": { "voicing": "spread" }, "velocity": 0.4 },
+        { "name": "break", "chords": { "voicing": "spread" }, "velocity": 0.45 },
+        { "name": "chorus2", "chords": { "voicing": "spread" }, "velocity": 0.6 },
+        { "name": "outro", "chords": { "voicing": "spread" }, "velocity": 0.45 }
+      ]
+    }
+  }
+}

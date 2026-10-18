@@ -31,13 +31,13 @@ require("vo")                                   -- the lines exist before the so
 return song { "score", key = "A minor", seed = 7, room = "voice",
   sections = {
     { "intro",   duration = { audio = "intro", plus = { seconds = 1 } },
-                 bpm = 84, style = "lofi", energy = 0.3, chords = "Am7 Fmaj7 C G" },
+                 bpm = 84, style = "styles/lofi.json", energy = 0.3, chords = "Am7 Fmaj7 C G" },
     { "build",   duration = "2m", bpm = { 84, 124 } },
-    { "drop",    duration = "8m", flex = { "4m", "8m" }, bpm = 124, style = "house", energy = 1,
+    { "drop",    duration = "8m", flex = { "4m", "8m" }, bpm = 124, style = "styles/house.json", energy = 1,
                  chords = "Am F C G" },
     { "explain", duration = { audio = "features", plus = { seconds = 1 } }, energy = 0.5 },
     { "outro",   duration = { audio = "outro", plus = { seconds = 3 } },
-                 bpm = 70, style = "ambient", chords = "Fmaj7 Am7" },
+                 bpm = 70, style = "styles/ambient.json", chords = "Fmaj7 Am7" },
   },
   parts = {
     lead = { instrument = "pluck",
@@ -112,7 +112,7 @@ The brief: 30 s of synthwave at 128 BPM, with a cut every two bars in the chorus
 flashes on the snare.
 
 ```lua
-local score = song { "score", bpm = 128, key = "F# minor", style = "synthwave",
+local score = song { "score", bpm = 128, key = "F# minor", style = "styles/synthwave.json",
   sections = {
     { "intro",  duration = "4m", energy = 0.4 },
     { "verse",  duration = "4m", energy = 0.7 },
@@ -136,8 +136,8 @@ cue("snare", SNARES)                            -- inspect checks the flashes la
 
 **What worked**
 
-- **The structure is four lines**, and the style does the rest. `odawg show style/synthwave`
-  shows what it plays, if I need to override something.
+- **The structure is four lines**, and the style does the rest. The style is a file (copied
+  from odawg's `examples/styles/`); it shows what it plays, if I need to override something.
 - **`hits` feeds `cue` directly**, so flashes (animate keys with `cue = "snare[*]"`) are
   checked against the notes that made them.
 
@@ -160,7 +160,7 @@ coming in a bar early, cut to 40 s.
 
 ```lua
 local sting = song { "sting", bpm = 120, key = "D minor",
-  sections = { { "hit", duration = "2m", style = "cinematic", energy = 1, transition = "impact" } } }
+  sections = { { "hit", duration = "2m", style = "styles/cinematic.json", energy = 1, transition = "impact" } } }
 
 local track = song { "track", from = "licensed.mp3", start = sting.time("hit@1m"), duration = 40,
   sections = { { "verse", at = 0 }, { "chorus", at = "16m" },
@@ -199,7 +199,7 @@ video { ..., duration = track.start + track.duration,
 | "Drop at 128" | `bpm = 128` on `drop` | later section starts, scenes, line starts, SFX, kick pulse | `onimite timeline video.lua` before and after; `inspect` stays clean |
 | "Make a 30 s cut" | `duration = 30` on the song | `drop` shrinks 8m → 4m, then the tempo nudges ≤ 3 % | if it can't fit: `duration_unreachable` |
 | "New narration" | the `say` text | `intro`/`explain`/`outro` regrow; everything after moves | `inspect` (`cue_drift` none) |
-| "Synthwave drop" | `style = "synthwave"` on `drop` | parts refilled; my `lead` stays | `no_events` if a style lacks the part that `pulse`/`hits` read |
+| "Synthwave drop" | `style = "styles/synthwave.json"` on `drop` | parts refilled; my `lead` stays | `no_events` if a style lacks the part that `pulse`/`hits` read |
 | "Drums quieter" | `parts = { drums = { gain_db = -3 } }` | that part | `odawg audio analyze` per part |
 | "Music too loud under her" | `ducked = { depth_db = -16 }` (existing) | gain under the voice | `onimite audio at video.lua explain@2m` |
 

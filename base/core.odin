@@ -8,7 +8,7 @@ import "core:math"
 
 // Bumped whenever the samples for the same spec change: a host's render
 // cache keys on it (like ottis's pocket.VERSION).
-VERSION :: 1
+VERSION :: 2
 
 // The rate everything renders at (onimite's mix rate).
 RATE :: 48000
@@ -41,6 +41,16 @@ hash_string :: proc "contextless" (s: string) -> u64 {
 		h = (h ~ u64(s[i])) * 0x100000001b3
 	}
 	return h
+}
+
+// A name's id: its hash (0: none), the same in every song (a pad's, a
+// node's, a control's).
+name_id :: proc "contextless" (name: string) -> u32 {
+	if name == "" {
+		return 0
+	}
+	h := u32(hash_string(name))
+	return h == 0 ? 1 : h
 }
 
 // 0..1 from a hash.

@@ -1,9 +1,0 @@
-{
-  "name": "acid", "key": "A minor", "seed": 9,
-  "sections": [
-    { "name": "intro", "duration": "4m", "bpm": 125, "style": "acid_house", "energy": 0.5, "chords": "Am Am Am G" },
-    { "name": "jack", "duration": "8m", "energy": 0.8 },
-    { "name": "break", "duration": "4m", "energy": 0.3 },
-    { "name": "peak", "duration": "8m", "energy": 1 }
-  ]
-}

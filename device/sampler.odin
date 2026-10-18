@@ -7,10 +7,10 @@ import "core:math"
 // key and velocity (the nearest when none does; one of a round-robin group by
 // the note's seed), plays its sample shifted from the zone's root through a
 // Kaiser-windowed sinc (wider, and lower, when shifting up, so nothing
-// aliases), and shapes it with `.Attack` (a linear fade in) and `.Release`
+// aliases), and shapes it with its attack (a linear fade in) and release
 // (Tone's exponential approach to silence after the gate). A one-shot zone
-// (a drum) plays to its end whatever the gate. A drum note (`pad` set) answers
-// the pad's General MIDI key, and plays at the note's pitch when it has one.
+// (a drum) plays to its end whatever the gate. A note answers the key it is
+// given (a pad's, or its pitch) and plays at its pitch.
 //
 // Every output sample is computed from its index alone (the read position,
 // the envelope), so a note renders the same whatever blocks it is split into.
@@ -82,7 +82,6 @@ kernel :: #force_inline proc "contextless" (x: f64) -> f32 {
 	return sinc_table[i] + (sinc_table[i + 1] - sinc_table[i]) * f
 }
 
-@(private = "file")
 Sampler_State :: struct {
 	zone:      i32, // into the bank's zones (-1: nothing to play)
 	length:    i64, // its frames
@@ -162,17 +161,16 @@ zone_nearest :: proc(bank: ^Bank, set: int, key, velocity: int) -> (best_key, be
 	return
 }
 
-@(private = "file")
-sampler_start :: proc(st: ^Sampler_State, p: ^Params, n: Note, seed: u64, env: ^Voice_Env) {
+// A note of set `set` answering `key` at the note's pitch.
+sampler_start :: proc(st: ^Sampler_State, set: i32, attack, release: f32, key: f32, n: Note, seed: u64, env: ^Voice_Env) {
 	st.zone = -1
 	if env == nil || env.bank == nil {
 		return
 	}
 	bank := env.bank
-	key := n.pad != .None ? note_from_pad(n.pad) : n.pitch
 	pitch := n.pitch > 0 ? n.pitch : key
 	velocity := velocity_midi(n.velocity)
-	zi := zone_for(bank, int(p[.Sample_Set]), int(math.round(key)), velocity, seed)
+	zi := zone_for(bank, int(set), int(math.round(key)), velocity, seed)
 	if zi < 0 {
 		return
 	}
@@ -194,8 +192,8 @@ sampler_start :: proc(st: ^Sampler_State, p: ^Params, n: Note, seed: u64, env: ^
 	amp := z.gain * min(f32(velocity) / f32(max(z.hi_velocity, 1)), 1)
 	st.gain_l = amp * (z.pan > 0 ? 1 - z.pan : 1)
 	st.gain_r = amp * (z.pan < 0 ? 1 + z.pan : 1)
-	st.attack = max(f64(p[.Attack]), 0) * RATE
-	st.release = max(z.release > 0 ? f64(z.release) : f64(p[.Release]), SAMPLER_DECLICK)
+	st.attack = max(f64(attack), 0) * RATE
+	st.release = max(z.release > 0 ? f64(z.release) : f64(release), SAMPLER_DECLICK)
 	st.release_tc = math.ln(st.release + 1) / math.ln(f64(200))
 	st.gate = z.one_shot ? -1 : i64(math.round(max(n.duration, 0) * RATE))
 }
@@ -226,11 +224,8 @@ sampler_level :: #force_inline proc "contextless" (st: ^Sampler_State, k: i64) -
 	return f32(v90 - v90 * (t - 0.9 * st.release) / (0.1 * st.release)), false
 }
 
-voice_sampler :: proc(s: ^Voice_State, p: ^Params, n: Note, seed: u64, at: i64, env: ^Voice_Env, l, r: []f32) -> bool {
-	st := (^Sampler_State)(&s.bytes)
-	if at == 0 {
-		sampler_start(st, p, n, seed, env)
-	}
+// The note's next len(l) samples, added into l and r; false once it is over.
+sampler_play :: proc(st: ^Sampler_State, at: i64, env: ^Voice_Env, l, r: []f32) -> bool {
 	if st.zone < 0 || env == nil || env.bank == nil {
 		return false
 	}
@@ -316,18 +311,17 @@ sampler_run :: proc(st: ^Sampler_State, data: []$T, channels: int, scale: f32, a
 // release, cut short by its sample's end unless it loops. Before the
 // samples are loaded: a drum note SAMPLER_ONE_SHOT_TAIL, a held one its
 // gate and release.
-tail_sampler :: proc(p: ^Params, n: Note, env: ^Voice_Env) -> f64 {
-	held := max(n.duration, 0) + max(f64(p[.Release]), SAMPLER_DECLICK)
-	guess := n.pad != .None ? SAMPLER_ONE_SHOT_TAIL : held
+tail_sampler :: proc(set_index: i32, release: f32, key: f32, n: Note, env: ^Voice_Env) -> f64 {
+	held := max(n.duration, 0) + max(f64(release), SAMPLER_DECLICK)
+	guess := n.pad != 0 ? SAMPLER_ONE_SHOT_TAIL : held
 	if env == nil || env.bank == nil {
 		return guess
 	}
-	set := int(p[.Sample_Set])
+	set := int(set_index)
 	if set < 0 || set >= len(env.bank.sets) {
 		return guess
 	}
 	bank := env.bank
-	key := n.pad != .None ? note_from_pad(n.pad) : n.pitch
 	pitch := n.pitch > 0 ? n.pitch : key
 	k, velocity := int(math.round(key)), velocity_midi(n.velocity)
 	best_key, best_vel, _ := zone_nearest(bank, set, k, velocity)

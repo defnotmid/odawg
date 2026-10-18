@@ -51,6 +51,7 @@ Field_Kind :: enum u8 {
 	Markers, // the spec: markers
 	Room, // the spec: room spans
 	Styles, // the spec: its own styles by name
+	Instruments, // the spec: its instruments by name
 	Buses, // the spec: its buses by name
 	Sets, // the spec: its sample sets by name
 	Sources, // the spec: the sources its files are fetched from, by name
@@ -92,6 +93,7 @@ FIELD_READERS := [Field_Kind]Field_Reader {
 	.Markers   = read_markers_field,
 	.Room      = read_room_field,
 	.Styles    = read_styles_field,
+	.Instruments = read_instruments_field,
 	.Buses     = read_buses_field,
 	.Sets      = read_sets_field,
 	.Sources   = read_sources_field,
@@ -119,6 +121,7 @@ SPEC_FIELDS := []Field_Row {
 	{"markers", .Markers, 0},
 	{"room", .Room, 0},
 	{"styles", .Styles, 0},
+	{"instruments", .Instruments, 0},
 	{"buses", .Buses, 0},
 	{"sets", .Sets, 0},
 	{"sources", .Sources, 0},
@@ -135,6 +138,7 @@ SECTION_FIELDS := []Field_Row {
 	{"energy", .Number, offset_of(Section_Spec, energy)},
 	{"chords", .String, offset_of(Section_Spec, chords)},
 	{"transition", .String, offset_of(Section_Spec, transition)},
+	{"transition_part", .String, offset_of(Section_Spec, transition_part)},
 	{"flex", .Flex, offset_of(Section_Spec, flex)},
 	{"optional", .Bool, offset_of(Section_Spec, optional)},
 	{"stretch", .String, offset_of(Section_Spec, stretch)},
@@ -146,6 +150,7 @@ PART_FIELDS := []Field_Row {
 	{"gain_db", .Number, offset_of(Part_Spec, gain_db)},
 	{"pan", .Number, offset_of(Part_Spec, pan)},
 	{"octave", .Number, offset_of(Part_Spec, octave)},
+	{"room_db", .Number, offset_of(Part_Spec, room_db)},
 	{"effects", .Chain, offset_of(Part_Spec, effects)},
 	{"sends", .Sends, offset_of(Part_Spec, sends)},
 	{"sidechain", .Sidechain, offset_of(Part_Spec, sidechain)},
@@ -190,6 +195,7 @@ EVENT_FIELDS := []Field_Row {
 	{"note", .String, offset_of(Event_Spec, note)},
 	{"duration", .Time, offset_of(Event_Spec, duration)},
 	{"velocity", .Number, offset_of(Event_Spec, velocity)},
+	{"accent", .Number, offset_of(Event_Spec, accent)},
 }
 
 MARKER_FIELDS := []Field_Row {
@@ -216,6 +222,7 @@ SET_ZONE_FIELDS := []Field_Row {
 	{"gain_db", .Number, offset_of(Set_Zone_Spec, gain_db)},
 	{"one_shot", .Number, offset_of(Set_Zone_Spec, one_shot)},
 	{"offset", .Number, offset_of(Set_Zone_Spec, offset)},
+	{"key", .Note, offset_of(Set_Zone_Spec, key)},
 }
 
 SOURCE_FIELDS := []Field_Row {
@@ -281,6 +288,7 @@ spec_init :: proc(s: ^Spec, allocator := context.allocator) {
 	s.returns.allocator, s.markers.allocator, s.room.allocator = allocator, allocator, allocator
 	s.strings.allocator, s.styles.allocator, s.buses.allocator = allocator, allocator, allocator
 	s.sets.allocator, s.set_zones.allocator, s.sources.allocator = allocator, allocator, allocator
+	s.instruments.allocator, s.instrument_includes.allocator, s.instrument_files.allocator = allocator, allocator, allocator
 }
 
 // Reads a spec from a value; context.allocator holds it (give it an arena).
@@ -312,7 +320,6 @@ spec_from_json :: proc(text: string, s: ^Spec, findings: ^base.Findings) -> bool
 
 // ---- field readers -------------------------------------------------------------------
 
-@(private = "file")
 number_from_value :: proc(v: json.Value) -> (f64, bool) {
 	#partial switch x in v {
 	case json.Integer:
@@ -458,14 +465,31 @@ read_ranges_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) 
 	}
 }
 
+// A part's instrument: a Voice playing a row (read into a program where
+// the part plays it: instrument_program).
 @(private = "file")
 read_device_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
-	(^i32)(dst)^ = device_from_value(r, v, path)
+	#partial switch _ in v {
+	case json.String, json.Object:
+	case:
+		bad(r, path, "an instrument: a name, or a row ({ nodes = { ... } })")
+		(^i32)(dst)^ = -1
+		return
+	}
+	append(&r.spec.devices, Device_Spec{kind = .Voice, path = strings.clone(path), row = json.clone_value(v)})
+	(^i32)(dst)^ = i32(len(r.spec.devices) - 1)
 }
 
 @(private = "file")
 read_chain_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
 	(^Span)(dst)^ = chain_from_value(r, v, path)
+}
+
+// An effect chain as a part's `effects` is written, read into s (its
+// devices and chain): a host's own track's (a clip's), findings at `path`.
+effects_from_value :: proc(s: ^Spec, v: json.Value, path: string, findings: ^base.Findings) -> Span {
+	r := Reader{s, findings}
+	return chain_from_value(&r, v, path)
 }
 
 chain_from_value :: proc(r: ^Reader, v: json.Value, path: string) -> Span {
@@ -726,7 +750,7 @@ read_parts_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
 	slice.sort(names[:])
 	for name in names {
 		pp := base.path_join(path, name, context.allocator)
-		p := Part_Spec{name = strings.clone(name), instrument = -1, gain_db = UNSET, pan = UNSET, octave = UNSET, effects = {0, -1}, sidechain = {depth = 0.8, release = 0.07}}
+		p := Part_Spec{name = strings.clone(name), instrument = -1, gain_db = UNSET, pan = UNSET, octave = UNSET, room_db = UNSET, effects = {0, -1}, sidechain = {depth = 0.8, release = 0.07}}
 		if !read_record(r, o[name], pp, PART_FIELDS, &p) {
 			continue
 		}
@@ -763,8 +787,16 @@ read_play :: proc(r: ^Reader, v: json.Value, path: string) {
 		return
 	}
 	p.velocity = clamp(p.velocity, 0, 1)
+	if p.humanize > HUMANIZE_LIKELY {
+		at := base.path_join(path, "humanize")
+		base.report(r.findings, "bad_value", .Warning, at, "%s: humanize is seconds (Tone's): %g moves each note up to ±%.0f ms; a player is within ±0.01", at, p.humanize, p.humanize * 1000)
+	}
 	append(&r.spec.plays, p)
 }
+
+// The most a play's humanize (seconds either way) is likely meant to be; more
+// is a warning (it reads like a fraction: 0.12 is ±120 ms).
+HUMANIZE_LIKELY :: 0.03
 
 @(private = "file")
 read_returns_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
@@ -816,7 +848,7 @@ read_sets_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
 	}
 	slice.sort(names[:])
 	zone :: proc() -> Set_Zone_Spec {
-		return {root = UNSET, lo = UNSET, hi = UNSET, lo_velocity = 0, hi_velocity = 127, one_shot = UNSET}
+		return {root = UNSET, lo = UNSET, hi = UNSET, lo_velocity = 0, hi_velocity = 127, one_shot = UNSET, key = UNSET}
 	}
 	for name in names {
 		sp := base.path_join(path, name, context.allocator)
@@ -839,11 +871,6 @@ read_sets_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
 			slice.sort(keys[:])
 			for k in keys {
 				zp := base.path_join(base.path_join(sp, "pads"), k)
-				pad, is_pad := device.pad_from_name(k)
-				if !is_pad || pad == .None {
-					base.report(r.findings, "bad_value", .Error, zp, "%s: %q is not a drum pad", zp, k)
-					continue
-				}
 				// a file or a zone's record, or a list of them: a round robin
 				entries := []json.Value{po[k]}
 				if list, is_list := po[k].(json.Array); is_list {
@@ -852,7 +879,7 @@ read_sets_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
 				for e, i in entries {
 					ep := len(entries) > 1 ? base.path_index(zp, i + 1) : zp
 					z := zone()
-					z.pad = pad
+					z.pad = strings.clone(k)
 					if f, is_file := e.(json.String); is_file {
 						z.file = strings.clone(f)
 					} else if !read_record(r, e, ep, SET_ZONE_FIELDS, &z) {
@@ -861,6 +888,7 @@ read_sets_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
 					append(&r.spec.set_zones, z)
 				}
 			}
+			pad_keys(r.spec.set_zones[set.zones.first:])
 		}
 		// zones: a file per key range and velocity range
 		if zones, has := so["zones"]; has {
@@ -890,6 +918,43 @@ read_sets_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
 			continue
 		}
 		append(&r.spec.sets, set)
+	}
+}
+
+// A set's pads' keys: a pad's own, else its General MIDI name's, else the
+// lowest key none of the set's pads has (in the pads' name order).
+@(private = "file")
+pad_keys :: proc(zones: []Set_Zone_Spec) {
+	used: bit_set[0 ..< 128;u128]
+	for &z in zones {
+		if math.is_nan(z.key) {
+			if k, gm := device.gm_key(z.pad); gm {
+				z.key = f64(k)
+			}
+		}
+		if !math.is_nan(z.key) && z.key >= 0 && z.key < 128 {
+			used += {int(z.key)}
+		}
+	}
+	next := 0
+	for &z, i in zones {
+		if !math.is_nan(z.key) {
+			continue
+		}
+		// a round robin's zones share their pad's key
+		for y in zones[:i] {
+			if y.pad == z.pad {
+				z.key = y.key
+			}
+		}
+		if !math.is_nan(z.key) {
+			continue
+		}
+		for next < 127 && (next in used) {
+			next += 1
+		}
+		z.key = f64(next)
+		used += {next}
 	}
 }
 
@@ -996,6 +1061,34 @@ read_styles_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) 
 }
 
 @(private = "file")
+read_instruments_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
+	#partial switch x in v {
+	case json.String:
+		// a file of rows
+		append(&r.spec.instrument_includes, strings.clone(x))
+		return
+	case json.Array:
+		for y, i in x {
+			read_instruments_field(r, y, base.path_index(path, i + 1), dst)
+		}
+		return
+	}
+	o, ok := v.(json.Object)
+	if !ok {
+		bad(r, path, "{ name = { nodes = { ... } } } per instrument, a file of them, or a list of those")
+		return
+	}
+	names := make([dynamic]string, context.temp_allocator)
+	for k in o {
+		append(&names, k)
+	}
+	slice.sort(names[:])
+	for name in names {
+		append(&r.spec.instruments, Instrument_Spec{strings.clone(name), json.clone_value(o[name])})
+	}
+}
+
+@(private = "file")
 read_room_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
 	// a name: the host's spans of it (a mix's voice bus)
 	if name, is_name := v.(json.String); is_name {
@@ -1016,7 +1109,7 @@ read_room_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
 
 // ---- devices -------------------------------------------------------------------------
 
-// An instrument or effect: a name (a Tone class, a preset, an effect: "pluck",
+// An instrument or effect: a name (a Tone class, an effect: "Synth",
 // "MonoSynth", "Reverb"), or a table whose name is one, its options nested as
 // Tone nests them. Each option is found in device.PARAM_TABLE by its `/` path
 // among the params its kind reads; a string where a table of options with a
@@ -1040,7 +1133,7 @@ device_from_value :: proc(r: ^Reader, v: json.Value, path: string) -> i32 {
 	}
 	kind, known := device.device_from_name(name)
 	if !known {
-		base.report(r.findings, "bad_value", .Error, path, "%s: %q is not an instrument, preset or effect", path, name)
+		base.report(r.findings, "bad_value", .Error, path, "%s: %q is not an instrument or effect", path, name)
 		return -1
 	}
 	d := Device_Spec{kind = kind, values = {i32(len(r.spec.values)), 0}, path = strings.clone(path)}

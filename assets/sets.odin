@@ -335,8 +335,8 @@ declare_inline :: proc(bank: ^device.Bank, ref: spec.Asset_Ref, d: ^Declaring) -
 		x.offset = i32(z.offset)
 		x.loop_to = set.loop ? device.LOOP_FROM_FILE : -1
 		switch {
-		case z.pad != .None:
-			key := int(device.note_from_pad(z.pad))
+		case z.pad != "":
+			key := int(z.key)
 			x.lo, x.hi, x.root = key, key, f32(key)
 			x.one_shot = math.is_nan(z.one_shot) || z.one_shot != 0
 			given[i] = true

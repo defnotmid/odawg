@@ -1,8 +1,10 @@
 package odawg_song
 
+import "core:slice"
 import "core:strings"
 import base "../base"
 import device "../device"
+import spec "../spec"
 
 // Editing a composed song: every change is a command row (its kind, the
 // path it acts on, a value), applied in one place (command_apply) after
@@ -13,8 +15,8 @@ import device "../device"
 // edited and composed again is a new song.
 //
 // Paths are the song's: "drums" (a part, every track it has), "drums/kick"
-// (a pad of it), "bass/filter/frequency" (a value of its instrument),
-// "master".
+// (a pad of it), "bass/filter/frequency" (a control of its instrument,
+// else a node's value: "bass/ladder/frequency"; a clip's: "music/clip/fade_in"), "master".
 
 Command_Kind :: enum u8 {
 	None,
@@ -77,12 +79,14 @@ COMMAND_KINDS := [Command_Kind]Command_Kind_Row {
 	.Pad_Gain_Step = {"pad/gain_db+", "a drum pad's level moved by dB", .Part, proc(s: ^Song, row: Command_Row, tracks: []int) -> bool {
 		return pad_gain(s, row, tracks, true)
 	}},
-	.Param_Set = {"param", "a value of a part's instrument (\"bass/filter/frequency\"), in its unit", .Part, proc(s: ^Song, row: Command_Row, tracks: []int) -> bool {
+	.Param_Set = {"param", "a value of a node of a part's instrument (\"bass/filter/frequency\"), in its unit (new notes play it)", .Part, proc(s: ^Song, row: Command_Row, tracks: []int) -> bool {
 		_, rest := part_from_path(s, row.path)
 		done := false
 		for ti in tracks {
 			d := s.tracks[ti].instrument
-			if p := param_of(s.devices[d], rest); p != .None {
+			if s.devices[d] == .Voice {
+				done ||= node_value_set(s, i32(s.params[d][.Program]), rest, f32(row.value))
+			} else if p := param_of(s.devices[d], rest); p != .None {
 				s.params[d][p] = f32(row.value)
 				done = true
 			}
@@ -180,13 +184,36 @@ part_gain :: proc(s: ^Song, tracks: []int, db: f64, step: bool) -> bool {
 @(private = "file")
 pad_gain :: proc(s: ^Song, row: Command_Row, tracks: []int, step: bool) -> bool {
 	_, rest := part_from_path(s, row.path)
-	pad, ok := device.pad_from_name(rest)
-	if !ok || pad == .None {
+	if rest == "" {
 		return false
 	}
+	pad := base.name_id(rest)
 	for ti in tracks {
-		g := &s.tracks[ti].pad_gain_db[pad]
-		g^ = step ? g^ + f32(row.value) : f32(row.value)
+		// only a pad the track's instrument has
+		d := s.tracks[ti].instrument
+		if s.devices[d] == .Voice {
+			has := make([dynamic]u32, context.temp_allocator)
+			spec.program_pads(&s.programs, i32(s.params[d][.Program]), &has)
+			if !slice.contains(has[:], pad) {
+				return false
+			}
+		}
+		gains := &s.tracks[ti].pad_gains
+		slot := -1
+		for g, i in gains {
+			if g.pad == pad || (slot < 0 && g.pad == 0) {
+				slot = i
+				if g.pad == pad {
+					break
+				}
+			}
+		}
+		if slot < 0 {
+			return false // a track holds PAD_GAINS pads' levels
+		}
+		g := &gains[slot]
+		g.db = step ? (g.pad == pad ? g.db : 0) + f32(row.value) : f32(row.value)
+		g.pad = pad
 	}
 	return len(tracks) > 0
 }
@@ -200,4 +227,19 @@ param_of :: proc(kind: device.Device_Kind, path: string) -> device.Param {
 		}
 	}
 	return .None
+}
+
+// "filter/frequency": a control of a program (a knob its row names), else
+// the value of a node of it of that name (its pads' programs' too). False:
+// it has none, or the value would change the program's shape.
+@(private = "file")
+node_value_set :: proc(s: ^Song, program: i32, path: string, value: f32) -> bool {
+	if device.control_of(&s.programs, program, base.name_id(path)) != nil {
+		return device.control_set(&s.programs, program, base.name_id(path), value)
+	}
+	slash := strings.index_byte(path, '/')
+	if program < 0 || slash < 0 {
+		return false
+	}
+	return device.node_field_set(&s.programs, program, base.name_id(path[:slash]), path[slash + 1:], value)
 }

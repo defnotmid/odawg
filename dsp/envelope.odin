@@ -24,6 +24,39 @@ Adsr :: struct {
 	samples:                         int, // into the stage
 	from:                            f32, // the level the stage started at
 	value:                           f32,
+	// the stage's approach, set as it starts (stage_set): 1 / its time
+	// constant (samples), its level at 90% of its time, its length (samples)
+	inv_tc:                          f32,
+	v90:                             f32,
+	length:                          f64,
+}
+
+// Starts an approach from e.from to `target` over `ramp` seconds: its time
+// constant and its 90% point once, not per sample.
+@(private = "file")
+stage_set :: proc "contextless" (e: ^Adsr, ramp: f32, target: f32) {
+	r := f64(ramp)
+	e.length = r * RATE
+	if r <= 0 {
+		return
+	}
+	tc := math.ln(r + 1) / math.ln(f64(200))
+	e.inv_tc = f32(1 / (tc * RATE))
+	e.v90 = f32(f64(target) + f64(e.from - target) * math.exp(-0.9 * r / tc))
+}
+
+// The stage's approach to `target` at its sample k: as approach, from what
+// stage_set kept.
+@(private = "file")
+stage_value :: #force_inline proc "contextless" (e: ^Adsr, target: f32, k: int) -> (v: f32, done: bool) {
+	x := f64(k)
+	if x >= e.length {
+		return target, true
+	}
+	if x < 0.9 * e.length {
+		return target + (e.from - target) * exp_decay(-f32(k) * e.inv_tc), false
+	}
+	return f32(f64(e.v90) + (f64(target) - f64(e.v90)) * (x - 0.9 * e.length) / (0.1 * e.length)), false
 }
 
 
@@ -45,19 +78,23 @@ approach :: #force_inline proc "contextless" (from, target: f32, ramp, t: f64) -
 // starts) at sample `release_at` of this slice (negative or past the end: not
 // in it).
 adsr_run :: proc "contextless" (e: ^Adsr, out: []f32, release_at: int) {
+	if e.samples == 0 && e.stage == .Attack && e.exponential_attack && e.length == 0 {
+		stage_set(e, e.attack, 1)
+	}
 	for i in 0 ..< len(out) {
 		if i == release_at && e.stage != .Idle {
 			e.stage, e.samples, e.from = .Release, 0, e.value
+			stage_set(e, e.release, 0)
 		}
-		t := f64(e.samples) / RATE
 		done: bool
 		switch e.stage {
 		case .Idle:
 			e.value = 0
 		case .Attack:
 			a := f64(e.attack)
+			t := f64(e.samples) / RATE
 			if e.exponential_attack {
-				e.value, done = approach(e.from, 1, a, t)
+				e.value, done = stage_value(e, 1, e.samples)
 			} else if t >= a {
 				e.value, done = 1, true
 			} else {
@@ -65,16 +102,17 @@ adsr_run :: proc "contextless" (e: ^Adsr, out: []f32, release_at: int) {
 			}
 			if done {
 				e.stage, e.samples, e.from = .Decay, 0, 1
+				stage_set(e, e.decay, e.sustain)
 			}
 		case .Decay:
-			e.value, done = approach(e.from, e.sustain, f64(e.decay), t)
+			e.value, done = stage_value(e, e.sustain, e.samples)
 			if done {
 				e.stage = .Sustain
 			}
 		case .Sustain:
 			e.value = e.sustain
 		case .Release:
-			e.value, done = approach(e.from, 0, f64(e.release), t)
+			e.value, done = stage_value(e, 0, e.samples)
 			if done {
 				e.stage, e.value = .Idle, 0
 			}

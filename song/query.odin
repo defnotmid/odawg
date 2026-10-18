@@ -2,6 +2,7 @@ package odawg_song
 
 import "core:math"
 import "core:strings"
+import base "../base"
 import device "../device"
 import tempo "../tempo"
 import theory "../theory"
@@ -231,7 +232,7 @@ Note_Filter :: struct {
 @(private = "file")
 Matcher :: struct {
 	part:     i32, // -1 any
-	pad:      device.Pad,
+	pad:      u32, // 0 any
 	pitch:    f32, // -1 any
 	from, to: f64, // seconds
 }
@@ -250,10 +251,10 @@ matcher_from_filter :: proc(song: ^Song, f: Note_Filter) -> (m: Matcher, ok: boo
 		}
 	}
 	if f.note != "" {
-		if pad, is_pad := device.pad_from_name(f.note); is_pad {
-			m.pad = pad
+		if p, is_pitch := theory.pitch_from_string(f.note); is_pitch {
+			m.pitch = p
 		} else {
-			m.pitch = theory.pitch_from_string(f.note) or_return
+			m.pad = base.name_id(f.note)
 		}
 	}
 	if f.range != "" {
@@ -269,7 +270,7 @@ matches :: proc(song: ^Song, m: Matcher, i: i32) -> bool {
 	if m.part >= 0 && song.tracks[n.track].part != m.part {
 		return false
 	}
-	if m.pad != .None && n.pad != m.pad {
+	if m.pad != 0 && n.pad != m.pad {
 		return false
 	}
 	if m.pitch >= 0 && math.abs(n.pitch - m.pitch) > 0.01 {

@@ -240,8 +240,9 @@ test_style_file :: proc(t: ^testing.T) {
 	names := make([dynamic]string)
 	spec.style_files(sp, &names)
 	testing.expect(t, len(names) == 1 && names[0] == "styles/disco.json")
-	testing.expect(t, spec.spec_add_style_text(sp, names[0], `{ parts: { drums: { instrument: { name: "DrumMachine", machine: "909" }, play: [ { steps: { kick: "x...x...x...x...", open_hat: "..x...x...x...x." } } ] },
-		bass: { instrument: "bass", play: [ { degrees: "1 . 1 8 . 1 . 8", subdivision: "8n" } ] } } }`, &findings))
+	testing.expect(t, spec.spec_add_style_text(sp, names[0], `{ instruments: { kit: { pads: { kick: { name: "MembraneSynth" }, open_hat: { name: "MetalSynth" } } } },
+		parts: { drums: { instrument: "kit", play: [ { steps: { kick: "x...x...x...x...", open_hat: "..x...x...x...x." } } ] },
+		bass: { instrument: { name: "MonoSynth" }, play: [ { degrees: "1 . 1 8 . 1 . 8", subdivision: "8n" } ] } } }`, &findings))
 	s := new(song.Song)
 	testing.expect(t, song.song_from_spec(sp, s))
 	testing.expect(t, !has_code(s.findings, "unknown_style"))
@@ -512,4 +513,30 @@ test_source_paths :: proc(t: ^testing.T) {
 		spec.spec_from_json(fmt.tprintf(`{{ "sources": {{ %s }}, "sections": [ {{ "name": "a", "duration": "1m" }} ] }}`, bad_source), x, &findings)
 		testing.expectf(t, len(x.sources) == 0 && has_code(findings, "bad_value"), "%s refused: %v", bad_source, findings[:])
 	}
+}
+
+// A song naming a file that can't be read, beside one that can: every file
+// is read once (the one that fails reported, the rest handed to the spec),
+// and the reading ends; it doesn't ask for the same files again forever.
+@(test)
+test_spec_files_end :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	_ = virtual.arena_init_growing(&arena)
+	defer virtual.arena_destroy(&arena)
+	context.allocator = virtual.arena_allocator(&arena)
+	root := scratch_root("spec_files")
+	defer os.remove_all(root)
+	write(t, root, "instruments/mine.json", transmute([]u8)string(`{ "pad": { "nodes": { "out": { "class": "Osc" } } } }`))
+	s := new(spec.Spec)
+	findings := make(base.Findings)
+	testing.expect(t, spec.spec_from_json(`{ instruments: "instruments/mine.json", sections: [ { name: "a", duration: "1m" } ],
+		parts: { a: { instrument: "nowhere/x.json" }, b: { instrument: "pad" } } }`, s, &findings))
+	host := Bank_Host{root = root}
+	testing.expect(t, !spec_read_files(s, &findings, &host))
+	testing.expect_value(t, len(s.instrument_files), 2)
+	missing := 0
+	for f in findings {
+		missing += f.code == "missing_file" ? 1 : 0
+	}
+	testing.expect_value(t, missing, 1)
 }

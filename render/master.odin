@@ -77,6 +77,7 @@ master_export :: proc(s: ^song.Song, opts: Options, m: Master, sink: Sink) -> an
 	p := device.params_from_kind(.Limiter)
 	p[.Threshold] = f32(row.ceiling)
 	append(&s.devices, device.Device_Kind.Limiter)
+	append(&s.labels, device.DEVICE_TABLE[.Limiter].name)
 	append(&s.params, p)
 	s.master = {i32(len(s.chain)), 1}
 	append(&s.chain, i32(len(s.devices) - 1))

@@ -301,3 +301,69 @@ pins_update :: proc(bank: ^device.Bank, s: ^spec.Spec, host: ^Bank_Host, finding
 	}
 	return out[:]
 }
+
+// How deep instrument files may name instrument files.
+MAX_FILE_ROUNDS :: 16
+
+// Reads the files a spec reads beside itself (its style files, then the
+// instrument files it and they name, until none is new) through the host,
+// a source's fetched and checked against its pins, and hands each to the
+// spec. `files` notes each one read, for a host keying songs by their files
+// (file_stamp). False: one couldn't be had (findings say which).
+spec_read_files :: proc(s: ^spec.Spec, findings: ^base.Findings, host: ^Bank_Host = nil, files: ^[dynamic]string = nil, bank: ^device.Bank = nil) -> bool {
+	d := Declaring{findings = findings, host = host, files = files, sources = make([dynamic]Source_Read, context.temp_allocator)}
+	d.root = host != nil ? host.fetched : ""
+	if d.root == "" {
+		d.root, _ = data_dir(context.temp_allocator)
+	}
+	scratch: device.Bank
+	b := bank != nil ? bank : &scratch
+	ok := true
+	read :: proc(d: ^Declaring, b: ^device.Bank, s: ^spec.Spec, name: string) -> (string, bool) {
+		f, found := song_file(d, s, name)
+		if !found {
+			return "", false
+		}
+		text, read_ok := song_file_text(b, d, f, name)
+		if !read_ok {
+			base.report(d.findings, "missing_file", .Error, name, "%s can't be read", name)
+			return "", false
+		}
+		note_file(d.files, f.path)
+		return text, true
+	}
+	styles := make([dynamic]string, context.temp_allocator)
+	spec.style_files(s, &styles)
+	for name in styles {
+		text, got := read(&d, b, s, name)
+		added := got && spec.spec_add_style_text(s, name, text, findings)
+		ok = ok && added
+	}
+	// files name files: until none is new (each round adds every one it
+	// lists, read or not, so it ends; the cap is a guard)
+	for round in 0 ..< MAX_FILE_ROUNDS {
+		names := make([dynamic]string, context.temp_allocator)
+		spec.instrument_files(s, &names)
+		if len(names) == 0 {
+			break
+		}
+		if round == MAX_FILE_ROUNDS - 1 {
+			base.report(findings, "instrument_cycle", .Error, names[0], "%s: instrument files name files %d deep", names[0], MAX_FILE_ROUNDS)
+			return false
+		}
+		for name in names {
+			text, got := read(&d, b, s, name)
+			if !got {
+				// handed back empty, so it isn't asked for again
+				spec.spec_add_instrument_text(s, name, "{}", findings)
+				ok = false
+				continue
+			}
+			if !spec.spec_add_instrument_text(s, name, text, findings) {
+				spec.spec_add_instrument_text(s, name, "{}", findings) // not JSON: asked for once
+				ok = false
+			}
+		}
+	}
+	return ok
+}

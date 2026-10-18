@@ -132,6 +132,7 @@ lay_out :: proc(s: ^spec.Spec, song: ^Song) -> bool {
 		sec := Section {
 			name = ss.name, beat = g.beat, beats = g.beats, start = g.seconds, stop = g.seconds + seconds_of(l),
 			bpm0 = l.bpm0, bpm1 = l.bpm1, beats_per_bar = l.bpb, bars = l.bars, style = style, energy = energy,
+			transition_part = ss.transition_part,
 		}
 		sec.chords.first = i32(len(song.chords))
 		if chords == "" || !theory.progression_from_string(chords, &song.chords) {
@@ -145,12 +146,12 @@ lay_out :: proc(s: ^spec.Spec, song: ^Song) -> bool {
 		if ss.transition != "" {
 			found := false
 			for n, t in TRANSITION_NAMES {
-				if n != "" && n == ss.transition {
+				if n == ss.transition {
 					sec.transition, found = t, true
 				}
 			}
 			if !found {
-				base.report(&song.findings, "bad_value", .Error, base.path_join(base.path_join("sections", ss.name), "transition"), "section %s: %q is not riser, fill, impact, pause, filter, cut or none", ss.name, ss.transition)
+				base.report(&song.findings, "bad_value", .Error, base.path_join(base.path_join("sections", ss.name), "transition"), "section %s: %q is not none, riser, impact, fill, pause or cut", ss.name, ss.transition)
 			}
 		}
 		append(&song.sections, sec)

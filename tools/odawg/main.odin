@@ -4,11 +4,11 @@
 //
 //     odawg render song.json -o song.wav [--range drop] [--master streaming] [--stems DIR] [--float]
 //     odawg timeline song.json [--json]
-//     odawg show song.json parts/bass | sections/drop | style/house
+//     odawg show song.json parts/bass | sections/drop
+//     odawg show instrument/MonoSynth
 //     odawg at song.json drop@1m
 //     odawg inspect song.json [--range drop]
 //     odawg analyze song.json [--master streaming] [--reference ref.wav] [--json]
-//     odawg styles
 package main
 
 import "core:encoding/json"
@@ -51,11 +51,10 @@ Command_Row :: struct {
 COMMAND_TABLE := []Command_Row {
 	{"render", "render SPEC -o OUT.wav [--range R] [--master streaming|podcast|broadcast] [--stems DIR] [--float]", "the mix (and a WAV per stem with --stems: each part, return and bus)", run_render},
 	{"timeline", "timeline SPEC [--json]", "sections (start, bars, tempo, style), parts and tracks, markers, findings", run_timeline},
-	{"show", "show SPEC PATH [--json]", "one thing: sections/NAME, parts/NAME (its notes), style/NAME (its source)", run_show},
+	{"show", "show SPEC PATH [--json]", "one thing: sections/NAME, parts/NAME (its notes, its instrument's controls); or instrument/NAME (a built-in row, to copy)", run_show},
 	{"at", "at SPEC POSITION", "what plays at a position: the section and bar, the chord, the notes sounding", run_at},
 	{"inspect", "inspect SPEC [--range R]", "renders and reports: findings from the spec, the form and the sound", run_inspect},
 	{"analyze", "analyze SPEC [--master M] [--reference REF.wav] [--json]", "what the sound is made of, per section, for the mix and every stem: loudness, true peak, crest, stereo width, 31 third-octave bands, the parts crowding each other; beside a reference recording's", run_analyze},
-	{"styles", "styles", "the styles odawg ships", run_styles},
 	{"sets", "sets", "the sample sets in the register: what each is, its licence and size", run_sets},
 	{"fetch", "fetch [SET|SPEC ...] [--verify]", "downloads sample sets now (every set when none is named; songs fetch theirs on first use)", run_fetch},
 	{"credits", "credits SPEC|SET ...", "what to credit for the sample sets and sources a song plays", run_credits},
@@ -170,18 +169,10 @@ load :: proc(a: ^Args, l: ^Loaded, pinning := false) -> bool {
 	return ok
 }
 
-// The style files a spec names, read from its folder into it.
+// The files a spec reads beside itself (style files, instrument files),
+// from its folder or its sources, into it.
 read_style_files :: proc(host: ^assets.Bank_Host, s: ^spec.Spec, findings: ^base.Findings) {
-	styles := make([dynamic]string, context.temp_allocator)
-	spec.style_files(s, &styles)
-	for name in styles {
-		text, rerr := os.read_entire_file(assets.host_path(host, name), context.allocator)
-		if rerr != nil {
-			base.report(findings, "missing_file", .Error, name, "style file %s can't be read", name)
-			continue
-		}
-		spec.spec_add_style_text(s, name, string(text), findings)
-	}
+	assets.spec_read_files(s, findings, host)
 }
 
 SEVERITY_NAMES := [base.Severity]string {
@@ -260,7 +251,8 @@ run_render :: proc(a: ^Args) -> bool {
 	frames := files.mix.frames
 	ok := render.wav_close(&files.mix)
 	for &w in files.stems {
-		ok &&= render.wav_close(&w)
+		closed := render.wav_close(&w)
+		ok = ok && closed
 	}
 	if !ok {
 		fmt.eprintfln("odawg render: writing %s failed", a.out)
@@ -311,7 +303,7 @@ timeline_from_song :: proc(l: ^Loaded) -> Timeline {
 	}
 	tracks := make([dynamic]Timeline_Track)
 	for tr in s.tracks {
-		append(&tracks, Timeline_Track{s.parts[tr.part], tr.variant, device.DEVICE_TABLE[s.devices[tr.instrument]].name, int(tr.notes.count), tr.gain_db})
+		append(&tracks, Timeline_Track{s.parts[tr.part], tr.variant, s.labels[tr.instrument], int(tr.notes.count), tr.gain_db})
 	}
 	t.sections, t.tracks = sections[:], tracks[:]
 	return t
@@ -352,21 +344,21 @@ run_timeline :: proc(a: ^Args) -> bool {
 }
 
 run_show :: proc(a: ^Args) -> bool {
-	if len(a.positional) >= 2 && strings.has_prefix(a.positional[1], "style/") || len(a.positional) == 1 && strings.has_prefix(a.positional[0], "style/") {
-		name := a.positional[len(a.positional) - 1][len("style/"):]
-		text, ok := song.style_source(name)
+	if len(a.positional) >= 1 && strings.has_prefix(a.positional[len(a.positional) - 1], "instrument/") {
+		name := a.positional[len(a.positional) - 1][len("instrument/"):]
+		text, ok := spec.tone_row_text(name)
 		if !ok {
-			fmt.eprintfln("odawg show: no style %q", name)
+			fmt.eprintfln("odawg show: no built-in instrument %q (%s)", name, strings.join(spec.tone_row_names(), ", ", context.temp_allocator))
 			return false
 		}
-		fmt.print(text)
+		fmt.println(text)
 		return true
 	}
 	l: Loaded
 	if !load(a, &l) || len(a.positional) < 2 {
 		print_findings(l.findings[:])
 		if len(a.positional) < 2 {
-			fmt.eprintln("odawg show: give a path: sections/NAME, parts/NAME, style/NAME")
+			fmt.eprintln("odawg show: give a path: sections/NAME or parts/NAME")
 		}
 		return false
 	}
@@ -375,7 +367,7 @@ run_show :: proc(a: ^Args) -> bool {
 	path := a.positional[1]
 	slash := strings.index_byte(path, '/')
 	if slash < 0 {
-		fmt.eprintfln("odawg show: %q: sections/NAME, parts/NAME or style/NAME", path)
+		fmt.eprintfln("odawg show: %q: sections/NAME or parts/NAME", path)
 		return false
 	}
 	group, name := path[:slash], path[slash + 1:]
@@ -400,10 +392,19 @@ run_show :: proc(a: ^Args) -> bool {
 				if int(tr.part) != pi {
 					continue
 				}
-				fmt.printfln("track %s/%s  %s  %d notes  %+.1f dB  pan %.2f", p, tr.variant, device.DEVICE_TABLE[s.devices[tr.instrument]].name, tr.notes.count, tr.gain_db, tr.pan)
+				fmt.printfln("track %s/%s  %s  %d notes  %+.1f dB  pan %.2f", p, tr.variant, s.labels[tr.instrument], tr.notes.count, tr.gain_db, tr.pan)
+				// its instrument's controls (a Param_Set command sets one by its path)
+				if s.devices[tr.instrument] == .Voice {
+					if program := i32(s.params[tr.instrument][.Program]); program >= 0 {
+						c := s.programs.programs[program].controls
+						for k in c.first ..< base.span_end(c) {
+							fmt.printfln("  control %s/%s = %g", p, s.programs.control_names[k], s.programs.controls[k].value)
+						}
+					}
+				}
 				for i in tr.notes.first ..< base.span_end(tr.notes) {
 					n := s.notes[i]
-					what := n.pad != .None ? device.PAD_NAMES[n.pad] : theory.string_from_pitch(n.pitch)
+					what := n.pad != 0 ? song.pad_name(s, n.pad) : theory.string_from_pitch(n.pitch)
 					fmt.printfln("  %8.3fs  beat %7.2f  %-8s %.3fs  vel %.2f", n.time, n.beat, what, n.duration, n.velocity)
 				}
 			}
@@ -413,7 +414,7 @@ run_show :: proc(a: ^Args) -> bool {
 			return false
 		}
 	case:
-		fmt.eprintfln("odawg show: %q: sections/NAME, parts/NAME or style/NAME", path)
+		fmt.eprintfln("odawg show: %q: sections/NAME or parts/NAME", path)
 		return false
 	}
 	return true
@@ -441,15 +442,15 @@ run_at :: proc(a: ^Args) -> bool {
 	}
 	b := tempo.beat_from_seconds(&s.tempo, t)
 	fmt.printfln("%.3fs  section %s bar %d beat %.2f (%.0f%% through)  %.1f bpm  chord %s", t, place.name, place.bar + 1, place.beat + 1, place.progress * 100, tempo.bpm_from_beat(&s.tempo, b), chord_name(song.chord_from_beat(s, b)))
-	env := device.Voice_Env{bank = s.bank}
+	env := song.voice_env(s)
 	for tr in s.tracks {
 		kind := s.devices[tr.instrument]
 		p := s.params[tr.instrument]
 		for i in tr.notes.first ..< base.span_end(tr.notes) {
 			n := s.notes[i]
-			note := device.Note{n.time, n.duration, n.pitch, n.velocity, n.pad}
+			note := device.Note{n.time, n.duration, n.pitch, n.velocity, n.pad, n.accent}
 			if n.time <= t && t < n.time + device.note_tail(kind, &p, note, &env) {
-				what := n.pad != .None ? device.PAD_NAMES[n.pad] : theory.string_from_pitch(n.pitch)
+				what := n.pad != 0 ? song.pad_name(s, n.pad) : theory.string_from_pitch(n.pitch)
 				state := t < n.time + n.duration ? "held" : "ringing"
 				fmt.printfln("  %-10s %-8s from %.3fs  %s", s.parts[tr.part], what, n.time, state)
 			}
@@ -480,18 +481,6 @@ run_inspect :: proc(a: ^Args) -> bool {
 	check.findings_from_render(s, &out, &l.findings)
 	print_findings(l.findings[:])
 	return !base.has_errors(l.findings[:])
-}
-
-run_styles :: proc(a: ^Args) -> bool {
-	for st in song.STYLE_TABLE {
-		v, _ := json.parse_string(st.text, .JSON5)
-		about := ""
-		if o, ok := v.(json.Object); ok {
-			about, _ = o["description"].(json.String)
-		}
-		fmt.printfln("%-10s %s", st.name, about)
-	}
-	return true
 }
 
 // Each song rendered whole on one core (one segment: no pre-roll), timed:

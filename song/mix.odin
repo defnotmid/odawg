@@ -1,14 +1,16 @@
 package odawg_song
 
+import "core:encoding/json"
 import "core:slice"
 import "core:strings"
 import base "../base"
 import device "../device"
+import spec "../spec"
 
 // A mix: songs and clips on one timeline (onimite's video), as one Song the
 // engine streams. A song is appended by copying its tables with every index
 // moved past what is there and every time moved to where it starts; a clip
-// is a track of its own playing one note on a Player. The form, chords and
+// is a track of its own playing one note on a program of one Clip node. The form, chords and
 // markers stay with the songs (questions go to them); the mix is what plays.
 
 mix_init :: proc(m: ^Song) {
@@ -31,8 +33,19 @@ append_song :: proc(m: ^Song, s: ^Song, at: f64, prefix: string, gain_db: f64 = 
 	for p in s.parts {
 		append(&m.parts, strings.concatenate({prefix, "/", p}))
 	}
+	prog0 := programs_append(&m.programs, &s.programs)
+	for n in s.pad_names {
+		pad_intern(m, n)
+	}
 	append(&m.devices, ..s.devices[:])
-	append(&m.params, ..s.params[:])
+	append(&m.labels, ..s.labels[:])
+	for p, i in s.params {
+		x := p
+		if s.devices[i] == .Voice {
+			x[.Program] += f32(prog0)
+		}
+		append(&m.params, x)
+	}
 	for d in s.chain {
 		append(&m.chain, d + dev0)
 	}
@@ -118,21 +131,38 @@ Clip :: struct {
 	duck:     struct {
 		depth_db, attack, hold, release, merge: f64,
 	},
+	// its effects, as a part's `effects` is written ({ { "Reverb", wet =
+	// 0.2 }, ... }; nil: none). A clip has no tempo: a Tone length in them
+	// reads at 120 bpm.
+	effects:  json.Value,
 }
+
+CLIP_BEAT_SECONDS :: 0.5
 
 append_clip :: proc(m: ^Song, c: Clip) -> i32 {
 	part := i32(len(m.parts))
 	append(&m.parts, strings.clone(c.name))
-	p := device.params_from_kind(.Player)
-	p[.Sample_Set] = f32(c.set)
-	p[.Offset] = f32(c.offset)
-	p[.Fade_In] = f32(c.fade_in)
-	p[.Fade_Out] = f32(c.fade_out)
-	p[.Curve] = f32(c.curve)
-	p[.Mono] = c.mono ? 1 : 0
-	append(&m.devices, device.Device_Kind.Player)
+	// a program of one node: the Clip, playing the set from its offset
+	node := device.Node_Desc{name = "clip", kind = device.NODE_CLIP, values = device.node_defaults(device.NODE_CLIP)}
+	node.values[device.CLIP_SET] = f32(c.set)
+	node.values[device.CLIP_OFFSET] = f32(c.offset)
+	node.values[device.CLIP_FADE_IN] = f32(c.fade_in)
+	node.values[device.CLIP_FADE_OUT] = f32(c.fade_out)
+	node.values[device.CLIP_CURVE] = f32(c.curve)
+	node.values[device.CLIP_MONO] = c.mono ? 1 : 0
+	desc := device.Program_Desc{nodes = {node}, out = "clip", velocity = true, path = c.name}
+	p := device.params_from_kind(.Voice)
+	p[.Program] = f32(device.compile_program(&m.programs, &desc, &m.findings))
+	append(&m.devices, device.Device_Kind.Voice)
+	append(&m.labels, "Player")
 	append(&m.params, p)
 	t := Track{part = part, variant = "", instrument = i32(len(m.devices) - 1), gain_db = c.gain_db, pan = c.pan, pan_law = .Balance, voice = c.voice, notes = {i32(len(m.notes)), 1}}
+	if c.effects != nil {
+		fx := new(spec.Spec)
+		spec.spec_init(fx)
+		chain := spec.effects_from_value(fx, c.effects, base.path_join(c.name, "effects"), &m.findings)
+		t.chain = chain_into_song(m, fx, chain, CLIP_BEAT_SECONDS)
+	}
 	if c.ducked {
 		t.sidechains = {i32(len(m.sidechains)), 1}
 		append(&m.sidechains, duck_under_voice(c.duck.depth_db, c.duck.attack, c.duck.hold, c.duck.release, c.duck.merge))
@@ -181,4 +211,50 @@ mix_end :: proc(m: ^Song) {
 		}
 	}
 	slice.sort_by(m.voices[:], proc(a, b: [2]f64) -> bool {return a[0] < b[0]})
+}
+
+// Appends a song's programs to a mix's, every index moved past what is
+// there; the first one's new index.
+@(private = "file")
+programs_append :: proc(to, from: ^device.Programs) -> i32 {
+	p0, n0, m0 := i32(len(to.programs)), i32(len(to.nodes)), i32(len(to.mods))
+	i0, pad0, c0 := i32(len(to.inputs)), i32(len(to.pads)), i32(len(to.chokes))
+	ctl0, tgt0 := i32(len(to.controls)), i32(len(to.control_targets))
+	shift :: proc(sp: Span, by: i32) -> Span {return {sp.first + by, sp.count}}
+	for p in from.programs {
+		x := p
+		x.nodes, x.pads, x.controls = shift(p.nodes, n0), shift(p.pads, pad0), shift(p.controls, ctl0)
+		append(&to.programs, x)
+	}
+	for c in from.controls {
+		x := c
+		x.targets = shift(c.targets, tgt0)
+		append(&to.controls, x)
+	}
+	append(&to.control_names, ..from.control_names[:])
+	for t in from.control_targets {
+		x := t
+		x.node += n0
+		if x.mod >= 0 {
+			x.mod += m0
+		}
+		append(&to.control_targets, x)
+	}
+	for n in from.nodes {
+		x := n
+		x.mods, x.inputs = shift(n.mods, m0), shift(n.inputs, i0)
+		append(&to.nodes, x)
+	}
+	append(&to.mods, ..from.mods[:])
+	append(&to.inputs, ..from.inputs[:])
+	for pr in from.pads {
+		x := pr
+		if x.program >= 0 {
+			x.program += p0
+		}
+		x.chokes = shift(pr.chokes, c0)
+		append(&to.pads, x)
+	}
+	append(&to.chokes, ..from.chokes[:])
+	return p0
 }
