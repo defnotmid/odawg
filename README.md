@@ -114,4 +114,6 @@ Committed, in this order (nothing jumps ahead of them):
 ## Mascot
 
 `tools/mascot` draws the dog (32×32 pixel art, an SVG with switchable
-layers and PNGs): `odin run tools/mascot -- art`.
+layers and PNGs): `odin run tools/mascot -- art`. In `art/logo.svg` each
+layer's colours are one traced path each, plus a hidden `silhouette` (the
+whole dog as one outline, its holes kept) to morph, extrude or collide.
