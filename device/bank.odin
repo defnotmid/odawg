@@ -140,11 +140,28 @@ bank_destroy :: proc(b: ^Bank) {
 }
 
 // Adds a set of one sample (a clip: stereo interleaved frames at RATE) lent
-// by the host, not copied: its frames must outlive the bank's use. Returns
-// the set's index.
-bank_borrow :: proc(b: ^Bank, name: string, frames: []f32) -> i32 {
+// by the host, not copied: its frames must outlive the bank's use. Float
+// frames, or 16-bit ones as they are (a host's render of a song, full scale
+// 32768). Returns the set's index.
+bank_borrow :: proc {
+	bank_borrow_f32,
+	bank_borrow_i16,
+}
+
+bank_borrow_f32 :: proc(b: ^Bank, name: string, frames: []f32) -> i32 {
 	append(&b.f32s, frames)
-	append(&b.samples, Sample{chunk = i32(len(b.f32s) - 1), frames = i64(len(frames) / 2), channels = 2, format = .F32})
+	return borrowed_set(b, name, Sample{chunk = i32(len(b.f32s) - 1), frames = i64(len(frames) / 2), channels = 2, format = .F32})
+}
+
+bank_borrow_i16 :: proc(b: ^Bank, name: string, frames: []i16) -> i32 {
+	append(&b.i16s, frames)
+	return borrowed_set(b, name, Sample{chunk = i32(len(b.i16s) - 1), frames = i64(len(frames) / 2), channels = 2, format = .I16})
+}
+
+// A lent sample's rows: the sample, one zone over every key, its set.
+@(private = "file")
+borrowed_set :: proc(b: ^Bank, name: string, sm: Sample) -> i32 {
+	append(&b.samples, sm)
 	append(&b.zones, Zone{sample = i32(len(b.samples) - 1), lo_key = 0, hi_key = 127, root = 60, lo_velocity = 0, hi_velocity = 127, gain = 1, one_shot = true})
 	append(&b.zone_file, -1)
 	append(&b.sets, Sample_Set{name = name, zones = {i32(len(b.zones) - 1), 1}})

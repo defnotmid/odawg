@@ -269,6 +269,41 @@ test_clip :: proc(t: ^testing.T) {
 	testing.expectf(t, moved > 0.05, "the filter changed the clip by %g", moved)
 }
 
+// A host's 16-bit render lent as it is (bank_borrow over i16) plays as the
+// same frames as floats: full scale 32768, a power of two, so exactly.
+@(test)
+test_clip_borrows_i16 :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	_ = virtual.arena_init_growing(&arena)
+	context.allocator = virtual.arena_allocator(&arena)
+	frames := 4 * RATE
+	whole := make([]i16, 2 * frames)
+	floats := make([]f32, 2 * frames)
+	for i in 0 ..< 2 * frames {
+		whole[i] = i16((i * 37) % 65536 - 32768)
+		floats[i] = f32(whole[i]) / 32768
+	}
+	play :: proc(bank: ^device.Bank, set: i32) -> Output {
+		m: song.Song
+		song.mix_init(&m)
+		m.bank = bank
+		song.append_clip(&m, {name = "render", set = set, start = 0.5, stop = 3.5, offset = 0.25, fade_in = 0.1, fade_out = 0.2})
+		song.mix_end(&m)
+		return output_from_song(&m, {threads = 1, segment = 1000})
+	}
+	bank: device.Bank
+	a := play(&bank, device.bank_borrow(&bank, "render", whole))
+	b := play(&bank, device.bank_borrow(&bank, "floats", floats))
+	testing.expect_value(t, a.frames, b.frames)
+	same := a.frames > 0
+	for v, i in a.left {
+		same &&= v == b.left[i] && a.right[i] == b.right[i]
+	}
+	testing.expect(t, same, "the 16-bit clip differs from its floats")
+	testing.expect(t, a.left[RATE] != 0, "the 16-bit clip is silent")
+}
+
 // A clip at a rate reads frame offset + k * rate for its sample k: at 2
 // and 0.5 a slow sine comes out as the sine at those positions (through
 // the kernel), at -1 the source exactly, backwards from the offset, then
