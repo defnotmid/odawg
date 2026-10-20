@@ -38,7 +38,34 @@ Args :: struct {
 	reference:  string,
 	float:      bool,
 	json:       bool,
+	verify:     bool,
 	threads:    int,
+}
+
+// The flags as rows: their spellings, what they hold (a text and a number
+// take the next argument; a switch is set by itself), the field of Args.
+Flag_Kind :: enum u8 {
+	Text,
+	Number,
+	Switch,
+}
+
+Flag_Row :: struct {
+	names:  []string,
+	kind:   Flag_Kind,
+	offset: uintptr,
+}
+
+FLAG_TABLE := []Flag_Row {
+	{{"-o", "--out"}, .Text, offset_of(Args, out)},
+	{{"--range"}, .Text, offset_of(Args, range)},
+	{{"--master"}, .Text, offset_of(Args, master)},
+	{{"--stems"}, .Text, offset_of(Args, stems)},
+	{{"--reference"}, .Text, offset_of(Args, reference)},
+	{{"--threads"}, .Number, offset_of(Args, threads)},
+	{{"--float"}, .Switch, offset_of(Args, float)},
+	{{"--json"}, .Switch, offset_of(Args, json)},
+	{{"--verify"}, .Switch, offset_of(Args, verify)},
 }
 
 Command_Row :: struct {
@@ -70,31 +97,26 @@ main :: proc() {
 		return
 	}
 	a: Args
-	for i := 1; i < len(argv); i += 1 {
-		next :: proc(argv: []string, i: ^int) -> string {
-			i^ += 1
-			return argv[i^] if i^ < len(argv) else ""
+	args: for i := 1; i < len(argv); i += 1 {
+		for row in FLAG_TABLE {
+			if !slice.contains(row.names, argv[i]) {
+				continue
+			}
+			field := rawptr(uintptr(&a) + row.offset)
+			if row.kind == .Switch {
+				(^bool)(field)^ = true
+				continue args
+			}
+			i += 1
+			value := argv[i] if i < len(argv) else ""
+			if row.kind == .Number {
+				(^int)(field)^ = int(f64_from(value))
+			} else {
+				(^string)(field)^ = value
+			}
+			continue args
 		}
-		switch argv[i] {
-		case "-o", "--out":
-			a.out = next(argv, &i)
-		case "--range":
-			a.range = next(argv, &i)
-		case "--master":
-			a.master = next(argv, &i)
-		case "--stems":
-			a.stems = next(argv, &i)
-		case "--reference":
-			a.reference = next(argv, &i)
-		case "--threads":
-			a.threads = int(f64_from(next(argv, &i)))
-		case "--float":
-			a.float = true
-		case "--json":
-			a.json = true
-		case:
-			append(&a.positional, argv[i])
-		}
+		append(&a.positional, argv[i])
 	}
 	for c in COMMAND_TABLE {
 		if c.name == argv[0] {

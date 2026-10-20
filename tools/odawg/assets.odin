@@ -26,7 +26,6 @@ set_names_from_args :: proc(a: ^Args) -> (names: [dynamic]string, ok: bool, sour
 	ok = true
 	for arg in a.positional {
 		switch {
-		case arg == "--verify":
 		case strings.has_suffix(arg, ".json"):
 			text, err := os.read_entire_file(arg, context.temp_allocator)
 			if err != nil {
@@ -70,10 +69,7 @@ run_fetch :: proc(a: ^Args) -> bool {
 	if !ok {
 		return false
 	}
-	verify := false
-	for arg in a.positional {
-		verify ||= arg == "--verify"
-	}
+	verify := a.verify
 	if len(names) == 0 {
 		for s in assets.SET_TABLE {
 			append(&names, s.name)
