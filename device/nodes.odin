@@ -1211,7 +1211,7 @@ clip_run_rate :: proc(data: []$T, channels: int, scale: f32, frames, first: i64,
 		if k >= length || pos < 0 || pos >= f64(frames) {
 			continue
 		}
-		a, b := sinc_frame(data, i64(channels), right, frames, pos, cutoff, taps, scale)
+		a, b := read_frame(data, i64(channels), right, frames, 0, 0, pos, f32(cutoff), taps, f32(cutoff) * scale, cutoff == 1)
 		g := dsp.fade_gain(k, fade_in, curve) * dsp.fade_gain(length - 1 - k, fade_out, curve)
 		if mono {
 			a = a * 0.70710678 + b * 0.70710678

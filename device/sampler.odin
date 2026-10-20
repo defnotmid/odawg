@@ -72,43 +72,52 @@ sinc_init :: proc "contextless" () {
 	}
 }
 
-@(private = "file")
-kernel :: #force_inline proc "contextless" (x: f64) -> f32 {
-	t := abs(x) * SINC_STEPS
-	i := int(t)
-	if i >= SINC_HALF * SINC_STEPS {
-		return 0
-	}
-	f := f32(t - f64(i))
-	return sinc_table[i] + (sinc_table[i + 1] - sinc_table[i]) * f
-}
 
-// Both sides of interleaved `data` (`frames` of `channels`, `right` the
-// channel read as the right) at frame `pos` (fractional, >= 0) through the
-// kernel at `cutoff` (`taps` on each side), times `scale`; frames past its
-// edges read as silence. A whole `pos` at a cutoff of 1 is its own frame.
+// Both sides of interleaved `data` (`ch` channels, `right` the one read
+// as the right; `length` frames) at frame `pos` (fractional, >= 0) through
+// the kernel at `cutoff` (relative to the sample's Nyquist; `taps` on each
+// side), times `gain` (cutoff times the scale): its own frame where `exact`
+// (a whole pos read at its own rate), else every tap, from the table; a
+// loop's taps past its end wrapped (loop_to > loop_from), taps outside the
+// sample silent. The Sampler's, a Region's and a clip at a rate read so.
 @(private = "package")
-sinc_frame :: #force_inline proc "contextless" (data: []$T, channels, right, frames: i64, pos, cutoff: f64, taps: i64, scale: f32) -> (sl, sr: f32) {
-	centre := i64(pos)
+read_frame :: #force_inline proc "contextless" (data: []$T, ch, right, length, loop_from, loop_to: i64, pos: f64, cutoff: f32, taps: i64, gain: f32, exact: bool) -> (sl, sr: f32) {
+	centre := i64(pos) // pos >= 0: truncation floors it
 	frac := pos - f64(centre)
-	if frac == 0 && cutoff == 1 && centre < frames {
-		return f32(data[channels * centre]) * scale, f32(data[channels * centre + right]) * scale
+	if exact && frac == 0 && centre < length {
+		return f32(data[ch * centre]) * gain, f32(data[ch * centre + right]) * gain
 	}
-	c := f32(cutoff)
-	gain := f32(cutoff) * scale
 	f := f32(frac)
-	lo := max(1 - taps, -centre)
-	hi := min(taps, frames - 1 - centre)
-	#no_bounds_check for d in lo ..= hi {
-		x := abs((f - f32(d)) * c) * SINC_STEPS
+	looped := loop_to > loop_from
+	if centre - taps + 1 >= 0 && centre + taps < (looped ? loop_to : length) {
+		// every tap inside the sample, every table index inside the table
+		#no_bounds_check for d in 1 - taps ..= taps {
+			x := abs((f - f32(d)) * cutoff) * SINC_STEPS
+			ti := int(x)
+			w := (sinc_table[ti] + (sinc_table[ti + 1] - sinc_table[ti]) * (x - f32(ti))) * gain
+			fi := centre + d
+			sl += f32(data[ch * fi]) * w
+			sr += f32(data[ch * fi + right]) * w
+		}
+		return
+	}
+	for d in 1 - taps ..= taps {
+		fi := centre + d
+		if looped && fi >= loop_to {
+			fi = loop_from + (fi - loop_from) % (loop_to - loop_from)
+		}
+		if fi < 0 || fi >= length {
+			continue
+		}
+		x := abs((f - f32(d)) * cutoff) * SINC_STEPS
 		ti := int(x)
 		w := (sinc_table[ti] + (sinc_table[ti + 1] - sinc_table[ti]) * (x - f32(ti))) * gain
-		fi := centre + d
-		sl += f32(data[channels * fi]) * w
-		sr += f32(data[channels * fi + right]) * w
+		sl += f32(data[ch * fi]) * w
+		sr += f32(data[ch * fi + right]) * w
 	}
 	return
 }
+
 
 Sampler_State :: struct {
 	zone:      i32, // into the bank's zones (-1: nothing to play)
@@ -121,10 +130,9 @@ Sampler_State :: struct {
 	taps:      int, // on each side
 	gain_l:    f32,
 	gain_r:    f32,
-	attack:    f64, // samples
-	release:   f64, // seconds
-	release_tc: f64, // the release's time constant (dsp.approach's), once a note
+	env:       dsp.Adsr, // its level: Tone's envelope, its attack, held at 1, its release
 	gate:      i64, // the sample the release starts at (-1: a one-shot)
+	over:      i64, // the sample from which it is silent for good (-1: its sample's end)
 }
 
 #assert(size_of(Sampler_State) <= VOICE_STATE_SIZE)
@@ -220,37 +228,16 @@ sampler_start :: proc(st: ^Sampler_State, set: i32, attack, release: f32, key: f
 	amp := z.gain * min(f32(velocity) / f32(max(z.hi_velocity, 1)), 1)
 	st.gain_l = amp * (z.pan > 0 ? 1 - z.pan : 1)
 	st.gain_r = amp * (z.pan < 0 ? 1 + z.pan : 1)
-	st.attack = max(f64(attack), 0) * RATE
-	st.release = max(z.release > 0 ? f64(z.release) : f64(release), SAMPLER_DECLICK)
-	st.release_tc = math.ln(st.release + 1) / math.ln(f64(200))
+	rel := max(z.release > 0 ? f64(z.release) : f64(release), SAMPLER_DECLICK)
+	st.env = {attack = max(attack, 0), sustain = 1, release = f32(rel)}
+	dsp.adsr_init(&st.env)
 	st.gate = z.one_shot ? -1 : i64(math.round(max(n.duration, 0) * RATE))
+	st.over = st.gate >= 0 ? st.gate + i64(math.ceil(rel * RATE)) : -1
 }
 
 // Sample frames per output sample at the root pitch (1: recorded at RATE).
 @(private = "file")
 device_rate_ratio :: proc "contextless" (s: Sample) -> f64 {return sample_rate(s) / RATE}
-
-// The envelope at output sample k (done: silent from here on).
-@(private = "file")
-sampler_level :: #force_inline proc "contextless" (st: ^Sampler_State, k: i64) -> (level: f32, done: bool) {
-	attack := proc "contextless" (st: ^Sampler_State, k: i64) -> f32 {
-		return st.attack > 0 && f64(k) < st.attack ? f32(f64(k) / st.attack) : 1
-	}
-	if st.gate < 0 || k < st.gate {
-		return attack(st, k), false
-	}
-	// dsp.approach toward silence, its time constant computed once a note
-	from := attack(st, st.gate)
-	t := f64(k - st.gate) / RATE
-	switch {
-	case t >= st.release:
-		return 0, true
-	case t < 0.9 * st.release:
-		return from * dsp.exp_decay(f32(-t / st.release_tc)), false
-	}
-	v90 := f64(from) * math.exp(-0.9 * st.release / st.release_tc)
-	return f32(v90 - v90 * (t - 0.9 * st.release) / (0.1 * st.release)), false
-}
 
 // The note's next len(l) samples, written into l and r (silence where it is
 // over); false once it is over.
@@ -274,8 +261,9 @@ sampler_play :: proc(st: ^Sampler_State, at: i64, env: ^Voice_Env, l, r: []f32) 
 // channel count (a mono recording plays to both sides). At the root pitch
 // a sample is its own frames (the kernel is 1 at 0 and 0 at every other
 // whole tap); away from the sample's edges and its loop's end the kernel
-// sums in f32 without a check per tap. Every output sample is a function
-// of its index alone.
+// sums in f32 (read_frame). Where it reads is a function of the output
+// sample's index alone; its level is its envelope's, run in order (a seek
+// chases a Sampler's notes from their start).
 @(private = "file")
 sampler_run :: proc(st: ^Sampler_State, data: []$T, channels: int, scale: f32, at: i64, l, r: []f32) -> bool {
 	looped := st.loop_to > st.loop_from
@@ -285,17 +273,22 @@ sampler_run :: proc(st: ^Sampler_State, data: []$T, channels: int, scale: f32, a
 	right := i64(channels > 1 ? 1 : 0)
 	ch := i64(channels)
 	taps := i64(st.taps)
-	// the frames a kernel may read without wrapping or leaving the sample
-	safe_to := looped ? st.loop_to : st.length
 	c := f32(st.cutoff)
+	levels: [NODE_CHUNK]f32 = ---
 	for i in 0 ..< m {
 		k := at + i64(i)
-		level, done := sampler_level(st, k)
-		if done {
+		if st.over >= 0 && k >= st.over {
 			slice_zero(l[i:m])
 			slice_zero(r[i:m])
 			return false
 		}
+		// its levels a chunk at a time, the gate closing where it falls
+		if i % NODE_CHUNK == 0 {
+			n := min(NODE_CHUNK, m - i)
+			release_at := st.gate >= k && st.gate < k + i64(n) ? int(st.gate - k) : -1
+			dsp.adsr_run(&st.env, levels[:n], release_at)
+		}
+		level := levels[i % NODE_CHUNK]
 		pos := f64(st.offset) + f64(k) * st.step
 		if looped && pos >= f64(st.loop_to) {
 			pos = f64(st.loop_from) + math.mod(pos - f64(st.loop_from), f64(loop_len))
@@ -305,37 +298,7 @@ sampler_run :: proc(st: ^Sampler_State, data: []$T, channels: int, scale: f32, a
 			slice_zero(r[i:m])
 			return false
 		}
-		centre := i64(pos) // pos >= 0: truncation floors it
-		frac := pos - f64(centre)
-		sl, sr: f32
-		switch {
-		case frac == 0 && st.step == 1 && centre < st.length:
-			sl, sr = f32(data[ch * centre]) * cutoff, f32(data[ch * centre + right]) * cutoff
-		case centre - taps + 1 >= 0 && centre + taps < safe_to:
-			// every tap inside the sample, every table index inside the table
-			f := f32(frac)
-			#no_bounds_check for d in 1 - taps ..= taps {
-				x := abs((f - f32(d)) * c) * SINC_STEPS
-				ti := int(x)
-				w := (sinc_table[ti] + (sinc_table[ti + 1] - sinc_table[ti]) * (x - f32(ti))) * cutoff
-				fi := centre + d
-				sl += f32(data[ch * fi]) * w
-				sr += f32(data[ch * fi + right]) * w
-			}
-		case:
-			for j in centre - taps + 1 ..= centre + taps {
-				f := j
-				if looped && f >= st.loop_to {
-					f = st.loop_from + (f - st.loop_from) % loop_len
-				}
-				if f < 0 || f >= st.length {
-					continue
-				}
-				w := kernel((frac - f64(j - centre)) * st.cutoff) * cutoff
-				sl += f32(data[ch * f]) * w
-				sr += f32(data[ch * f + right]) * w
-			}
-		}
+		sl, sr := read_frame(data, ch, right, st.length, st.loop_from, st.loop_to, pos, c, taps, cutoff, st.step == 1)
 		l[i] = sl * st.gain_l * level
 		r[i] = sr * st.gain_r * level
 	}
@@ -581,41 +544,8 @@ region_run :: proc(st: ^Region_State, lane: ^Lane, data: []$T, channels: int, sc
 			st.over = true
 			return
 		}
-		centre := i64(pos)
-		frac := pos - f64(centre)
-		sl, sr: f32
-		// the frames a kernel may read without wrapping or leaving the sample
-		safe_to := looped ? st.loop_to : st.length
-		if frac == 0 && st.step * f64(varies ? rate[i] : factor) == 1 && centre < st.length {
-			sl, sr = f32(data[ch * centre]) * cutoff, f32(data[ch * centre + right]) * cutoff
-		} else if centre - taps + 1 >= 0 && centre + taps < safe_to {
-			// every tap inside the sample, every table index inside the table
-			f := f32(frac)
-			#no_bounds_check for d in 1 - taps ..= taps {
-				x := abs((f - f32(d)) * c) * SINC_STEPS
-				ti := int(x)
-				w := (sinc_table[ti] + (sinc_table[ti + 1] - sinc_table[ti]) * (x - f32(ti))) * cutoff
-				fi := centre + d
-				sl += f32(data[ch * fi]) * w
-				sr += f32(data[ch * fi + right]) * w
-			}
-		} else {
-			f := f32(frac)
-			for d in 1 - taps ..= taps {
-				fi := centre + d
-				if looped && fi >= st.loop_to {
-					fi = st.loop_from + (fi - st.loop_from) % (st.loop_to - st.loop_from)
-				}
-				if fi < 0 || fi >= st.length {
-					continue
-				}
-				x := abs((f - f32(d)) * c) * SINC_STEPS
-				ti := int(x)
-				w := (sinc_table[ti] + (sinc_table[ti + 1] - sinc_table[ti]) * (x - f32(ti))) * cutoff
-				sl += f32(data[ch * fi]) * w
-				sr += f32(data[ch * fi + right]) * w
-			}
-		}
+		loop_to := looped ? st.loop_to : st.loop_from // its loop only while it loops
+		sl, sr := read_frame(data, ch, right, st.length, st.loop_from, loop_to, pos, c, taps, cutoff, st.step * f64(varies ? rate[i] : factor) == 1)
 		if st.width != 1 {
 			mid, side := (sl + sr) * 0.5, (sl - sr) * 0.5 * st.width
 			sl, sr = mid + side, mid - side
