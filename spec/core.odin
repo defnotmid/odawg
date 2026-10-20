@@ -221,6 +221,15 @@ style_folder :: proc(name: string) -> string {
 	return ""
 }
 
+// The song's spec a style's (`s`) is read for; the song's own: itself.
+song_spec :: proc(s: ^Spec) -> ^Spec {
+	s := s
+	for s.outer != nil {
+		s = s.outer
+	}
+	return s
+}
+
 // The source named `name` that `s` reads: its own, else its outer song's,
 // and the spec that defines it (its pins are in that spec's folder).
 source_from_name :: proc(s: ^Spec, name: string) -> (src: ^Source_Spec, owner: ^Spec) {

@@ -80,10 +80,7 @@ Sfz_File :: struct {
 // path, what it includes; "": one that couldn't be read) into the spec's
 // memory: the song's (a style's spec is read again where it plays).
 spec_add_sfz :: proc(s: ^Spec, path: string, texts: map[string]string) {
-	s := s
-	for s.outer != nil {
-		s = s.outer
-	}
+	s := song_spec(s)
 	if s.sfz_files.allocator.procedure != nil {
 		context.allocator = s.sfz_files.allocator
 	}
@@ -106,11 +103,7 @@ spec_add_sfz :: proc(s: ^Spec, path: string, texts: map[string]string) {
 
 // The SFZ instrument at `path` the song was handed. Nil: none.
 spec_sfz :: proc(s: ^Spec, path: string) -> ^Sfz {
-	s := s
-	for s.outer != nil {
-		s = s.outer
-	}
-	for &f in s.sfz_files {
+	for &f in song_spec(s).sfz_files {
 		if f.path == path {
 			return &f.sfz
 		}
