@@ -66,37 +66,56 @@ tone_row_text :: proc(name: string, allocator := context.temp_allocator) -> (str
 Instrument_File :: struct {
 	path:  string,
 	value: json.Value,
-	text:  string, // an SFZ file's (or what one includes), as read
 }
 
-// An SFZ file's text (or a file it includes), as the assets layer read it
-// declaring the instrument's samples: what compiling it reads.
-spec_add_sfz_text :: proc(s: ^Spec, path, text: string) {
-	// the song's (a style's spec is read again where it plays)
+// An SFZ instrument at `path` (its file, then what it includes), as the
+// assets layer read it declaring its samples: what compiling it and its
+// options read, read once.
+Sfz_File :: struct {
+	path: string,
+	sfz:  Sfz,
+}
+
+// The SFZ instrument at `path`, read from its texts (its file's and, by
+// path, what it includes; "": one that couldn't be read) into the spec's
+// memory: the song's (a style's spec is read again where it plays).
+spec_add_sfz :: proc(s: ^Spec, path: string, texts: map[string]string) {
 	s := s
 	for s.outer != nil {
 		s = s.outer
 	}
-	for &f in s.instrument_files {
-		if f.path == path {
-			f.text = strings.clone(text)
+	if s.sfz_files.allocator.procedure != nil {
+		context.allocator = s.sfz_files.allocator
+	}
+	kept := make(map[string]string)
+	for p, t in texts {
+		if t != "" {
+			kept[strings.clone(p)] = strings.clone(t)
+		}
+	}
+	f := Sfz_File{path = strings.clone(path)}
+	sfz_read(&f.sfz, f.path, kept[f.path], kept)
+	for &x in s.sfz_files {
+		if x.path == path {
+			x = f
 			return
 		}
 	}
-	append(&s.instrument_files, Instrument_File{path = strings.clone(path), text = strings.clone(text)})
+	append(&s.sfz_files, f)
 }
 
-// The SFZ texts the spec (and its outer ones) were handed, by path.
-sfz_texts :: proc(s: ^Spec, allocator := context.temp_allocator) -> map[string]string {
-	texts := make(map[string]string, allocator)
-	for o := s; o != nil; o = o.outer {
-		for f in o.instrument_files {
-			if f.text != "" {
-				texts[f.path] = f.text
-			}
+// The SFZ instrument at `path` the song was handed. Nil: none.
+spec_sfz :: proc(s: ^Spec, path: string) -> ^Sfz {
+	s := s
+	for s.outer != nil {
+		s = s.outer
+	}
+	for &f in s.sfz_files {
+		if f.path == path {
+			return &f.sfz
 		}
 	}
-	return texts
+	return nil
 }
 
 // Whether an instrument's name is an SFZ file's.
@@ -1330,16 +1349,12 @@ target_field :: proc(d: ^Draft, path: string) -> ^device.Node_Field {
 // at the values the row gave, else its own.
 @(private = "file")
 sfz_desc :: proc(c: ^Ctx, d: ^Draft, written: string) -> ^device.Program_Desc {
-	owner := d.sfz_owner
-	key := asset_key(owner, d.sfz_name)
-	texts := sfz_texts(owner)
-	text, found := texts[key]
-	if !found {
+	key := asset_key(d.sfz_owner, d.sfz_name)
+	s := spec_sfz(d.sfz_owner, key)
+	if s == nil {
 		report(c, "missing_file", .Error, written, "%s: SFZ file %s was not read (the assets layer reads it declaring its samples)", written, key)
 		return nil
 	}
-	s: Sfz
-	sfz_read(&s, key, text, texts, context.temp_allocator)
 	for m in s.missing {
 		report(c, "missing_file", .Error, written, "%s: %s includes %s, which was not read", written, key, m)
 	}
@@ -1352,7 +1367,7 @@ sfz_desc :: proc(c: ^Ctx, d: ^Draft, written: string) -> ^device.Program_Desc {
 		report(c, "asset_unavailable", .Error, written, "%s: SFZ %q's samples are not declared (offline, or not read)", written, d.sfz_name)
 		set = -1
 	}
-	desc := sfz_program_desc(&s, i32(set), cc, written, c.findings, d.sfz_overrides)
+	desc := sfz_program_desc(s, i32(set), cc, written, c.findings, d.sfz_overrides)
 	if len(desc.layers) == 0 {
 		report(c, "sfz_silent", .Warning, written, "%s: no region of %s plays at its CCs' values (set them: cc64 = 127, or by their labels)", written, d.sfz_name)
 		return nil
@@ -1373,12 +1388,7 @@ sfz_cc_option :: proc(c: ^Ctx, d: ^Draft, key: string, v: json.Value) -> (cc: in
 			return k, f32(n), true
 		}
 	}
-	owner := d.sfz_owner
-	texts := sfz_texts(owner)
-	path := asset_key(owner, d.sfz_name)
-	if text, found := texts[path]; found {
-		s: Sfz
-		sfz_read(&s, path, text, texts, context.temp_allocator)
+	if s := spec_sfz(d.sfz_owner, asset_key(d.sfz_owner, d.sfz_name)); s != nil {
 		for label, k in s.cc_labels {
 			if label != "" && (label == key || strings.to_lower(label, context.temp_allocator) == strings.to_lower(key, context.temp_allocator)) {
 				return k, f32(n), true

@@ -285,6 +285,7 @@ spec_init :: proc(s: ^Spec, allocator := context.allocator) {
 	s.strings.allocator, s.styles.allocator, s.buses.allocator = allocator, allocator, allocator
 	s.sets.allocator, s.set_zones.allocator, s.sources.allocator = allocator, allocator, allocator
 	s.instruments.allocator, s.instrument_includes.allocator, s.instrument_files.allocator = allocator, allocator, allocator
+	s.sfz_files.allocator = allocator
 }
 
 // Reads a spec from a value; context.allocator holds it (give it an arena).

@@ -10,8 +10,8 @@ import spec "../spec"
 // same way, round by round) read with spec's SFZ reader, every region with
 // a sample a zone of one set, in the order the regions come (the zone a
 // region's Region node plays), its file the region's sample (from the SFZ's
-// folder, after default_path). The texts go to the spec that named it, so
-// compiling the instrument reads what was declared.
+// folder, after default_path). The spec that named it keeps it, read once,
+// so compiling the instrument reads what was declared.
 
 // The most rounds of includes read (a file including another, ...).
 SFZ_INCLUDE_ROUNDS :: 16
@@ -66,9 +66,7 @@ declare_sfz :: proc(bank: ^device.Bank, ref: spec.Asset_Ref, d: ^Declaring) -> b
 		}
 	}
 	if ref.from != nil {
-		for path, t in texts {
-			spec.spec_add_sfz_text(ref.from, path, t)
-		}
+		spec.spec_add_sfz(ref.from, key, texts)
 	}
 	folder := filepath.dir(key)
 	// a source's SFZ plays that source's files only

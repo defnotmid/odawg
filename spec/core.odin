@@ -55,6 +55,7 @@ Spec :: struct {
 	instruments:       [dynamic]Instrument_Spec, // rows its parts can name
 	instrument_includes: [dynamic]string, // files of rows its parts can name too (`instruments = "classic.json"`)
 	instrument_files:  [dynamic]Instrument_File, // the files of rows the host read (the song's: every one its styles name too)
+	sfz_files:         [dynamic]Sfz_File, // the SFZ instruments the assets layer read (the song's: its styles' too)
 	buses:             [dynamic]Bus_Spec,
 	sets:              [dynamic]Set_Spec, // the song's own sample sets
 	set_zones:         [dynamic]Set_Zone_Spec,
