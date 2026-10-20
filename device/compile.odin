@@ -108,8 +108,14 @@ Node_Desc :: struct {
 	values: [MAX_FIELDS]f32, // node_defaults(kind) and what was written: seconds, Hz, gain linear
 	inputs: []string,
 	mods:   []Mod_Desc,
-	table:  []f32, // a Curve's points (CURVE_POINTS; placed in Programs.tables, its `table` field set)
 	path:   string,
+}
+
+// A node's table (a Curve's points, CURVE_POINTS): placed in
+// Programs.tables, its kind's .Table field set to where.
+Table_Desc :: struct {
+	node:   string, // its name
+	points: []f32,
 }
 
 Pad_Desc :: struct {
@@ -166,6 +172,7 @@ Program_Desc :: struct {
 	nodes:      []Node_Desc,
 	pads:       []Pad_Desc, // a machine (and no nodes)
 	layers:     []Layer_Desc, // a layered instrument (and no nodes): every layer a note meets sounds
+	tables:     []Table_Desc, // its nodes' tables
 	keys:       []Key_Desc,
 	controls:   []Control_Desc,
 	out:        string, // the node it plays
@@ -395,9 +402,9 @@ compile_nodes :: proc(progs: ^Programs, desc: ^Program_Desc, prog: Program, find
 			bufs += 1
 		}
 		g := Graph_Node{kind = n.kind, name = base.name_id(n.name), values = n.values, state = i32(state), buf = buf[i]}
-		if len(n.table) == CURVE_POINTS {
-			g.values[len(COMMON_FIELDS)] = f32(len(progs.tables) / CURVE_POINTS)
-			append(&progs.tables, ..n.table)
+		if points := desc_table(desc, n.name); points != nil {
+			g.values[node_table_slot(n.kind)] = f32(len(progs.tables) / CURVE_POINTS)
+			append(&progs.tables, ..points)
 		}
 		state += (row.state + 15) &~ 15
 		g.inputs = {i32(len(progs.inputs)), i32(len(n.inputs))}
@@ -562,10 +569,15 @@ compile_layers :: proc(progs: ^Programs, desc: ^Program_Desc, prog: Program, fin
 				continue
 			}
 			append(&shapes, Shape{key, programs[i]})
-			// its tables, by their contents, for the layers after it
-			for n in l.program.nodes {
-				if len(n.table) == CURVE_POINTS {
-					tables[table_hash(n.table)] = f32(len(progs.tables) / CURVE_POINTS - 1)
+			// its tables, by their contents, for the layers after it: where
+			// each went, read back from its node
+			placed := progs.programs[programs[i]]
+			for tb in l.program.tables {
+				id := base.name_id(tb.node)
+				for g in progs.nodes[placed.nodes.first:base.span_end(placed.nodes)] {
+					if g.name == id && len(tb.points) == CURVE_POINTS {
+						tables[table_hash(tb.points)] = g.values[node_table_slot(g.kind)]
+					}
 				}
 			}
 		}
@@ -618,7 +630,7 @@ desc_shape :: proc(d: ^Program_Desc) -> string {
 			strings.write_f64(&b, f64(m.amount), 'g')
 			strings.write_f64(&b, f64(m.exponent), 'g')
 		}
-		strings.write_byte(&b, len(n.table) > 0 ? 't' : '-')
+		strings.write_byte(&b, desc_table(d, n.name) != nil ? 't' : '-')
 		strings.write_byte(&b, n.values[FIELD_GAIN] != 1 ? 'g' : '-')
 		strings.write_byte(&b, n.values[FIELD_PAN] != 0 ? 'p' : '-')
 		if n.kind == NODE_FILTER {
@@ -630,6 +642,28 @@ desc_shape :: proc(d: ^Program_Desc) -> string {
 		}
 	}
 	return strings.to_string(b)
+}
+
+// A node's table in its desc (nil: none, or not CURVE_POINTS long).
+@(private = "file")
+desc_table :: proc(d: ^Program_Desc, node: string) -> []f32 {
+	for t in d.tables {
+		if t.node == node && len(t.points) == CURVE_POINTS {
+			return t.points
+		}
+	}
+	return nil
+}
+
+// The slot of a kind's .Table field (-1: none).
+node_table_slot :: proc(kind: Node_Kind) -> int {
+	row := node_row(kind)
+	for f, i in row.fields {
+		if f.unit == .Table {
+			return row.slots[i]
+		}
+	}
+	return -1
 }
 
 @(private = "file")
@@ -655,15 +689,15 @@ layer_values :: proc(progs: ^Programs, program: i32, d: ^Program_Desc, tables: ^
 				continue
 			}
 			values := n.values
-			if len(n.table) == CURVE_POINTS {
-				h := table_hash(n.table)
+			if points := desc_table(d, n.name); points != nil {
+				h := table_hash(points)
 				at, placed := tables[h]
 				if !placed {
 					at = f32(len(progs.tables) / CURVE_POINTS)
-					append(&progs.tables, ..n.table)
+					append(&progs.tables, ..points)
 					tables[h] = at
 				}
-				values[len(COMMON_FIELDS)] = at
+				values[node_table_slot(n.kind)] = at
 			}
 			for slot in 0 ..< MAX_FIELDS {
 				if values[slot] != g.values[slot] {

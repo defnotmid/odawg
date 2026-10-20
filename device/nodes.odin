@@ -107,7 +107,7 @@ nodes_init :: proc "contextless" () {
 	})
 	NODE_CURVE = register_node(r, {
 		name = "Curve", inputs = 1, unipolar = true, stateless = true, process = process_curve,
-		fields = {{name = "table", unit = .Number}},
+		fields = {{name = "table", unit = .Table}},
 	})
 	NODE_MIX = register_node(r, {name = "Mix", inputs = -1, stateless = true, process = process_mix})
 	NODE_MUL = register_node(r, {name = "Mul", inputs = -1, stateless = true, process = process_mul})

@@ -277,13 +277,13 @@ programs_append :: proc(to, from: ^device.Programs) -> i32 {
 		}
 		// its row: a pad's or a region's, by its program's mode
 		x.row += layer_mode_of(from, i) == .All ? regions0 : pads0
-		// its values, a Curve's table index moved past the tables there
+		// its values, a table field moved past the tables there
 		x.params = {i32(len(to.layer_params)), pr.params.count}
 		if pr.program >= 0 {
 			fp := from.programs[pr.program]
 			for lp in from.layer_params[pr.params.first:base.span_end(pr.params)] {
 				y := lp
-				if from.nodes[fp.nodes.first + i32(lp.node)].kind == device.NODE_CURVE && int(lp.slot) == len(device.COMMON_FIELDS) {
+				if int(lp.slot) == device.node_table_slot(from.nodes[fp.nodes.first + i32(lp.node)].kind) {
 					y.value += t0
 				}
 				append(&to.layer_params, y)
@@ -298,11 +298,11 @@ programs_append :: proc(to, from: ^device.Programs) -> i32 {
 	}
 	append(&to.regions, ..from.regions[:])
 	append(&to.chokes, ..from.chokes[:])
-	// a Curve's table index moves past the tables there
+	// a table field (a Curve's) moves past the tables there
 	if t0 > 0 {
 		for &n in to.nodes[n0:] {
-			if n.kind == device.NODE_CURVE {
-				n.values[len(device.COMMON_FIELDS)] += t0
+			if slot := device.node_table_slot(n.kind); slot >= 0 {
+				n.values[slot] += t0
 			}
 		}
 	}

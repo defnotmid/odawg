@@ -920,7 +920,7 @@ draft_field :: proc(c: ^Ctx, node: ^Draft_Node, field: ^device.Node_Field, slot:
 		node.beats += {slot}
 	case .Asset:
 		node.set_name, node.set_path, node.set_from = s, path, c.writer
-	case .Number, .Db, .Cents:
+	case .Number, .Db, .Cents, .Table:
 		report(c, "bad_value", .Error, path, "%s: a number", path)
 	}
 }

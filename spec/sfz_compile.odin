@@ -296,6 +296,7 @@ sfz_region_desc :: proc(c: ^Sfz_Compile, r: int, set: i32, zone: int, sample: st
 	desc := new(device.Program_Desc, context.temp_allocator)
 	desc.out = "out"
 	nodes := make([dynamic]device.Node_Desc, context.temp_allocator)
+	tables := make([dynamic]device.Table_Desc, context.temp_allocator)
 	add :: proc(nodes: ^[dynamic]device.Node_Desc, name: string, kind: device.Node_Kind) -> ^device.Node_Desc {
 		append(nodes, device.Node_Desc{name = name, kind = kind, values = device.node_defaults(kind)})
 		return &nodes[len(nodes) - 1]
@@ -555,7 +556,7 @@ sfz_region_desc :: proc(c: ^Sfz_Compile, r: int, set: i32, zone: int, sample: st
 	if table, plain := velocity_table(c, r); !plain {
 		v := add(&nodes, "vel", device.NODE_CURVE)
 		inputs(v, "velocity")
-		v.table = table
+		append(&tables, device.Table_Desc{"vel", table})
 		mod(find(&nodes, "out"), "amp", "vel", .Depth, 1)
 	}
 	if table, plain := key_table(c, r); !plain {
@@ -564,7 +565,7 @@ sfz_region_desc :: proc(c: ^Sfz_Compile, r: int, set: i32, zone: int, sample: st
 		inputs(kn, "key")
 		v := add(&nodes, "key_fade", device.NODE_CURVE)
 		inputs(v, "key_unit")
-		v.table = table
+		append(&tables, device.Table_Desc{"key_fade", table})
 		mod(find(&nodes, "out"), "amp", "key_fade", .Depth, 1)
 	}
 	if v := param(c, r, "amp_keytrack", 0); v != 0 {
@@ -663,6 +664,7 @@ sfz_region_desc :: proc(c: ^Sfz_Compile, r: int, set: i32, zone: int, sample: st
 		}
 	}
 	desc.nodes = nodes[:]
+	desc.tables = tables[:]
 	desc.velocity = false // the velocity's level is the region's own curve
 	return desc
 }
