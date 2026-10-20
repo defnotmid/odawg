@@ -6,8 +6,9 @@ import "core:math"
 // (zero-delay-feedback) form, after Andrew Simper's "Linear Trapezoidal SVF":
 // its output is m0 x + m1 band + m2 low, which gives every Filter_Type,
 // shelves and the peak included, from one structure that stays stable while
-// the cutoff moves every sample. Tone's Filter chains one per 12 dB of
-// rolloff. Also the one-pole low-pass synth.lua's voices use.
+// the cutoff moves every sample (its shapes one table, SVF_SHAPES, for the
+// Filter node and the effects). Tone's Filter chains one per 12 dB of
+// rolloff. Also the one-pole coefficient synth.lua's voices use.
 
 // The most SVFs a chain holds (rolloff -96).
 MAX_STAGES :: 4
@@ -22,48 +23,76 @@ Svf_State :: struct {
 	ic1, ic2: f32,
 }
 
-// Coefficients as Web Audio's BiquadFilterNode reads its parameters (Tone's
-// Filter is a chain of them): for the low-pass and high-pass `q` is the
-// resonance in dB; for the band-pass, notch, all-pass and peak it is the
-// usual Q; shelves ignore it (slope 1). `gain` is in dB. The band-pass peaks
-// at 1, as Web Audio's.
+// Simper's trapezoidal SVF. Its three outputs mixed by m0..m2 give exactly
+// the responses of Web Audio's BiquadFilterNode (the RBJ cookbook, bilinear
+// and prewarped at the cutoff), and it stays well behaved while its cutoff
+// moves. A shape is a response before the cutoff is known: the cutoff's tan
+// is scaled by g_scale (a shelf's gain moves it), k damps, m0..m2 mix.
+Svf_Shape :: struct {
+	g_scale, k, m0, m1, m2: f64,
+}
+
+// Each Filter_Type's shape from Tone's q and gain (dB), as Web Audio reads
+// them: a lowpass or highpass Q is the resonance in dB, the others' as is;
+// shelves have a slope of 1 and ignore q; gain is for shelves and peaking.
+// The band-pass peaks at 1, as Web Audio's. The Filter node and the effects
+// both.
+SVF_SHAPES := [Filter_Type]proc "contextless" (q, gain_db: f64) -> Svf_Shape {
+	.Lowpass = proc "contextless" (q, gain_db: f64) -> Svf_Shape {
+		return {1, 1 / math.pow(10, q / 20), 0, 0, 1}
+	},
+	.Highpass = proc "contextless" (q, gain_db: f64) -> Svf_Shape {
+		k := 1 / math.pow(10, q / 20)
+		return {1, k, 1, -k, -1}
+	},
+	.Bandpass = proc "contextless" (q, gain_db: f64) -> Svf_Shape {
+		k := 1 / max(q, 1e-4)
+		return {1, k, 0, k, 0}
+	},
+	.Lowshelf = proc "contextless" (q, gain_db: f64) -> Svf_Shape {
+		a := math.pow(10, gain_db / 40)
+		return {1 / math.sqrt(a), math.SQRT_TWO, 1, math.SQRT_TWO * (a - 1), a * a - 1}
+	},
+	.Highshelf = proc "contextless" (q, gain_db: f64) -> Svf_Shape {
+		a := math.pow(10, gain_db / 40)
+		return {math.sqrt(a), math.SQRT_TWO, a * a, math.SQRT_TWO * (1 - a) * a, 1 - a * a}
+	},
+	.Notch = proc "contextless" (q, gain_db: f64) -> Svf_Shape {
+		k := 1 / max(q, 1e-4)
+		return {1, k, 1, -k, 0}
+	},
+	.Allpass = proc "contextless" (q, gain_db: f64) -> Svf_Shape {
+		k := 1 / max(q, 1e-4)
+		return {1, k, 1, -2 * k, 0}
+	},
+	.Peaking = proc "contextless" (q, gain_db: f64) -> Svf_Shape {
+		a := math.pow(10, gain_db / 40)
+		k := 1 / (max(q, 1e-4) * a)
+		return {1, k, 1, k * (a * a - 1), 0}
+	},
+}
+
+// A shape at a cutoff: its coefficients (in f64; an effect runs them so,
+// a node's voices in f32: svf_coefficients).
+Svf64 :: struct {
+	a1, a2, a3, m0, m1, m2: f64,
+}
+
+// The tan of a cutoff, kept below Nyquist.
+svf_warp :: proc "contextless" (hz: f64) -> f64 {
+	return math.tan(math.PI * clamp(hz, 1, 0.49 * RATE) / RATE)
+}
+
+svf64 :: proc "contextless" (s: Svf_Shape, hz: f64) -> Svf64 {
+	g := svf_warp(hz) * s.g_scale
+	a1 := 1 / (1 + g * (g + s.k))
+	return {a1, g * a1, g * g * a1, s.m0, s.m1, s.m2}
+}
+
+// A Filter_Type's coefficients at `hz` with `q` and `gain` (dB), for f32.
 svf_coefficients :: proc "contextless" (type: Filter_Type, hz, q, gain: f32) -> Svf {
-	fc := clamp(f64(hz), 1, 0.49 * RATE)
-	g := math.tan(math.PI * fc / RATE)
-	A := math.pow(10, f64(gain) / 40)
-	k, m0, m1, m2: f64
-	switch type {
-	case .Lowpass, .Highpass:
-		k = 1 / math.pow(10, f64(q) / 20)
-	case .Bandpass, .Notch, .Allpass, .Peaking:
-		k = 1 / max(f64(q), 0.0001)
-	case .Lowshelf, .Highshelf:
-		k = math.SQRT_TWO
-	}
-	switch type {
-	case .Lowpass:
-		m0, m1, m2 = 0, 0, 1
-	case .Highpass:
-		m0, m1, m2 = 1, -k, -1
-	case .Bandpass:
-		m0, m1, m2 = 0, k, 0
-	case .Notch:
-		m0, m1, m2 = 1, -k, 0
-	case .Allpass:
-		m0, m1, m2 = 1, -2 * k, 0
-	case .Peaking:
-		k /= A
-		m0, m1, m2 = 1, k * (A * A - 1), 0
-	case .Lowshelf:
-		g /= math.sqrt(A)
-		m0, m1, m2 = 1, k * (A - 1), A * A - 1
-	case .Highshelf:
-		g *= math.sqrt(A)
-		m0, m1, m2 = A * A, k * (1 - A) * A, 1 - A * A
-	}
-	a1 := 1 / (1 + g * (g + k))
-	a2 := g * a1
-	return {f32(a1), f32(a2), f32(g * a2), f32(m0), f32(m1), f32(m2)}
+	c := svf64(SVF_SHAPES[type](f64(q), f64(gain)), f64(hz))
+	return {f32(c.a1), f32(c.a2), f32(c.a3), f32(c.m0), f32(c.m1), f32(c.m2)}
 }
 
 // Runs a slice through one SVF in place, at fixed coefficients.

@@ -160,91 +160,24 @@ fx_filter_type :: proc "contextless" (v: f32) -> dsp.Filter_Type {
 
 // ---- the state-variable filter ---------------------------------------------------
 
-// Simper's trapezoidal SVF. Its three outputs mixed by m0..m2 give exactly
-// the responses of Web Audio's BiquadFilterNode (the RBJ cookbook, bilinear
-// and prewarped at the cutoff), and it stays well behaved while its cutoff
-// moves. A shape is a response before the cutoff is known: the cutoff's
-// tan is scaled by g_scale, k damps.
-@(private = "file")
-Fx_Svf_Shape :: struct {
-	g_scale, k, m0, m1, m2: f64,
-}
-
-@(private = "file")
-Fx_Svf :: struct {
-	a1, a2, a3, m0, m1, m2: f64,
-}
-
-// One filter stage's memory.
+// One filter stage's memory (an effect's SVF: dsp's shapes, in f64).
 @(private = "file")
 Fx_Svf_State :: struct {
 	ic1, ic2: f64,
 }
 
-// Each filter type's shape from Tone's q and gain (dB), as Web Audio reads
-// them: a lowpass or highpass Q is in dB, the others' as is; shelves have
-// a slope of 1 and ignore q; gain is for shelves and peaking.
-@(private = "file")
-FX_SVF_RULES := [dsp.Filter_Type]proc "contextless" (q, gain_db: f64) -> Fx_Svf_Shape {
-	.Lowpass = proc "contextless" (q, gain_db: f64) -> Fx_Svf_Shape {
-		return {1, 1 / math.pow(10, q / 20), 0, 0, 1}
-	},
-	.Highpass = proc "contextless" (q, gain_db: f64) -> Fx_Svf_Shape {
-		k := 1 / math.pow(10, q / 20)
-		return {1, k, 1, -k, -1}
-	},
-	.Bandpass = proc "contextless" (q, gain_db: f64) -> Fx_Svf_Shape {
-		k := 1 / max(q, 1e-4)
-		return {1, k, 0, k, 0}
-	},
-	.Lowshelf = proc "contextless" (q, gain_db: f64) -> Fx_Svf_Shape {
-		a := math.pow(10, gain_db / 40)
-		return {1 / math.sqrt(a), math.SQRT_TWO, 1, math.SQRT_TWO * (a - 1), a * a - 1}
-	},
-	.Highshelf = proc "contextless" (q, gain_db: f64) -> Fx_Svf_Shape {
-		a := math.pow(10, gain_db / 40)
-		return {math.sqrt(a), math.SQRT_TWO, a * a, math.SQRT_TWO * (1 - a) * a, 1 - a * a}
-	},
-	.Notch = proc "contextless" (q, gain_db: f64) -> Fx_Svf_Shape {
-		k := 1 / max(q, 1e-4)
-		return {1, k, 1, -k, 0}
-	},
-	.Allpass = proc "contextless" (q, gain_db: f64) -> Fx_Svf_Shape {
-		k := 1 / max(q, 1e-4)
-		return {1, k, 1, -2 * k, 0}
-	},
-	.Peaking = proc "contextless" (q, gain_db: f64) -> Fx_Svf_Shape {
-		a := math.pow(10, gain_db / 40)
-		k := 1 / (max(q, 1e-4) * a)
-		return {1, k, 1, k * (a * a - 1), 0}
-	},
-}
-
 // Linkwitz-Riley's halves: Butterworth lowpass and highpass, and the
 // allpass their fourth-order pair sums to.
 @(private = "file")
-FX_BUTTERWORTH_LOW :: Fx_Svf_Shape{1, math.SQRT_TWO, 0, 0, 1}
+FX_BUTTERWORTH_LOW :: dsp.Svf_Shape{1, math.SQRT_TWO, 0, 0, 1}
 @(private = "file")
-FX_BUTTERWORTH_HIGH :: Fx_Svf_Shape{1, math.SQRT_TWO, 1, -math.SQRT_TWO, -1}
+FX_BUTTERWORTH_HIGH :: dsp.Svf_Shape{1, math.SQRT_TWO, 1, -math.SQRT_TWO, -1}
 @(private = "file")
-FX_BUTTERWORTH_ALL :: Fx_Svf_Shape{1, math.SQRT_TWO, 1, -2 * math.SQRT_TWO, 0}
-
-// The tan of a cutoff, kept below Nyquist.
-@(private = "file")
-fx_warp :: proc "contextless" (hz: f64) -> f64 {
-	return math.tan(math.PI * clamp(hz, 1, 0.49 * RATE) / RATE)
-}
-
-@(private = "file")
-fx_svf :: proc "contextless" (s: Fx_Svf_Shape, hz: f64) -> Fx_Svf {
-	g := fx_warp(hz) * s.g_scale
-	a1 := 1 / (1 + g * (g + s.k))
-	return {a1, g * a1, g * g * a1, s.m0, s.m1, s.m2}
-}
+FX_BUTTERWORTH_ALL :: dsp.Svf_Shape{1, math.SQRT_TWO, 1, -2 * math.SQRT_TWO, 0}
 
 // One filter stage over a slice, in place, carrying its memory.
 @(private = "file")
-fx_svf_pass :: proc(c: Fx_Svf, st: ^Fx_Svf_State, x: []f32) {
+fx_svf_pass :: proc(c: dsp.Svf64, st: ^Fx_Svf_State, x: []f32) {
 	ic1, ic2 := st.ic1, st.ic2
 	for &s in x {
 		v0 := f64(s)
@@ -261,7 +194,7 @@ fx_svf_pass :: proc(c: Fx_Svf, st: ^Fx_Svf_State, x: []f32) {
 // One filter stage whose cutoff moves: `g` holds each sample's warped
 // cutoff (already scaled by the shape's g_scale).
 @(private = "file")
-fx_svf_pass_moving :: proc(s: Fx_Svf_Shape, g: []f64, st: ^Fx_Svf_State, x: []f32) {
+fx_svf_pass_moving :: proc(s: dsp.Svf_Shape, g: []f64, st: ^Fx_Svf_State, x: []f32) {
 	ic1, ic2 := st.ic1, st.ic2
 	for &v, i in x {
 		a1 := 1 / (1 + g[i] * (g[i] + s.k))
@@ -291,7 +224,7 @@ Fx_Filter :: struct {
 effect_filter :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32, scratch: ^Fx_Scratch) {
 	fx_run(state, p, l, r, key_l, key_r, scratch, proc(state: []u8, p: ^Params, l, r, _, _: []f32, scratch: ^Fx_Scratch) {
 		f := fx_header(state, Fx_Filter)
-		c := fx_svf(FX_SVF_RULES[fx_filter_type(p[.Type])](f64(p[.Q]), f64(p[.Gain])), f64(p[.Frequency]))
+		c := dsp.svf64(dsp.SVF_SHAPES[fx_filter_type(p[.Type])](f64(p[.Q]), f64(p[.Gain])), f64(p[.Frequency]))
 		for k in 0 ..< dsp.rolloff_stages(p[.Rolloff]) {
 			fx_svf_pass(c, &f.svf[0][k], l)
 			fx_svf_pass(c, &f.svf[1][k], r)
@@ -314,14 +247,14 @@ Fx_Auto_Filter :: struct {
 effect_auto_filter :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32, scratch: ^Fx_Scratch) {
 	fx_run(state, p, l, r, key_l, key_r, scratch, proc(state: []u8, p: ^Params, l, r, _, _: []f32, scratch: ^Fx_Scratch) {
 		f := fx_header(state, Fx_Auto_Filter)
-		shape := FX_SVF_RULES[fx_filter_type(p[.Filter_Type])](f64(p[.Filter_Q]), 0)
+		shape := dsp.SVF_SHAPES[fx_filter_type(p[.Filter_Type])](f64(p[.Filter_Q]), 0)
 		lo := f64(p[.Base_Frequency])
 		hi := lo * math.pow(2, f64(p[.Octaves]))
 		w := math.TAU * f64(p[.Frequency]) / RATE
 		depth := f64(p[.Depth])
 		g := scratch.d[:len(l)]
 		for &v, i in g {
-			v = fx_warp(lo + (hi - lo) * (0.5 + 0.5 * depth * math.sin(w * f64(f.pos + i64(i))))) * shape.g_scale
+			v = dsp.svf_warp(lo + (hi - lo) * (0.5 + 0.5 * depth * math.sin(w * f64(f.pos + i64(i))))) * shape.g_scale
 		}
 		for k in 0 ..< dsp.rolloff_stages(p[.Filter_Rolloff]) {
 			fx_svf_pass_moving(shape, g, &f.svf[0][k], l)
@@ -347,9 +280,9 @@ effect_eq3 :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32, sc
 		e := fx_header(state, Fx_EQ3)
 		f1 := f64(p[.Low_Frequency])
 		f2 := max(f64(p[.High_Frequency]), f1)
-		lp1, hp1 := fx_svf(FX_BUTTERWORTH_LOW, f1), fx_svf(FX_BUTTERWORTH_HIGH, f1)
-		lp2, hp2 := fx_svf(FX_BUTTERWORTH_LOW, f2), fx_svf(FX_BUTTERWORTH_HIGH, f2)
-		ap2 := fx_svf(FX_BUTTERWORTH_ALL, f2)
+		lp1, hp1 := dsp.svf64(FX_BUTTERWORTH_LOW, f1), dsp.svf64(FX_BUTTERWORTH_HIGH, f1)
+		lp2, hp2 := dsp.svf64(FX_BUTTERWORTH_LOW, f2), dsp.svf64(FX_BUTTERWORTH_HIGH, f2)
+		ap2 := dsp.svf64(FX_BUTTERWORTH_ALL, f2)
 		gl := f32(math.pow(10, f64(p[.Low]) / 20))
 		gm := f32(math.pow(10, f64(p[.Mid]) / 20))
 		gh := f32(math.pow(10, f64(p[.High]) / 20))
