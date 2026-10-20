@@ -228,9 +228,10 @@ A row:
 ```
 
 - **Nodes** are kinds of the registry (`device.register_node`; a host adds its own the
-  same way): Osc, Noise, Random, Env, Decay, Ramp, Lfo, Filter, Drive, Slew, Map, Mix, Mul,
-  Comb, Sampler, Clip. Their order means nothing: a program runs them after what they read,
-  and leaves out what the out doesn't hear.
+  same way): Osc, Noise, Random, Env, Decay, Ramp, Lfo, Filter, Ladder (the 303's diode
+  ladder), OnePole, Difference, Drive, Slew, Map, Mix, Mul, Comb, Sampler, Clip. A `Filter`
+  of type `diode`, `onepole` or `difference` is that kind. Their order means nothing: a
+  program runs them after what they read, and leaves out what the out doesn't hear.
 - **A field** is a number, a choice, a Tone length, or what moves it: `{ base, by, octaves
   | ratio | sweep | index | amount | depth | at_most, exponent }` (a list of those). `by` is
   a node or the note's `velocity`, `accent`, `slide`, `gate`. `at_most` caps the field

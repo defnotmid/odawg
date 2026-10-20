@@ -24,13 +24,14 @@ COMB_LINE :: 4096
 // The kinds' ids (set at init).
 NODE_OSC, NODE_NOISE, NODE_RANDOM, NODE_ENV, NODE_DECAY, NODE_RAMP, NODE_LFO: Node_Kind
 NODE_FILTER, NODE_DRIVE, NODE_SLEW, NODE_MAP, NODE_CURVE, NODE_MIX, NODE_MUL, NODE_COMB, NODE_SAMPLER, NODE_REGION, NODE_SEGMENTS, NODE_CLIP: Node_Kind
+NODE_LADDER, NODE_ONE_POLE, NODE_DIFFERENCE: Node_Kind
 
 @(init, private = "file")
 nodes_init :: proc "contextless" () {
 	context = runtime.default_context()
 	r := &NODES
 	NODE_OSC = register_node(r, {
-		name = "Osc", stereo = false, state = size_of(Osc_State), process = process_osc,
+		name = "Osc", stereo = false, state = size_of(Osc_State), start = start_osc, process = process_osc,
 		fields = {
 			{name = "wave", unit = .Choice, choices = WAVE_CHOICES, default = f32(dsp.Wave.Sine)},
 			{name = "count", unit = .Number, default = 3},
@@ -44,10 +45,10 @@ nodes_init :: proc "contextless" () {
 			{name = "hz", unit = .Hz, list = 6},
 		},
 	})
-	NODE_NOISE = register_node(r, {name = "Noise", state = size_of(dsp.Noise), process = process_noise, fields = {{name = "color", unit = .Choice, choices = NOISE_CHOICES}}})
+	NODE_NOISE = register_node(r, {name = "Noise", state = size_of(dsp.Noise), start = start_noise, process = process_noise, fields = {{name = "color", unit = .Choice, choices = NOISE_CHOICES}}})
 	NODE_RANDOM = register_node(r, {name = "Random", steady = true, process = process_random})
 	NODE_ENV = register_node(r, {
-		name = "Env", unipolar = true, state = size_of(dsp.Adsr), process = process_env, tail = tail_env,
+		name = "Env", unipolar = true, state = size_of(dsp.Adsr), start = start_env, process = process_env, tail = tail_env,
 		fields = {
 			{name = "attack", unit = .Seconds, default = 0.005},
 			{name = "decay", unit = .Seconds, default = 0.1},
@@ -60,7 +61,7 @@ nodes_init :: proc "contextless" () {
 		},
 	})
 	NODE_DECAY = register_node(r, {
-		name = "Decay", unipolar = true, state = size_of(Decay_State), process = process_decay, tail = tail_decay,
+		name = "Decay", unipolar = true, state = size_of(Decay_State), start = start_decay, process = process_decay, tail = tail_decay,
 		fields = {
 			{name = "attack", unit = .Seconds},
 			{name = "hold", unit = .Seconds},
@@ -77,7 +78,7 @@ nodes_init :: proc "contextless" () {
 		fields = {{name = "from", unit = .Number}, {name = "to", unit = .Number, default = 1}, {name = "time", unit = .Seconds}, {name = "curve", unit = .Number, default = 1}},
 	})
 	NODE_LFO = register_node(r, {
-		name = "Lfo", state = size_of(dsp.Osc), process = process_lfo,
+		name = "Lfo", state = size_of(dsp.Osc), start = start_lfo, process = process_lfo,
 		fields = {
 			{name = "wave", unit = .Choice, choices = PLAIN_WAVES},
 			{name = "rate", unit = .Hz, default = 4, per_sample = true},
@@ -87,7 +88,7 @@ nodes_init :: proc "contextless" () {
 		},
 	})
 	NODE_FILTER = register_node(r, {
-		name = "Filter", inputs = 1, state = size_of(Filter_State), process = process_filter,
+		name = "Filter", inputs = 1, state = size_of(Filter_State), start = start_filter, process = process_filter,
 		fields = {
 			{name = "type", unit = .Choice, choices = NODE_FILTER_CHOICES},
 			{name = "frequency", unit = .Hz, default = 1000, per_sample = true},
@@ -112,7 +113,7 @@ nodes_init :: proc "contextless" () {
 	NODE_MIX = register_node(r, {name = "Mix", inputs = -1, stateless = true, process = process_mix})
 	NODE_MUL = register_node(r, {name = "Mul", inputs = -1, stateless = true, process = process_mul})
 	NODE_COMB = register_node(r, {
-		name = "Comb", inputs = 1, keeps = true, state = size_of(Comb_State), process = process_comb, tail = tail_comb, memory = memory_comb,
+		name = "Comb", inputs = 1, keeps = true, state = size_of(Comb_State), start = start_comb, process = process_comb, tail = tail_comb, memory = memory_comb,
 		fields = {
 			{name = "delay", unit = .Seconds, per_sample = true},
 			{name = "feedback", unit = .Number, default = 0.7},
@@ -121,7 +122,7 @@ nodes_init :: proc "contextless" () {
 		},
 	})
 	NODE_SAMPLER = register_node(r, {
-		name = "Sampler", stereo = true, state = size_of(Sampler_State), process = process_sampler, tail = tail_sampler_node,
+		name = "Sampler", stereo = true, state = size_of(Sampler_State), start = start_sampler, process = process_sampler, tail = tail_sampler_node,
 		fields = {{name = "set", unit = .Asset, default = -1}, {name = "attack", unit = .Seconds}, {name = "release", unit = .Seconds, default = 0.1}},
 	})
 	NODE_SEGMENTS = register_node(r, {
@@ -134,7 +135,7 @@ nodes_init :: proc "contextless" () {
 		},
 	})
 	NODE_REGION = register_node(r, {
-		name = "Region", stereo = true, state = size_of(Region_State), process = process_region, tail = tail_region,
+		name = "Region", stereo = true, state = size_of(Region_State), start = start_region, process = process_region, tail = tail_region,
 		fields = {
 			{name = "set", unit = .Asset, default = -1},
 			{name = "zone", unit = .Number},
@@ -164,6 +165,19 @@ nodes_init :: proc "contextless" () {
 			{name = "rate", unit = .Number, default = 1},
 		},
 	})
+	NODE_LADDER = register_node(r, {
+		name = "Ladder", inputs = 1, state = size_of(Ladder_State), start = start_ladder, process = process_ladder,
+		fields = {{name = "frequency", unit = .Hz, default = 1000, per_sample = true}, {name = "q", unit = .Number, default = 1, per_sample = true}},
+	})
+	NODE_ONE_POLE = register_node(r, {
+		name = "OnePole", inputs = 1, state = size_of(One_Pole_State), start = start_one_pole, process = process_one_pole,
+		fields = {{name = "frequency", unit = .Hz, default = 1000, per_sample = true}},
+	})
+	NODE_DIFFERENCE = register_node(r, {name = "Difference", inputs = 1, state = size_of(Difference_State), start = start_difference, process = process_difference})
+	// the Filter types that are kinds of their own
+	append(&KINDS_BY_CHOICE, Kind_By_Choice{NODE_FILTER, FILTER_TYPE, DIODE, NODE_LADDER})
+	append(&KINDS_BY_CHOICE, Kind_By_Choice{NODE_FILTER, FILTER_TYPE, ONE_POLE, NODE_ONE_POLE})
+	append(&KINDS_BY_CHOICE, Kind_By_Choice{NODE_FILTER, FILTER_TYPE, DIFFERENCE, NODE_DIFFERENCE})
 }
 
 CURVE_NAMES := []string{"linear", "exponential"}
@@ -208,6 +222,37 @@ Osc_State :: struct {
 	hz:   f64, // a fixed frequency (0: the note's)
 }
 
+// A note starting: its unison or bank of oscillators, their phases (from the seed when random).
+@(private = "file")
+start_osc :: proc(c: ^Node_Call, lane: ^Lane) {
+	v := node_values(c, lane)
+	s := node_state(c, lane, Osc_State)
+	random := v[OSC_PHASE] == 1
+	count := int(v[OSC_COUNT])
+	dsp.unison_init(&s.osc, dsp.Wave(u8(v[OSC_WAVE])), count >= 1 ? count : 3, v[OSC_SPREAD], v[OSC_WIDTH])
+	s.used = 0
+	wave, _ := dsp.wave_plain(dsp.Wave(u8(v[OSC_WAVE])))
+	for k in 0 ..< 6 {
+		if v[OSC_HZ + k] > 0 {
+			s.used = k + 1
+		}
+		s.bank[k] = {wave = wave, width = v[OSC_WIDTH]}
+	}
+	for k in 0 ..< dsp.MAX_UNISON {
+		if random {
+			p := base.hash_unit(node_seed(c, lane, u64(k + 1)))
+			if k < 6 {
+				s.bank[k].phase = p
+			}
+			if k < s.osc.count {
+				s.osc.oscs[k].phase = p
+			}
+		}
+	}
+	s.hz = f64(v[OSC_FREQUENCY]) // its base: what moves it moves it per sample
+	s.mult = f64(node_value(c, lane, OSC_RATIO)) * math.pow(2, f64(node_value(c, lane, OSC_TUNE)) / 12)
+}
+
 @(private = "file")
 process_osc :: proc(c: ^Node_Call) {
 	n := c.frames
@@ -215,32 +260,6 @@ process_osc :: proc(c: ^Node_Call) {
 		v := node_values(c, &lane)
 		s := node_state(c, &lane, Osc_State)
 		l, r := node_out(c, &lane)
-		if lane.starting || lane.fresh {
-			random := v[OSC_PHASE] == 1
-			count := int(v[OSC_COUNT])
-			dsp.unison_init(&s.osc, dsp.Wave(u8(v[OSC_WAVE])), count >= 1 ? count : 3, v[OSC_SPREAD], v[OSC_WIDTH])
-			s.used = 0
-			wave, _ := dsp.wave_plain(dsp.Wave(u8(v[OSC_WAVE])))
-			for k in 0 ..< 6 {
-				if v[OSC_HZ + k] > 0 {
-					s.used = k + 1
-				}
-				s.bank[k] = {wave = wave, width = v[OSC_WIDTH]}
-			}
-			for k in 0 ..< dsp.MAX_UNISON {
-				if random {
-					p := base.hash_unit(node_seed(c, &lane, u64(k + 1)))
-					if k < 6 {
-						s.bank[k].phase = p
-					}
-					if k < s.osc.count {
-						s.osc.oscs[k].phase = p
-					}
-				}
-			}
-			s.hz = f64(v[OSC_FREQUENCY]) // its base: what moves it moves it per sample
-			s.mult = f64(node_value(c, &lane, OSC_RATIO)) * math.pow(2, f64(node_value(c, &lane, OSC_TUNE)) / 12)
-		}
 		hz, inc: [NODE_CHUNK]f64 = ---, ---
 		tmp, moved: [NODE_CHUNK]f32 = ---, ---
 		// what moves the frequency, as a ratio of its base (or, unmoved, the base)
@@ -306,13 +325,17 @@ osc_stereo :: proc(values: ^[MAX_FIELDS]f32) -> bool {
 
 // ---- Noise and Random --------------------------------------------------------------
 
+// A note starting: its generator seeded from the note.
+@(private = "file")
+start_noise :: proc(c: ^Node_Call, lane: ^Lane) {
+	s := node_state(c, lane, dsp.Noise)
+	s^ = dsp.noise_init(dsp.Noise_Type(u8(node_values(c, lane)[3])), node_seed(c, lane))
+}
+
 @(private = "file")
 process_noise :: proc(c: ^Node_Call) {
 	for &lane in c.lanes {
 		s := node_state(c, &lane, dsp.Noise)
-		if lane.starting || lane.fresh {
-			s^ = dsp.noise_init(dsp.Noise_Type(u8(node_values(c, &lane)[3])), node_seed(c, &lane))
-		}
 		l, _ := node_out(c, &lane)
 		dsp.noise_run(s, l)
 	}
@@ -332,19 +355,23 @@ process_random :: proc(c: ^Node_Call) {
 
 // ---- Env: Tone's envelope ----------------------------------------------------------
 
+// A note starting: its envelope from its values.
+@(private = "file")
+start_env :: proc(c: ^Node_Call, lane: ^Lane) {
+	s := node_state(c, lane, dsp.Adsr)
+	s^ = {
+		attack = max(node_value(c, lane, 3), 0), decay = max(node_value(c, lane, 4), 0),
+		sustain = clamp(node_value(c, lane, 5), 0, 1), release = max(node_value(c, lane, 6), 0),
+		exponential_attack = node_values(c, lane)[7] == 1,
+		delay = max(node_value(c, lane, 8), 0), hold = max(node_value(c, lane, 9), 0), start = clamp(node_value(c, lane, 10), 0, 1),
+	}
+	dsp.adsr_init(s)
+}
+
 @(private = "file")
 process_env :: proc(c: ^Node_Call) {
 	for &lane in c.lanes {
 		s := node_state(c, &lane, dsp.Adsr)
-		if lane.starting || lane.fresh {
-			s^ = {
-				attack = max(node_value(c, &lane, 3), 0), decay = max(node_value(c, &lane, 4), 0),
-				sustain = clamp(node_value(c, &lane, 5), 0, 1), release = max(node_value(c, &lane, 6), 0),
-				exponential_attack = node_values(c, &lane)[7] == 1,
-				delay = max(node_value(c, &lane, 8), 0), hold = max(node_value(c, &lane, 9), 0), start = clamp(node_value(c, &lane, 10), 0, 1),
-			}
-			dsp.adsr_init(s)
-		}
 		l, _ := node_out(c, &lane)
 		dsp.adsr_run(s, l, lane.release)
 	}
@@ -407,13 +434,17 @@ decay_start :: proc(c: ^Node_Call, lane: ^Lane, s: ^Decay_State) {
 	s.next, s.from, s.since = 0, -1, 0
 }
 
+// A note starting: its bursts placed.
+@(private = "file")
+start_decay :: proc(c: ^Node_Call, lane: ^Lane) {
+	s := node_state(c, lane, Decay_State)
+	decay_start(c, lane, s)
+}
+
 @(private = "file")
 process_decay :: proc(c: ^Node_Call) {
 	for &lane in c.lanes {
 		s := node_state(c, &lane, Decay_State)
-		if lane.starting || lane.fresh {
-			decay_start(c, &lane, s)
-		}
 		l, _ := node_out(c, &lane)
 		// the chunk in stretches between bursts' starts, each a function of
 		// the samples since its burst alone (no sample-to-sample carry: it
@@ -500,15 +531,19 @@ process_ramp :: proc(c: ^Node_Call) {
 
 // ---- Lfo ---------------------------------------------------------------------------
 
+// A note starting: its oscillator at its phase.
+@(private = "file")
+start_lfo :: proc(c: ^Node_Call, lane: ^Lane) {
+	s := node_state(c, lane, dsp.Osc)
+	vals := node_values(c, lane)
+	s^ = {wave = dsp.Wave(u8(vals[3])), width = 0.5, phase = f64(vals[7]) - math.floor(f64(vals[7]))}
+}
+
 @(private = "file")
 process_lfo :: proc(c: ^Node_Call) {
 	n := c.frames
 	for &lane in c.lanes {
 		s := node_state(c, &lane, dsp.Osc)
-		if lane.starting || lane.fresh {
-			vals := node_values(c, &lane)
-			s^ = {wave = dsp.Wave(u8(vals[3])), width = 0.5, phase = f64(vals[7]) - math.floor(f64(vals[7]))}
-		}
 		vals := node_values(c, &lane)
 		rate: [NODE_CHUNK]f32 = ---
 		inc: [NODE_CHUNK]f64 = ---
@@ -531,8 +566,18 @@ process_lfo :: proc(c: ^Node_Call) {
 	}
 }
 
-// ---- Filter: Tone's (SVF stages by rolloff), or the 303's diode ladder ------------
+// ---- Filters: Tone's (SVF stages by rolloff), the 303's ladder, a one-pole, a difference ----
 
+// A Filter written with one of these types is that kind of its own
+// (compile_program; its values and modulators moved by their fields' names).
+@(private = "file")
+DIODE :: 8
+@(private = "file")
+ONE_POLE :: 9 // a one-pole low-pass: y += k (x - y), k from the cutoff
+@(private = "file")
+DIFFERENCE :: 10 // x - its last: a gentle high-pass (6 dB an octave, no cutoff)
+
+// Tone's Filter: Filter_Type's SVF, cascaded by rolloff.
 @(private = "file")
 FILTER_TYPE :: 3
 @(private = "file")
@@ -543,45 +588,27 @@ FILTER_Q :: 5
 FILTER_ROLLOFF :: 6
 @(private = "file")
 FILTER_GAIN :: 7
-@(private = "file")
-DIODE :: 8
-@(private = "file")
-ONE_POLE :: 9 // a one-pole low-pass: y += k (x - y), k from the cutoff
-@(private = "file")
-DIFFERENCE :: 10 // x - its last: a gentle high-pass (6 dB an octave, no cutoff)
 
 @(private = "file")
 Filter_State :: struct {
-	chain:  dsp.Filter_Chain,
-	fixed:  dsp.Svf, // a cutoff and q nothing moves: their coefficients, once a note
-	y:      [2][4]f32, // the ladder's stages (a one-pole's: y[side][0]), per side
-	x_last: [2]f32,
-	k:      f32, // a one-pole's coefficient at a fixed cutoff
+	chain: dsp.Filter_Chain,
+	fixed: dsp.Svf, // a cutoff and q nothing moves: their coefficients, once a note
 }
 
-// The ladder's level in and its saturation out.
-LADDER_DRIVE :: 0.4
+@(private = "file")
+start_filter :: proc(c: ^Node_Call, lane: ^Lane) {
+	v := node_values(c, lane)
+	s := node_state(c, lane, Filter_State)
+	s.chain = dsp.filter_chain_init(dsp.Filter_Type(u8(v[FILTER_TYPE])), v[FILTER_Q], v[FILTER_ROLLOFF], v[FILTER_GAIN])
+	s.fixed = dsp.svf_coefficients(s.chain.type, v[FILTER_FREQUENCY], v[FILTER_Q], v[FILTER_GAIN])
+}
 
 @(private = "file")
 process_filter :: proc(c: ^Node_Call) {
 	n := c.frames
-	type := int(c.node.values[FILTER_TYPE]) // its shape: the same for every voice
-	diode := type == DIODE
 	for &lane in c.lanes {
 		v := node_values(c, &lane)
 		s := node_state(c, &lane, Filter_State)
-		if type == ONE_POLE || type == DIFFERENCE {
-			plain_filter(c, &lane, s, type)
-			continue
-		}
-		if lane.starting || lane.fresh {
-			if !diode {
-				s.chain = dsp.filter_chain_init(dsp.Filter_Type(u8(v[FILTER_TYPE])), v[FILTER_Q], v[FILTER_ROLLOFF], v[FILTER_GAIN])
-				s.fixed = dsp.svf_coefficients(s.chain.type, v[FILTER_FREQUENCY], v[FILTER_Q], v[FILTER_GAIN])
-			} else if lane.fresh {
-				s.y, s.x_last = {}, {}
-			}
-		}
 		il, ir := node_input(c, &lane, 0)
 		l, r := node_out(c, &lane)
 		copy(l, il)
@@ -592,22 +619,6 @@ process_filter :: proc(c: ^Node_Call) {
 		hz, q: [NODE_CHUNK]f32 = ---, ---
 		swept, cutoff := node_curve(c, &lane, FILTER_FREQUENCY, v[FILTER_FREQUENCY], hz[:n])
 		resonant, res := node_curve(c, &lane, FILTER_Q, v[FILTER_Q], q[:n])
-		if !swept {
-			for i in 0 ..< n {
-				hz[i] = cutoff
-			}
-		}
-		if !resonant {
-			for i in 0 ..< n {
-				q[i] = res
-			}
-		}
-		if diode {
-			for side in 0 ..< sides {
-				ladder(&s.y[side], &s.x_last[side], side == 0 ? l : r, hz[:n], q[:n])
-			}
-			continue
-		}
 		if !swept && !resonant {
 			// one setting for the chunk: the note's (computed at its start), or
 			// another a steady modulator gives
@@ -623,6 +634,16 @@ process_filter :: proc(c: ^Node_Call) {
 			}
 			continue
 		}
+		if !swept {
+			for i in 0 ..< n {
+				hz[i] = cutoff
+			}
+		}
+		if !resonant {
+			for i in 0 ..< n {
+				q[i] = res
+			}
+		}
 		coefficients: [NODE_CHUNK]dsp.Svf = ---
 		if resonant || res != s.chain.q {
 			for i in 0 ..< n {
@@ -637,20 +658,136 @@ process_filter :: proc(c: ^Node_Call) {
 	}
 }
 
-// The one-pole low-pass (its cutoff moved per sample, or its coefficient
-// once a note) and the difference, per side.
+// The 303's diode ladder (its stages carry across a mono program's slide).
 @(private = "file")
-plain_filter :: proc(c: ^Node_Call, lane: ^Lane, s: ^Filter_State, type: int) {
-	n := c.frames
-	il, ir := node_input(c, lane, 0)
-	l, r := node_out(c, lane)
-	sides := c.node.stereo ? 2 : 1
-	if lane.fresh || (lane.starting && type == ONE_POLE) {
-		s.y, s.x_last = {}, {}
-		s.k = f32(dsp.one_pole_k(f64(node_values(c, lane)[FILTER_FREQUENCY])))
+LADDER_FREQUENCY :: 3
+@(private = "file")
+LADDER_Q :: 4
+
+@(private = "file")
+Ladder_State :: struct {
+	y:      [2][4]f32, // its stages, per side
+	x_last: [2]f32,
+}
+
+// The ladder's level in and its saturation out.
+LADDER_DRIVE :: 0.4
+
+@(private = "file")
+start_ladder :: proc(c: ^Node_Call, lane: ^Lane) {
+	if lane.fresh {
+		node_state(c, lane, Ladder_State)^ = {}
 	}
-	if type == DIFFERENCE {
-		for side in 0 ..< sides {
+}
+
+@(private = "file")
+process_ladder :: proc(c: ^Node_Call) {
+	n := c.frames
+	for &lane in c.lanes {
+		v := node_values(c, &lane)
+		s := node_state(c, &lane, Ladder_State)
+		il, ir := node_input(c, &lane, 0)
+		l, r := node_out(c, &lane)
+		copy(l, il)
+		if c.node.stereo {
+			copy(r, ir)
+		}
+		hz, q: [NODE_CHUNK]f32 = ---, ---
+		swept, cutoff := node_curve(c, &lane, LADDER_FREQUENCY, v[LADDER_FREQUENCY], hz[:n])
+		resonant, res := node_curve(c, &lane, LADDER_Q, v[LADDER_Q], q[:n])
+		if !swept {
+			for i in 0 ..< n {
+				hz[i] = cutoff
+			}
+		}
+		if !resonant {
+			for i in 0 ..< n {
+				q[i] = res
+			}
+		}
+		for side in 0 ..< (c.node.stereo ? 2 : 1) {
+			ladder(&s.y[side], &s.x_last[side], side == 0 ? l : r, hz[:n], q[:n])
+		}
+	}
+}
+
+// A one-pole low-pass, per side: its cutoff moved per sample, or its
+// coefficient once a note.
+@(private = "file")
+ONE_POLE_FREQUENCY :: 3
+
+@(private = "file")
+One_Pole_State :: struct {
+	y: [2]f32,
+	k: f32, // its coefficient at a fixed cutoff
+}
+
+@(private = "file")
+start_one_pole :: proc(c: ^Node_Call, lane: ^Lane) {
+	s := node_state(c, lane, One_Pole_State)
+	s.y = {}
+	s.k = f32(dsp.one_pole_k(f64(node_values(c, lane)[ONE_POLE_FREQUENCY])))
+}
+
+@(private = "file")
+process_one_pole :: proc(c: ^Node_Call) {
+	n := c.frames
+	for &lane in c.lanes {
+		s := node_state(c, &lane, One_Pole_State)
+		il, ir := node_input(c, &lane, 0)
+		l, r := node_out(c, &lane)
+		hz: [NODE_CHUNK]f32 = ---
+		base_hz := node_values(c, &lane)[ONE_POLE_FREQUENCY]
+		swept, cutoff := node_curve(c, &lane, ONE_POLE_FREQUENCY, base_hz, hz[:n])
+		ks: [NODE_CHUNK]f32 = ---
+		if swept {
+			for i in 0 ..< n {
+				ks[i] = 1 - dsp.exp_decay(-math.TAU * min(hz[i], 0.49 * RATE) / RATE)
+			}
+		} else if cutoff != base_hz {
+			s.k = 1 - dsp.exp_decay(-math.TAU * min(cutoff, 0.49 * RATE) / RATE) // a steady modulator's
+		}
+		for side in 0 ..< (c.node.stereo ? 2 : 1) {
+			x, out := side == 0 ? il : ir, side == 0 ? l : r
+			y := s.y[side]
+			if swept {
+				for i in 0 ..< n {
+					y += ks[i] * (x[i] - y)
+					out[i] = y
+				}
+			} else {
+				k := s.k
+				for i in 0 ..< n {
+					y += k * (x[i] - y)
+					out[i] = y
+				}
+			}
+			s.y[side] = y
+		}
+	}
+}
+
+// x - its last, per side (its last carries across a mono program's slide).
+@(private = "file")
+Difference_State :: struct {
+	x_last: [2]f32,
+}
+
+@(private = "file")
+start_difference :: proc(c: ^Node_Call, lane: ^Lane) {
+	if lane.fresh {
+		node_state(c, lane, Difference_State)^ = {}
+	}
+}
+
+@(private = "file")
+process_difference :: proc(c: ^Node_Call) {
+	n := c.frames
+	for &lane in c.lanes {
+		s := node_state(c, &lane, Difference_State)
+		il, ir := node_input(c, &lane, 0)
+		l, r := node_out(c, &lane)
+		for side in 0 ..< (c.node.stereo ? 2 : 1) {
 			x, out := side == 0 ? il : ir, side == 0 ? l : r
 			last := s.x_last[side]
 			for i in 0 ..< n {
@@ -659,35 +796,6 @@ plain_filter :: proc(c: ^Node_Call, lane: ^Lane, s: ^Filter_State, type: int) {
 			}
 			s.x_last[side] = last
 		}
-		return
-	}
-	hz: [NODE_CHUNK]f32 = ---
-	base_hz := node_values(c, lane)[FILTER_FREQUENCY]
-	swept, cutoff := node_curve(c, lane, FILTER_FREQUENCY, base_hz, hz[:n])
-	ks: [NODE_CHUNK]f32 = ---
-	if swept {
-		for i in 0 ..< n {
-			ks[i] = 1 - dsp.exp_decay(-math.TAU * min(hz[i], 0.49 * RATE) / RATE)
-		}
-	} else if cutoff != base_hz {
-		s.k = 1 - dsp.exp_decay(-math.TAU * min(cutoff, 0.49 * RATE) / RATE) // a steady modulator's
-	}
-	for side in 0 ..< sides {
-		x, out := side == 0 ? il : ir, side == 0 ? l : r
-		y := s.y[side][0]
-		if swept {
-			for i in 0 ..< n {
-				y += ks[i] * (x[i] - y)
-				out[i] = y
-			}
-		} else {
-			k := s.k
-			for i in 0 ..< n {
-				y += k * (x[i] - y)
-				out[i] = y
-			}
-		}
-		s.y[side][0] = y
 	}
 }
 
@@ -910,17 +1018,21 @@ comb_start :: proc(c: ^Node_Call, lane: ^Lane, s: ^Comb_State) {
 // Its input plus `feedback` times the line `delay` ago, low-passed at
 // `damp`; after the gate the feedback ramps to nothing over `release` (0:
 // it holds). A delay of 0 is the note's period: a plucked string.
+// A note starting: its delay set (its line emptied on a fresh voice; a slide keeps it ringing).
+@(private = "file")
+start_comb :: proc(c: ^Node_Call, lane: ^Lane) {
+	s := node_state(c, lane, Comb_State)
+	if lane.fresh {
+		s.line, s.write, s.lp = {}, 0, 0
+	}
+	comb_start(c, lane, s)
+}
+
 @(private = "file")
 process_comb :: proc(c: ^Node_Call) {
 	n := c.frames
 	for &lane in c.lanes {
 		s := node_state(c, &lane, Comb_State)
-		if lane.starting || lane.fresh {
-			if lane.fresh {
-				s.line, s.write, s.lp = {}, 0, 0
-			}
-			comb_start(c, &lane, s)
-		}
 		fb := node_value(c, &lane, COMB_FEEDBACK)
 		release := f64(node_value(c, &lane, COMB_RELEASE)) * RATE
 		delays: [NODE_CHUNK]f32 = ---
@@ -984,13 +1096,17 @@ memory_comb :: proc(values: ^[MAX_FIELDS]f32, slots: []int) -> f64 {
 
 // ---- Sampler: a set's zones ---------------------------------------------------------
 
+// A note starting: its zone and read head.
+@(private = "file")
+start_sampler :: proc(c: ^Node_Call, lane: ^Lane) {
+	s := node_state(c, lane, Sampler_State)
+	sampler_start(s, i32(node_values(c, lane)[3]), node_value(c, lane, 4), node_value(c, lane, 5), lane.key, lane.note, lane.seed, c.env)
+}
+
 @(private = "file")
 process_sampler :: proc(c: ^Node_Call) {
 	for &lane in c.lanes {
 		s := node_state(c, &lane, Sampler_State)
-		if lane.starting || lane.fresh {
-			sampler_start(s, i32(node_values(c, &lane)[3]), node_value(c, &lane, 4), node_value(c, &lane, 5), lane.key, lane.note, lane.seed, c.env)
-		}
 		l, r := node_out(c, &lane)
 		sampler_play(s, lane.at, c.env, l, r)
 	}

@@ -238,8 +238,9 @@ engine_init :: proc(e: ^Engine, s: ^song.Song) -> bool {
 	// leads (backwards: each after everything it feeds), then each edge's
 	// delay, where its source runs further ahead than its destination needs;
 	// the master's own lookahead is primed at a seek, not led
+	// (the master's chain runs in its Master_Run: its node has no latency)
 	at_input := proc(e: ^Engine, s: ^song.Song, k: i32) -> i64 {
-		return e.nodes[k].lead + (s.nodes[k].kind == .Master ? 0 : e.nodes[k].latency)
+		return e.nodes[k].lead + e.nodes[k].latency
 	}
 	#reverse for k in e.order {
 		for x, i in s.edges {
@@ -379,16 +380,7 @@ node_start :: proc(e: ^Engine, k: int) {
 	nd := &e.nodes[k]
 	nd.started = true
 	e.dirty[k] = false
-	at := e.cursor + nd.lead
-	switch s.nodes[k].kind {
-	case .Track:
-		track_seek(e, k, at, false)
-	case .Part, .Return, .Bus, .Song, .Master:
-		for f in e.fx[nd.chain.first:base.span_end(nd.chain)] {
-			reset_fx(e, k, f, at + nd.latency)
-		}
-		nd.awake_until = at + nd.latency // asleep until sound comes
-	}
+	NODE_RUNS[s.nodes[k].kind].start(e, k, e.cursor + nd.lead)
 	for i in nd.inputs.first ..< base.span_end(nd.inputs) {
 		x := &e.edges[i]
 		slice.zero(e.rings[x.ring.first:base.span_end(x.ring)])
@@ -416,31 +408,81 @@ walk_block :: proc(e: ^Engine, n: int, master := true) -> ([]f32, []f32) {
 			continue
 		}
 		e.key_l, e.key_r = node_keys(e, int(k), n)
-		switch kind {
-		case .Track:
-			if s.tracks[k].muted {
-				track_skip(e, int(k), n)
-				e.dirty[k] = false
-			} else {
-				e.dirty[k] = track_block(e, int(k), l, r)
-			}
-		case .Part, .Return, .Bus, .Song, .Master:
-			e.dirty[k] = node_inputs(e, int(k), l, r)
-			if kind == .Song && e.dirty[k] {
-				placement_block(e, int(k), l, r)
-			}
-			if kind == .Master {
-				e.dirty[k] = true
-				if !e.no_master && master_run_active(&e.master) {
-					master_run_block(&e.master, l, r)
-				}
-			} else if nd.chain.count > 0 {
-				e.dirty[k] = node_chain_run(e, int(k), l, r, e.dirty[k])
-			}
-		}
+		e.dirty[k] = NODE_RUNS[kind].block(e, int(k), l, r)
 	}
 	e.cursor += i64(n)
 	return node_block(e, int(song.master_node(s)), n)
+}
+
+// How each kind of node runs: put at song sample `at` (its output's: a
+// seek's start), and over its next block, whether it holds sound.
+Node_Run_Row :: struct {
+	start: proc(e: ^Engine, k: int, at: i64),
+	block: proc(e: ^Engine, k: int, l, r: []f32) -> bool,
+}
+
+NODE_RUNS := [song.Node_Kind]Node_Run_Row {
+	.Track  = {track_node_start, track_node_block},
+	.Part   = {sum_start, sum_block},
+	.Return = {sum_start, sum_block},
+	.Bus    = {sum_start, sum_block},
+	.Song   = {sum_start, song_block},
+	.Master = {sum_start, master_node_block},
+}
+
+// A track: its notes chased to `at`, its chain reset there; a block of its
+// voices and chain (muted: played unheard).
+@(private = "file")
+track_node_start :: proc(e: ^Engine, k: int, at: i64) {
+	track_seek(e, k, at, false)
+}
+
+@(private = "file")
+track_node_block :: proc(e: ^Engine, k: int, l, r: []f32) -> bool {
+	if e.song.tracks[k].muted {
+		track_skip(e, k, len(l))
+		return false
+	}
+	return track_block(e, k, l, r)
+}
+
+// A node summing its inputs (a part, a return, a bus): its chain reset to
+// its input's time, asleep until sound comes; a block of its inputs through
+// its chain.
+@(private = "file")
+sum_start :: proc(e: ^Engine, k: int, at: i64) {
+	nd := &e.nodes[k]
+	for f in e.fx[nd.chain.first:base.span_end(nd.chain)] {
+		reset_fx(e, k, f, at + nd.latency)
+	}
+	nd.awake_until = at + nd.latency
+}
+
+@(private = "file")
+sum_block :: proc(e: ^Engine, k: int, l, r: []f32) -> bool {
+	heard := node_inputs(e, k, l, r)
+	return e.nodes[k].chain.count > 0 ? node_chain_run(e, k, l, r, heard) : heard
+}
+
+// A placement's: what its song plays, at its level, ducked, windowed.
+@(private = "file")
+song_block :: proc(e: ^Engine, k: int, l, r: []f32) -> bool {
+	heard := node_inputs(e, k, l, r)
+	if heard {
+		placement_block(e, k, l, r)
+	}
+	return heard
+}
+
+// The master: the mix through its Master_Run (not an export segment's: its
+// owner runs the master).
+@(private = "file")
+master_node_block :: proc(e: ^Engine, k: int, l, r: []f32) -> bool {
+	node_inputs(e, k, l, r)
+	if !e.no_master && master_run_active(&e.master) {
+		master_run_block(&e.master, l, r)
+	}
+	return true
 }
 
 @(private = "file")

@@ -493,14 +493,17 @@ region_start :: proc(c: ^Node_Call, lane: ^Lane, st: ^Region_State) {
 	st.width = v[REGION_WIDTH] / 100
 }
 
+// A note starting: its region's zone and read head.
+@(private = "package")
+start_region :: proc(c: ^Node_Call, lane: ^Lane) {
+	region_start(c, lane, node_state(c, lane, Region_State))
+}
+
 @(private = "package")
 process_region :: proc(c: ^Node_Call) {
 	n := c.frames
 	for &lane in c.lanes {
 		st := node_state(c, &lane, Region_State)
-		if lane.starting || lane.fresh {
-			region_start(c, &lane, st)
-		}
 		l, r := node_out(c, &lane)
 		slice_zero(l)
 		slice_zero(r)

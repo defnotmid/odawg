@@ -217,6 +217,9 @@ compile_program :: proc(progs: ^Programs, desc: ^Program_Desc, findings: ^base.F
 		velocity   = desc.velocity,
 		one_shot   = desc.one_shot,
 	}
+	for &n in desc.nodes {
+		node_desc_resolve(&n)
+	}
 	id: i32
 	if len(desc.layers) > 0 {
 		if len(desc.nodes) > 0 || len(desc.pads) > 0 {
@@ -556,6 +559,9 @@ compile_layers :: proc(progs: ^Programs, desc: ^Program_Desc, prog: Program, fin
 		programs[i] = -1
 		if l.program == nil || len(l.program.pads) > 0 || len(l.program.layers) > 0 {
 			continue
+		}
+		for &n in l.program.nodes {
+			node_desc_resolve(&n)
 		}
 		key := desc_shape(l.program)
 		for x in shapes {

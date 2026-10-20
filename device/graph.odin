@@ -96,6 +96,10 @@ Node_Kind_Row :: struct {
 	keeps:    bool, // its state carries across a mono program's notes
 	jump:     bool, // its output is a function of where the note is (a recording's position): a seek starts it there, nothing rendered
 	state:    int, // bytes a voice keeps for it
+	// a lane's note starting (a fresh voice's, or a mono slide's: a kind
+	// that keeps its state reads lane.fresh for what a new voice resets),
+	// before its chunk; nil: nothing to set
+	start:    proc(c: ^Node_Call, lane: ^Lane),
 	process:  Node_Process,
 	tail:     Node_Tail,
 	memory:   proc(values: ^[MAX_FIELDS]f32, slots: []int) -> f64, // seconds of earlier notes its kept state remembers
@@ -138,6 +142,68 @@ node_kind_from_name :: proc(name: string) -> (Node_Kind, bool) {
 }
 
 node_row :: #force_inline proc(kind: Node_Kind) -> ^Node_Kind_Row {return &NODES.kinds[kind]}
+
+// A kind written with a choice that names another kind (a Filter of type
+// "diode" is a Ladder): it is that kind, its values moved by their fields'
+// names (node_desc_resolve).
+Kind_By_Choice :: struct {
+	kind:   Node_Kind,
+	slot:   int,
+	choice: f32,
+	is:     Node_Kind,
+}
+
+KINDS_BY_CHOICE: [dynamic]Kind_By_Choice
+
+// A desc's node as the kind it is (KINDS_BY_CHOICE): its values and its
+// modulators' slots moved to the fields of that name (none there: dropped).
+node_desc_resolve :: proc(n: ^Node_Desc) {
+	for x in KINDS_BY_CHOICE {
+		if n.kind != x.kind || n.values[x.slot] != x.choice {
+			continue
+		}
+		from, to := node_row(x.kind), node_row(x.is)
+		slot_in := proc(row: ^Node_Kind_Row, name: string) -> int {
+			for f, i in COMMON_FIELDS {
+				if f.name == name {
+					return i
+				}
+			}
+			for f, i in row.fields {
+				if f.name == name {
+					return row.slots[i]
+				}
+			}
+			return -1
+		}
+		moved: [MAX_FIELDS]int
+		for &m in moved {
+			m = -1
+		}
+		for i in 0 ..< len(COMMON_FIELDS) {
+			moved[i] = i
+		}
+		for f, i in from.fields {
+			moved[from.slots[i]] = slot_in(to, f.name)
+		}
+		values := node_defaults(x.is)
+		for slot in 0 ..< MAX_FIELDS {
+			if moved[slot] >= 0 {
+				values[moved[slot]] = n.values[slot]
+			}
+		}
+		mods := make([dynamic]Mod_Desc, context.temp_allocator)
+		for m in n.mods {
+			if moved[m.slot] >= 0 {
+				y := m
+				y.slot = moved[m.slot]
+				append(&mods, y)
+			}
+		}
+		n.kind, n.values, n.mods = x.is, values, mods[:]
+		return
+	}
+}
 
 // A field by name: its row (a common one's or the kind's) and first slot.
 node_field_from_name :: proc(kind: Node_Kind, name: string) -> (field: ^Node_Field, slot: int, ok: bool) {
@@ -930,6 +996,7 @@ graph_run :: proc(progs: ^Programs, env: ^Voice_Env, play: i32, voices: []Graph_
 			if node.steady {
 				// one sample for the chunk, spread over it if a reader needs it
 				c.frames = 1
+				node_starts(&c)
 				node_row(node.kind).process(&c)
 				for &lane in lanes {
 					ol, or := node_out(&c, &lane)
@@ -963,6 +1030,7 @@ graph_run :: proc(progs: ^Programs, env: ^Voice_Env, play: i32, voices: []Graph_
 				}
 				continue
 			}
+			node_starts(&c)
 			node_row(node.kind).process(&c)
 			for &lane, k in lanes {
 				ol, or := node_out(&c, &lane)
@@ -1062,6 +1130,18 @@ node_level :: proc(c: ^Node_Call, lane: ^Lane, l, r: []f32) {
 slice_zero :: #force_inline proc "contextless" (x: []f32) {
 	for i in 0 ..< len(x) {
 		x[i] = 0
+	}
+}
+
+// The node's start for each lane whose note starts in this chunk.
+@(private = "file")
+node_starts :: proc(c: ^Node_Call) {
+	if start := node_row(c.node.kind).start; start != nil {
+		for &lane in c.lanes {
+			if lane.starting || lane.fresh {
+				start(c, &lane)
+			}
+		}
 	}
 }
 
