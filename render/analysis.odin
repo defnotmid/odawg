@@ -137,7 +137,7 @@ Analyzer :: struct {
 // its own), so a view draws them where they land.
 analyzer_init :: proc(a: ^Analyzer, kind: Table_Kind, step_num, step_den: int, keep: int, at: i64, size := 0, shape := analyze.Window.None, allocator := context.allocator, values: []f32 = nil) {
 	a^ = {}
-	a.table = {kind = kind, part = -1, step_num = max(step_num, 1), step_den = max(step_den, 1), size = size, shape = shape}
+	a.table = {kind = kind, stem = -1, step_num = max(step_num, 1), step_den = max(step_den, 1), size = size, shape = shape}
 	a.table.width = TABLE_KINDS[kind].width(&a.table)
 	a.table.rows = max(keep, 1)
 	if values != nil && len(values) >= a.table.rows * a.table.width {

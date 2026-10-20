@@ -214,23 +214,3 @@ approach_fill :: #force_inline proc "contextless" (e: ^Adsr, target: f32, out: [
 		out[i] = f32(v90 + (f64(target) - v90) * (f64(k0 + i) - 0.9 * length) / (0.1 * length))
 	}
 }
-
-// A value gliding to its target with a one-pole lag (`time` the time
-// constant), so a value set once per block or event doesn't click.
-Smoother :: struct {
-	value, target, k: f32,
-}
-
-smoother_init :: proc "contextless" (value: f32, time: f32) -> Smoother {
-	return {value, value, time > 0 ? f32(1 - math.exp(-1 / (f64(time) * RATE))) : 1}
-}
-
-// Fills `out` with the glide toward the current target.
-smoother_run :: proc "contextless" (s: ^Smoother, out: []f32) {
-	v, target, k := s.value, s.target, s.k
-	for i in 0 ..< len(out) {
-		v += k * (target - v)
-		out[i] = v
-	}
-	s.value = v
-}

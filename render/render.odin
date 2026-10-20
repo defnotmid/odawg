@@ -31,6 +31,7 @@ Options :: struct {
 	threads: int, // 0: one per core
 	segment: f64, // seconds a time segment covers (0: from the length and the cores); each costs a pre-roll
 	stems:   bool, // hand each stem (stem_count: the parts, the returns, the buses; what the master sums) to the sink too
+	mastering: Mastering, // a target's master in place of the song's (master_export)
 }
 
 // What an export hands on, a segment at a time and in order: `at` is the
@@ -61,18 +62,47 @@ tail_from_song :: proc(s: ^song.Song) -> f64 {
 	return clamp(end - s.duration, 0, 12)
 }
 
-// Seconds an exact seek renders before its target: the longest effect
-// memory on any track (its chain and its returns), at most 8.
+// Seconds an exact seek renders before its target: what the node that needs
+// most needs (prerolls_from_song).
 preroll_from_song :: proc(s: ^song.Song) -> f64 {
-	longest := 0.0
-	for t in s.tracks {
-		ret := 0.0
-		for snd in s.sends[t.sends.first:base.span_end(t.sends)] {
-			ret = max(ret, chain_tail(s, s.returns[snd.ret].chain))
-		}
-		longest = max(longest, chain_tail(s, t.chain) + ret)
+	if len(s.nodes) == 0 {
+		return 0
 	}
-	return min(longest + 0.5, 8)
+	order, loops := song.graph_order(s, context.temp_allocator)
+	looped := make([]bool, len(s.edges), context.temp_allocator)
+	for i in loops {
+		looped[i] = true
+	}
+	most: i64
+	for p in prerolls_from_song(s, order, looped, context.temp_allocator) {
+		most = max(most, p)
+	}
+	return f64(most) / RATE
+}
+
+// Samples an exact seek starts each node (song.nodes) early: its own
+// effects' memory (half a second more, at most 8) and the most anything after
+// it needs, at most 12 s; `order` the graph's, `looped` its dropped edges.
+prerolls_from_song :: proc(s: ^song.Song, order: []i32, looped: []bool, allocator := context.allocator) -> []i64 {
+	pre := make([]i64, len(s.nodes), allocator)
+	#reverse for k in order {
+		after: i64
+		for x, i in s.edges {
+			if x.from == k && !looped[i] {
+				after = max(after, pre[x.to])
+			}
+		}
+		memory := node_memory(s, int(k))
+		own := memory > 0 ? i64(math.round(min(memory + 0.5, 8) * RATE)) : 0
+		pre[k] = min(own + after, 12 * RATE)
+	}
+	return pre
+}
+
+// Seconds node k's chain rings after its input (the master's chain runs
+// apart, in its Master_Run: none here).
+node_memory :: proc(s: ^song.Song, k: int) -> f64 {
+	return s.nodes[k].kind == .Master ? 0 : chain_tail(s, song.node_chain(s, k))
 }
 
 chain_tail :: proc(s: ^song.Song, c: base.Span) -> f64 {
@@ -86,18 +116,6 @@ chain_tail :: proc(s: ^song.Song, c: base.Span) -> f64 {
 
 note_from_row :: proc(s: ^song.Song, i: int) -> device.Note {
 	return song.note_of(s, i)
-}
-
-// The master's lookahead in samples (its chain's latency).
-master_latency_from_song :: proc(s: ^song.Song) -> int {
-	lm := 0
-	for d in s.chain[s.master.first:base.span_end(s.master)] {
-		p := s.params[d]
-		if lat := device.DEVICE_TABLE[s.devices[d]].effect_latency; lat != nil {
-			lm += lat(&p)
-		}
-	}
-	return lm
 }
 
 // Streams [from, to) of the song to `sink`, segment by segment in order.
@@ -118,8 +136,13 @@ export_song :: proc(s: ^song.Song, opts: Options, sink: Sink) -> Master_Stats {
 		seconds = clamp(f64(frames) / RATE / f64(workers), 4, 30)
 	}
 	segment := int(math.round(seconds * RATE))
-	has_master := s.master.count > 0 || s.master_gain_db != 0
-	lm := has_master ? master_latency_from_song(s) : 0
+	// the master streams in the owner, over the segments in order
+	master: Master_Run
+	master_run_init(&master, s, opts.mastering, heap)
+	defer master_run_destroy(&master, heap)
+	master_run_reset(&master, first)
+	has_master := master_run_active(&master)
+	lm := master.latency
 	total := frames + lm // the master looks this far ahead
 	segments := (total + segment - 1) / segment
 	parts := opts.stems ? stem_count(s) : 0
@@ -131,15 +154,6 @@ export_song :: proc(s: ^song.Song, opts: Options, sink: Sink) -> Master_Stats {
 	defer delete(slab, heap)
 	jobs := make([]Job, wave, heap)
 	defer delete(jobs, heap)
-	// the master streams in the owner, over the segments in order
-	master: Engine
-	if has_master {
-		engine_init(&master, s)
-		master_reset(&master, first)
-	}
-	defer if has_master {
-		engine_destroy(&master)
-	}
 	primed := 0 // master output samples dropped so far (its lookahead filling)
 	stems_view := make([][2][]f32, parts, heap)
 	defer delete(stems_view, heap)
@@ -181,7 +195,7 @@ export_song :: proc(s: ^song.Song, opts: Options, sink: Sink) -> Master_Stats {
 			if has_master {
 				for b := 0; b < j.frames; b += BLOCK {
 					m := min(BLOCK, j.frames - b)
-					master_block(&master, l[b:][:m], r[b:][:m])
+					master_run_block(&master, l[b:][:m], r[b:][:m])
 				}
 				skip = min(lm - primed, j.frames)
 				primed += skip

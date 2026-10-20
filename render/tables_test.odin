@@ -181,7 +181,7 @@ test_tables_shape :: proc(t: ^testing.T) {
 	testing.expect_value(t, rows, lead.rows)
 	// filled from the caller's buffers instead: the same rows
 	lead2, mix2: Table
-	table_init(&lead2, s, .Peaks, lead.part, 256, 1, allocator = context.temp_allocator)
+	table_init(&lead2, s, .Peaks, lead.stem, 256, 1, allocator = context.temp_allocator)
 	table_init(&mix2, s, .Peaks, -1, 256, 1, allocator = context.temp_allocator)
 	testing.expect(t, table_stale(s, &lead2))
 	// the samples into the caller's own buffers: the same as Output's

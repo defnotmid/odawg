@@ -118,13 +118,19 @@ test_range :: proc(t: ^testing.T) {
 	testing.expectf(t, worst < 1e-3, "the range differs by %f", worst)
 }
 
-// Mastering for streaming reaches -14 LUFS with true peaks at -1 dBTP.
+// Mastering for streaming reaches -14 LUFS with true peaks at -1 dBTP, the
+// target's master the export's: the song is as it was, and mastered again
+// it reaches the same.
 @(test)
 test_master :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	defer virtual.arena_destroy(&arena)
 	s := compose(t, &arena)
+	devices, chain, master, gain := len(s.devices), len(s.chain), s.master, s.master_gain_db
 	l := master_export(s, {threads = 4}, .Streaming, {})
 	testing.expectf(t, math.abs(l.integrated + 14) < 0.5, "%f LUFS", l.integrated)
 	testing.expectf(t, l.true_peak <= -0.9, "%f dBTP", l.true_peak)
+	testing.expect(t, len(s.devices) == devices && len(s.chain) == chain && s.master == master && s.master_gain_db == gain, "mastering changed the song")
+	again := master_export(s, {threads = 4}, .Streaming, {})
+	testing.expectf(t, again.integrated == l.integrated, "mastered again: %f LUFS, first %f", again.integrated, l.integrated)
 }

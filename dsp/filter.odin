@@ -10,7 +10,7 @@ import "core:math"
 // rolloff. Also the one-pole low-pass synth.lua's voices use.
 
 // The most SVFs a chain holds (rolloff -96).
-MAX_STAGES :: 8
+MAX_STAGES :: 4
 
 Svf :: struct {
 	a1, a2, a3: f32,
@@ -96,17 +96,22 @@ svf_run_swept :: proc "contextless" (c: []Svf, s: ^Svf_State, x: []f32) {
 	s.ic1, s.ic2 = ic1, ic2
 }
 
-// The number of 12 dB stages for Tone's rolloff (-12, -24, -48, -96).
+// Tone's rolloffs and how many 12 dB stages it cascades for each (its own
+// mapping: -48 is three, -96 four); anything else reads as the nearest. The
+// Filter node and the Filter effect both.
+ROLLOFFS := [?]struct {
+	rolloff: f32,
+	stages:  int,
+}{{-12, 1}, {-24, 2}, {-48, 3}, {-96, 4}}
+
 rolloff_stages :: proc "contextless" (rolloff: f32) -> int {
-	switch int(rolloff) {
-	case -24:
-		return 2
-	case -48:
-		return 4
-	case -96:
-		return 8
+	best := ROLLOFFS[0]
+	for row in ROLLOFFS {
+		if abs(row.rolloff - rolloff) < abs(best.rolloff - rolloff) {
+			best = row
+		}
 	}
-	return 1
+	return best.stages
 }
 
 // Tone's Filter: `stages` SVFs at the same settings, for two channels.
@@ -119,14 +124,6 @@ Filter_Chain :: struct {
 
 filter_chain_init :: proc "contextless" (type: Filter_Type, q, rolloff, gain: f32) -> Filter_Chain {
 	return {type = type, q = q, gain = gain, stages = rolloff_stages(rolloff)}
-}
-
-// Filters a slice of `channel` (0 or 1) in place at a fixed cutoff.
-filter_chain_run :: proc "contextless" (f: ^Filter_Chain, hz: f32, x: []f32, channel := 0) {
-	c := svf_coefficients(f.type, hz, f.q, f.gain)
-	for s in 0 ..< f.stages {
-		svf_run(c, &f.state[channel][s], x)
-	}
 }
 
 // Filters a slice of `channel` in place with each sample's coefficients
@@ -153,20 +150,6 @@ filter_chain_coefficients :: proc "contextless" (f: ^Filter_Chain, hz: []f32, ou
 // The one-pole low-pass coefficient for a cutoff (synth.lua's lp(hz)):
 // y += k (x - y).
 one_pole_k :: proc "contextless" (hz: f64) -> f64 {return 1 - math.exp(-math.TAU * hz / RATE)}
-
-One_Pole :: struct {
-	k, y: f32,
-}
-
-// Low-passes a slice in place.
-one_pole_lowpass_run :: proc "contextless" (f: ^One_Pole, x: []f32) {
-	y, k := f.y, f.k
-	for i in 0 ..< len(x) {
-		y += k * (x[i] - y)
-		x[i] = y
-	}
-	f.y = y
-}
 
 // The responses a filter has.
 Filter_Type :: enum u8 {

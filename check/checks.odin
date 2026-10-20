@@ -40,7 +40,8 @@ CHECK_TABLE := [Check]Check_Row {
 			}
 		}},
 	.Silent_Part = {"silent_part", proc(c: ^Context) {
-			for st, i in c.out.stems {
+			// the parts' stems (the returns' and buses' follow them)
+			for st, i in c.out.stems[:min(len(c.out.stems), len(c.song.parts))] {
 				peak := render.peak_from_samples(st[0], st[1])
 				if peak < 1e-4 {
 					base.report(c.findings, "silent_part", .Warning, base.path_join("parts", c.song.parts[i]), "part %s makes no sound in this range", c.song.parts[i])

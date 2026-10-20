@@ -1024,10 +1024,10 @@ CLIP_RATE :: 9
 
 @(private = "file")
 process_clip :: proc(c: ^Node_Call) {
-	v := &c.node.values
 	bank := c.env != nil ? c.env.bank : nil
-	set := int(v[CLIP_SET])
 	for &lane in c.lanes {
+		v := node_values(c, &lane)
+		set := int(v[CLIP_SET])
 		l, r := node_out(c, &lane)
 		for i in 0 ..< len(l) {
 			l[i], r[i] = 0, 0

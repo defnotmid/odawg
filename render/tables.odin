@@ -110,7 +110,7 @@ Table_Span :: struct {
 
 Table :: struct {
 	kind:               Table_Kind,
-	part:               i32, // a stem (stem_count's order: the parts, then the returns, then the buses); -1: the mix
+	stem:               i32, // a stem (stem_count's order: the parts, then the returns, then the buses); -1: the mix
 	// A row every step_num / step_den samples from the song's start (a video
 	// frame: RATE / fps; a peak bucket: n / 1), rounded down.
 	step_num, step_den: int,
@@ -134,19 +134,20 @@ frames_from_song :: proc(s: ^song.Song) -> int {
 // `values`: memory of the caller's to fill (a GPU upload buffer a view
 // draws), at least rows x width (table_rows tells how many before); nil: its
 // own.
-table_init :: proc(t: ^Table, s: ^song.Song, kind: Table_Kind, part: i32, step_num, step_den: int, size := 0, shape := analyze.Window.None, allocator := context.allocator, values: []f32 = nil) {
-	t^ = {kind = kind, part = part, step_num = max(step_num, 1), step_den = max(step_den, 1), size = size, shape = shape}
+table_init :: proc(t: ^Table, s: ^song.Song, kind: Table_Kind, stem: i32, step_num, step_den: int, size := 0, shape := analyze.Window.None, allocator := context.allocator, values: []f32 = nil) {
+	t^ = {kind = kind, stem = stem, step_num = max(step_num, 1), step_den = max(step_den, 1), size = size, shape = shape}
 	t.frames = frames_from_song(s)
 	t.width = TABLE_KINDS[kind].width(t)
 	window := TABLE_KINDS[kind].window(t)
 	// every step whose window meets a sounding span, inside the song
 	steps := (t.frames * t.step_den + t.step_num - 1) / t.step_num
 	spans := make([dynamic]Table_Span, 0, 8, allocator)
-	sounding := sounding_from_song(s, part)
-	if part >= i32(len(s.parts)) {
-		// a return's or a bus's: as long as the song (it sounds where what
-		// feeds it does, and rings after)
-		sounding = {{0, f64(t.frames) / RATE}}
+	// a part's where it plays; the mix's where anything does; a return's or
+	// a bus's as long as the song (it sounds where what feeds it does, and
+	// rings after)
+	sounding := [][2]f64{{0, f64(t.frames) / RATE}}
+	if part := stem_part(s, stem); part >= 0 || stem < 0 {
+		sounding = sounding_from_song(s, part)
 	}
 	for x in sounding {
 		a := int(x[0] * RATE) - window
@@ -173,9 +174,9 @@ table_init :: proc(t: ^Table, s: ^song.Song, kind: Table_Kind, part: i32, step_n
 
 // How many values a table of `kind` over `part` holds (rows x width): what
 // a caller lending its memory sizes it to.
-table_size :: proc(s: ^song.Song, kind: Table_Kind, part: i32, step_num, step_den: int, size := 0) -> int {
+table_size :: proc(s: ^song.Song, kind: Table_Kind, stem: i32, step_num, step_den: int, size := 0) -> int {
 	t: Table
-	table_init(&t, s, kind, part, step_num, step_den, size, allocator = context.temp_allocator, values = []f32{0})
+	table_init(&t, s, kind, stem, step_num, step_den, size, allocator = context.temp_allocator, values = []f32{0})
 	n := t.rows * t.width
 	delete(t.spans, context.temp_allocator)
 	return n
@@ -218,6 +219,12 @@ table_row :: proc(t: ^Table, step: int) -> []f32 {
 // Where a part (-1: any) sounds, song seconds in order and merged: its
 // regions to their notes' last sound (release, the effects' and returns'
 // tails).
+// The part stem `stem` is (stem_count's order); -1: a return's, a bus's or
+// the mix's, which hear every part.
+stem_part :: proc(s: ^song.Song, stem: i32) -> i32 {
+	return stem >= 0 && stem < i32(len(s.parts)) ? stem : -1
+}
+
 sounding_from_song :: proc(s: ^song.Song, part: i32) -> [][2]f64 {
 	out := make([dynamic][2]f64, context.temp_allocator)
 	env := song.voice_env(s)
@@ -259,13 +266,14 @@ sounding_from_song :: proc(s: ^song.Song, part: i32) -> [][2]f64 {
 }
 
 // The version a table of `part` (-1: the mix) is filled at.
-source_version :: proc(s: ^song.Song, part: i32) -> u32 {
+source_version :: proc(s: ^song.Song, stem: i32) -> u32 {
+	part := stem_part(s, stem)
 	return part < 0 ? song.mix_version(s) : song.part_version(s, int(part))
 }
 
 // Whether `t` must be filled (again) for the song as it is.
 table_stale :: proc(s: ^song.Song, t: ^Table) -> bool {
-	return t.version != source_version(s, t.part)
+	return t.version != source_version(s, t.stem)
 }
 
 // Fills `tables` from the song's samples the caller holds (s nil: a
@@ -284,8 +292,8 @@ tables_fill :: proc(s: ^song.Song, tables: []^Table, mix: [2][]f32, parts: [][2]
 	jobs := make([]Fill, len(tables), context.temp_allocator)
 	for t, k in tables {
 		src := mix
-		if t.part >= 0 {
-			src = int(t.part) < len(parts) ? parts[t.part] : {}
+		if t.stem >= 0 {
+			src = int(t.stem) < len(parts) ? parts[t.stem] : {}
 		}
 		jobs[k] = {t, src, t.frames}
 	}
@@ -338,14 +346,14 @@ tables_fill :: proc(s: ^song.Song, tables: []^Table, mix: [2][]f32, parts: [][2]
 		thread.pool_destroy(&pool)
 	}
 	for t in tables {
-		t.version = s != nil ? source_version(s, t.part) : 1
+		t.version = s != nil ? source_version(s, t.stem) : 1
 	}
 }
 
 // Sizes table `t` over `frames` samples of a recording (no song: its rows
 // cover all of it), for tables_fill with a nil song.
 table_init_frames :: proc(t: ^Table, kind: Table_Kind, frames: int, step_num, step_den: int, size := 0, shape := analyze.Window.None, allocator := context.allocator) {
-	t^ = {kind = kind, part = -1, step_num = max(step_num, 1), step_den = max(step_den, 1), size = size, shape = shape, frames = frames}
+	t^ = {kind = kind, stem = -1, step_num = max(step_num, 1), step_den = max(step_den, 1), size = size, shape = shape, frames = frames}
 	t.width = TABLE_KINDS[kind].width(t)
 	t.rows = (frames * t.step_den + t.step_num - 1) / t.step_num
 	spans := make([]Table_Span, 1, allocator)
@@ -377,7 +385,7 @@ tables_build :: proc(s: ^song.Song, tables: []^Table, threads := 0) {
 	b.span = make([]int, len(tables), context.temp_allocator)
 	stems := false
 	for t in tables {
-		stems ||= t.part >= 0
+		stems ||= t.stem >= 0
 	}
 	b.held = make([][dynamic]f32, 2 * (1 + (stems ? stem_count(s) : 0)), context.temp_allocator)
 	for &h in b.held {
@@ -389,7 +397,7 @@ tables_build :: proc(s: ^song.Song, tables: []^Table, threads := 0) {
 		for t, k in b.tables {
 			row := TABLE_KINDS[t.kind]
 			w := row.window(t)
-			src := 2 * (t.part >= 0 ? 1 + int(t.part) : 0)
+			src := 2 * (t.stem >= 0 ? 1 + int(t.stem) : 0)
 			for b.span[k] < len(t.spans) {
 				sp := t.spans[b.span[k]]
 				step := sp.from + b.next[k] - sp.first
@@ -438,6 +446,6 @@ tables_build :: proc(s: ^song.Song, tables: []^Table, threads := 0) {
 	b.received = b.frames
 	fill_rows(&b)
 	for t in tables {
-		t.version = source_version(s, t.part)
+		t.version = source_version(s, t.stem)
 	}
 }

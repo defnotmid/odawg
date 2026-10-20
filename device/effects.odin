@@ -270,25 +270,6 @@ fx_svf_pass_moving :: proc(s: Fx_Svf_Shape, g: []f64, st: ^Fx_Svf_State, x: []f3
 	st.ic1, st.ic2 = ic1, ic2
 }
 
-// Tone's rolloffs and how many biquads it cascades for each (its own
-// mapping: -48 is three, -96 four). Anything else reads as the nearest.
-@(private = "file")
-FX_ROLLOFFS := [?]struct {
-	rolloff: f32,
-	stages:  int,
-}{{-12, 1}, {-24, 2}, {-48, 3}, {-96, 4}}
-
-@(private = "file")
-fx_stages :: proc(rolloff: f32) -> int {
-	best := FX_ROLLOFFS[0]
-	for row in FX_ROLLOFFS {
-		if abs(row.rolloff - rolloff) < abs(best.rolloff - rolloff) {
-			best = row
-		}
-	}
-	return best.stages
-}
-
 // ---- Filter, AutoFilter, EQ3 -------------------------------------------------------
 
 @(private = "file")
@@ -306,7 +287,7 @@ effect_filter :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32)
 	fx_run(state, p, l, r, key_l, key_r, proc(state: []u8, p: ^Params, l, r, _, _: []f32) {
 		f := fx_header(state, Fx_Filter)
 		c := fx_svf(FX_SVF_RULES[fx_filter_type(p[.Type])](f64(p[.Q]), f64(p[.Gain])), f64(p[.Frequency]))
-		for k in 0 ..< fx_stages(p[.Rolloff]) {
+		for k in 0 ..< dsp.rolloff_stages(p[.Rolloff]) {
 			fx_svf_pass(c, &f.svf[0][k], l)
 			fx_svf_pass(c, &f.svf[1][k], r)
 		}
@@ -343,7 +324,7 @@ effect_auto_filter :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: [
 		for &v, i in g {
 			v = fx_warp(lo + (hi - lo) * (0.5 + 0.5 * depth * math.sin(w * f64(f.pos + i64(i))))) * shape.g_scale
 		}
-		for k in 0 ..< fx_stages(p[.Filter_Rolloff]) {
+		for k in 0 ..< dsp.rolloff_stages(p[.Filter_Rolloff]) {
 			fx_svf_pass_moving(shape, g, &f.svf[0][k], l)
 			fx_svf_pass_moving(shape, g, &f.svf[1][k], r)
 		}

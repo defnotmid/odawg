@@ -63,11 +63,7 @@ Engine :: struct {
 	// none), and its block.
 	key_l, key_r: []f32,
 	keys:      []f32, // 2 x BLOCK
-	// The master: its chain's instances (into fx) and lookahead, what it has
-	// measured.
-	master:    base.Span,
-	master_latency: i64,
-	stats:     Master_Stats,
+	master:    Master_Run, // the song's master: its gain, chain, lookahead, what it measured
 	no_master: bool, // an export's segment: the owner runs the master over the segments in order
 	stem_gain: []f32, // per stem (stem_count): its placement's level, so a stem is what the master hears of it
 	arena:     virtual.Arena,
@@ -151,8 +147,10 @@ engine_init :: proc(e: ^Engine, s: ^song.Song) -> bool {
 		slots_total += int(run.slots.count)
 		run.tail = i64(math.ceil(chain_tail(s, t.chain) * RATE)) + DORMANT_MARGIN
 	}
-	for _, k in s.nodes {
-		fx_total += int(song.node_chain(s, k).count)
+	for nd, k in s.nodes {
+		if nd.kind != .Master { // the master's chain runs in its Master_Run
+			fx_total += int(song.node_chain(s, k).count)
+		}
 	}
 	bytes_total, graph_total := 0, 0
 	for t, ti in s.tracks {
@@ -194,7 +192,7 @@ engine_init :: proc(e: ^Engine, s: ^song.Song) -> bool {
 			run.origin = i64(math.round(s.placements[pl].at * RATE))
 		}
 		first := fi
-		c := song.node_chain(s, k)
+		c := s.nodes[k].kind == .Master ? base.Span{} : song.node_chain(s, k)
 		for d in s.chain[c.first:base.span_end(c)] {
 			p := s.params[d]
 			size := (device.DEVICE_TABLE[s.devices[d]].effect_size(&p) + 15) &~ 15
@@ -208,9 +206,7 @@ engine_init :: proc(e: ^Engine, s: ^song.Song) -> bool {
 		run.chain = {i32(first), i32(fi - first)}
 	}
 	e.fx_bytes = make([]u8, bytes)
-	master := int(song.master_node(s))
-	e.master = e.nodes[master].chain
-	e.master_latency = e.nodes[master].latency
+	master_run_init(&e.master, s, {})
 	for ti in 0 ..< len(s.tracks) {
 		e.tracks[ti].latency = e.nodes[ti].latency
 		e.tracks[ti].placement = song.node_placement(s, ti)
@@ -269,19 +265,11 @@ engine_init :: proc(e: ^Engine, s: ^song.Song) -> bool {
 		}
 	}
 	e.rings = make([]f32, ring_total)
-	// an exact seek's start per node: its effects' memory, and the most that
-	// anything after it needs
-	#reverse for k in e.order {
-		after: i64
-		for x, i in s.edges {
-			if x.from == k && !looped[i] {
-				after = max(after, e.nodes[x.to].pre)
-			}
-		}
-		memory := s.nodes[k].kind == .Master ? 0 : chain_tail(s, song.node_chain(s, int(k)))
-		own := memory > 0 ? i64(math.round(min(memory + 0.5, 8) * RATE)) : 0
-		e.nodes[k].pre = min(own + after, 12 * RATE)
-		e.nodes[k].tail = i64(math.ceil(memory * RATE)) + DORMANT_MARGIN
+	// an exact seek's start per node, and how long its chain rings
+	pres := prerolls_from_song(s, e.order, looped, context.temp_allocator)
+	for &nd, k in e.nodes {
+		nd.pre = pres[k]
+		nd.tail = i64(math.ceil(node_memory(s, k) * RATE)) + DORMANT_MARGIN
 	}
 	e.blocks = make([]f32, 2 * BLOCK * len(s.nodes))
 	e.keys = make([]f32, 2 * BLOCK)
@@ -372,16 +360,16 @@ engine_seek :: proc(e: ^Engine, at: i64, exact: bool) {
 			}
 		}
 	}
-	// the master takes the mix `master_latency` ahead of what it puts out:
-	// prime its lookahead with that much (its output then is its delay)
-	master_reset(e, at)
-	for left := e.no_master ? 0 : e.master_latency; left > 0; {
+	// the master takes the mix its latency ahead of what it puts out: prime
+	// its lookahead with that much (its output then is its delay)
+	master_run_reset(&e.master, at)
+	for left := e.no_master ? 0 : i64(e.master.latency); left > 0; {
 		n := int(min(left, BLOCK))
 		walk_block(e, n, true)
 		left -= i64(n)
 	}
 	e.cursor = at
-	e.stats = {}
+	e.master.stats = {}
 }
 
 // Starts node `k` at the cursor: a track's notes chased there, a node's
@@ -408,14 +396,6 @@ node_start :: proc(e: ^Engine, k: int) {
 		x.pos = e.cursor + e.nodes[s.edges[i].from].lead
 		x.sound = min(i64) / 2
 	}
-}
-
-// Puts the master's chain at song sample `at`, its measurements cleared.
-master_reset :: proc(e: ^Engine, at: i64) {
-	for f in e.fx[e.master.first:base.span_end(e.master)] {
-		reset_fx(e, int(song.master_node(e.song)), f, at)
-	}
-	e.stats = {}
 }
 
 // The song's next `n` samples: every started node in order into its block
@@ -452,8 +432,8 @@ walk_block :: proc(e: ^Engine, n: int, master := true) -> ([]f32, []f32) {
 			}
 			if kind == .Master {
 				e.dirty[k] = true
-				if !e.no_master && (e.master.count > 0 || s.master_gain_db != 0) {
-					master_block(e, l, r)
+				if !e.no_master && master_run_active(&e.master) {
+					master_run_block(&e.master, l, r)
 				}
 			} else if nd.chain.count > 0 {
 				e.dirty[k] = node_chain_run(e, int(k), l, r, e.dirty[k])
@@ -623,33 +603,6 @@ placement_block :: proc(e: ^Engine, k: int, l, r: []f32) {
 	}
 }
 
-// The master over a block of the mix: its gain, what it measures, its chain.
-master_block :: proc(e: ^Engine, l, r: []f32) {
-	g := f32(base.db_to_gain(e.song.master_gain_db))
-	peak: f32
-	for i in 0 ..< len(l) {
-		l[i] *= g
-		r[i] *= g
-		a := max(abs(l[i]), abs(r[i]))
-		peak = max(peak, a)
-		if a > 1 {
-			e.stats.clipped_before += 1
-		}
-	}
-	e.stats.peak_before = max(e.stats.peak_before, peak)
-	if e.master.count == 0 {
-		return
-	}
-	run_fx(e, e.master, l, r)
-	after: f32
-	for i in 0 ..< len(l) {
-		after = max(after, abs(l[i]), abs(r[i]))
-	}
-	if peak > 0 && after < peak {
-		e.stats.reduction_db = min(e.stats.reduction_db, f32(base.gain_to_db(f64(after / peak))))
-	}
-}
-
 // Puts track `ti`'s output at song sample `at` (its node's time): the notes
 // sounding there started and played up to it, its chain reset.
 track_seek :: proc(e: ^Engine, ti: int, at: i64, exact: bool) {
@@ -745,7 +698,7 @@ note_cuts :: proc(e: ^Engine, ti: int, ni: i32, n: device.Note) {
 chase_to :: proc(e: ^Engine, ti: int, at: i64, jump: bool) {
 	s := e.song
 	run := &e.tracks[ti]
-	discard := track_scratch(e, ti)[4 * BLOCK:][:2 * BLOCK]
+	discard := e.scratch[4 * BLOCK:][:2 * BLOCK]
 	for k in run.slots.first ..< base.span_end(run.slots) {
 		slot := int(k)
 		if e.slot_note[slot] < 0 {
@@ -777,11 +730,6 @@ reset_fx :: proc(e: ^Engine, k: int, f: Fx_Run, at: i64) {
 	p := e.song.params[f.device]
 	state := e.fx_bytes[f.state.first:base.span_end(f.state)]
 	device.DEVICE_TABLE[e.song.devices[f.device]].effect_reset(state, &p, at - e.nodes[k].origin)
-}
-
-@(private = "file")
-track_scratch :: proc(e: ^Engine, ti: int) -> []f32 {
-	return e.scratch[:SCRATCH]
 }
 
 // Streams the next len(l) samples of the mix into l and r (and into stems,
@@ -833,7 +781,7 @@ stem_count :: proc(s: ^song.Song) -> int {
 // Moves a muted track on by `n` samples without hearing it (its state
 // moves as if it played).
 track_skip :: proc(e: ^Engine, ti: int, n: int) {
-	discard := track_scratch(e, ti)[4 * BLOCK:][:2 * BLOCK]
+	discard := e.scratch[4 * BLOCK:][:2 * BLOCK]
 	for done := 0; done < n; {
 		m := min(n - done, BLOCK)
 		track_block(e, ti, discard[:m], discard[BLOCK:][:m])
@@ -996,7 +944,7 @@ layer_cuts :: proc(e: ^Engine, run: ^Track_Run, ni: i32, layer: i32, n: device.N
 @(private = "file")
 play_slot :: proc(e: ^Engine, ti: int, slot: int, l, r: []f32) -> bool {
 	t := e.song.tracks[ti]
-	return play_graph(e, ti, slot, pad_level(&t, e.song.notes.pad[e.slot_note[slot]]), l, r)
+	return play_graph(e, slot, pad_level(&t, e.song.notes.pad[e.slot_note[slot]]), l, r)
 }
 
 // A pad's level on a track (Pad_Gain_Set; 1: its own).
@@ -1015,7 +963,7 @@ pad_level :: proc(t: ^song.Track, pad: u32) -> f32 {
 // A slot playing a program, alone (a seek's chase, a choked note's fade):
 // as play_slot.
 @(private = "file")
-play_graph :: proc(e: ^Engine, ti: int, slot: int, level: f32, l, r: []f32) -> bool {
+play_graph :: proc(e: ^Engine, slot: int, level: f32, l, r: []f32) -> bool {
 	s := e.song
 	state := slot_state(e, slot)
 	n := note_from_row(s, int(e.slot_note[slot]))
@@ -1025,7 +973,7 @@ play_graph :: proc(e: ^Engine, ti: int, slot: int, level: f32, l, r: []f32) -> b
 	if e.slot_choke[slot] != 0 {
 		m = min(m, int(e.slot_choke[slot]))
 	}
-	sc := track_scratch(e, ti)[6 * BLOCK:]
+	sc := e.scratch[6 * BLOCK:]
 	cl, cr := sc[:m], sc[BLOCK:][:m]
 	choked := e.slot_choke[slot] != 0
 	if choked {
@@ -1091,7 +1039,7 @@ play_graphs :: proc(e: ^Engine, ti: int, l, r: []f32) {
 	for x in sounding[:n_sounding] {
 		k := x.slot
 		if e.slot_choke[k] != 0 {
-			play_graph(e, ti, k, pad_level(&t, s.notes.pad[e.slot_note[k]]), l, r)
+			play_graph(e, k, pad_level(&t, s.notes.pad[e.slot_note[k]]), l, r)
 			continue
 		}
 		n := note_from_row(s, int(e.slot_note[k]))

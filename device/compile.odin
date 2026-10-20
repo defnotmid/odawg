@@ -313,7 +313,6 @@ compile_nodes :: proc(progs: ^Programs, desc: ^Program_Desc, prog: Program, find
 	for i in 0 ..< len(nodes) {
 		by_name[i] = i
 	}
-	slice.sort_by(by_name, proc(a, b: int) -> bool {return false}) // stable placeholder, sorted below
 	context.user_ptr = desc
 	slice.sort_by(by_name, proc(a, b: int) -> bool {
 		d := (^Program_Desc)(context.user_ptr)

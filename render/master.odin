@@ -1,6 +1,7 @@
 package odawg_render
 
 import "core:math"
+import "core:mem"
 import "core:os"
 import analyze "../analyze"
 import base "../base"
@@ -29,6 +30,135 @@ MASTER_TABLE := [Master]Master_Row {
 	.Broadcast = {"broadcast", -23, -1}, // EBU R128
 }
 
+// The master a delivery target sets, in place of the song's (on): its gain
+// and, `limit`, a true-peak limiter at `ceiling_db`. An export's option: the
+// song is left as it is.
+Mastering :: struct {
+	on:         bool,
+	gain_db:    f64,
+	limit:      bool,
+	ceiling_db: f64,
+}
+
+// A master as it runs over the mix in order: its gain, its chain, its
+// lookahead, what it measured. Its rows are the song's (`song` set: read
+// through, so a command changing the master's gain or an effect's value is
+// what the next block runs) or its own (a target's: Mastering). An
+// engine's master, and an export owner's.
+Master_Run :: struct {
+	song:      ^song.Song, // nil: its own rows
+	devices:   []i32, // into song.devices (and params)
+	own_kinds: []device.Device_Kind,
+	own:       []device.Params,
+	own_gain:  f64,
+	states:    [][]u8,
+	latency:   int,
+	stats:     Master_Stats,
+}
+
+master_run_init :: proc(m: ^Master_Run, s: ^song.Song, mastering: Mastering, allocator := context.allocator) {
+	context.allocator = allocator
+	if mastering.on {
+		m.own_gain = mastering.gain_db
+		if mastering.limit {
+			p := device.params_from_kind(.Limiter)
+			p[.Threshold] = f32(mastering.ceiling_db)
+			m.own_kinds = make([]device.Device_Kind, 1)
+			m.own = make([]device.Params, 1)
+			m.own_kinds[0], m.own[0] = .Limiter, p
+		}
+	} else {
+		m.song = s
+		m.devices = make([]i32, s.master.count)
+		copy(m.devices, s.chain[s.master.first:base.span_end(s.master)])
+	}
+	m.states = make([][]u8, master_run_rows(m))
+	for i in 0 ..< len(m.states) {
+		kind, p := master_run_row(m, i)
+		row := device.DEVICE_TABLE[kind]
+		m.states[i], _ = mem.make_aligned([]u8, (row.effect_size(&p) + 15) &~ 15, 16)
+		if row.effect_latency != nil {
+			m.latency += row.effect_latency(&p)
+		}
+	}
+}
+
+master_run_destroy :: proc(m: ^Master_Run, allocator := context.allocator) {
+	context.allocator = allocator
+	for st in m.states {
+		mem.free_bytes(st)
+	}
+	delete(m.states)
+	delete(m.devices)
+	delete(m.own_kinds)
+	delete(m.own)
+	m^ = {}
+}
+
+@(private = "file")
+master_run_rows :: proc(m: ^Master_Run) -> int {
+	return m.song != nil ? len(m.devices) : len(m.own_kinds)
+}
+
+// Row i: its kind and its values now.
+@(private = "file")
+master_run_row :: proc(m: ^Master_Run, i: int) -> (device.Device_Kind, device.Params) {
+	if m.song != nil {
+		d := m.devices[i]
+		return m.song.devices[d], m.song.params[d]
+	}
+	return m.own_kinds[i], m.own[i]
+}
+
+@(private = "file")
+master_run_gain :: proc(m: ^Master_Run) -> f64 {
+	return m.song != nil ? m.song.master_gain_db : m.own_gain
+}
+
+// Whether it does anything to the mix.
+master_run_active :: proc(m: ^Master_Run) -> bool {
+	return master_run_rows(m) > 0 || master_run_gain(m) != 0
+}
+
+// Its chain put at song sample `at`, its measurements cleared.
+master_run_reset :: proc(m: ^Master_Run, at: i64) {
+	for i in 0 ..< len(m.states) {
+		kind, p := master_run_row(m, i)
+		device.DEVICE_TABLE[kind].effect_reset(m.states[i], &p, at)
+	}
+	m.stats = {}
+}
+
+// A block of the mix through it: its gain, what it measures, its chain.
+master_run_block :: proc(m: ^Master_Run, l, r: []f32) {
+	g := f32(base.db_to_gain(master_run_gain(m)))
+	peak: f32
+	for i in 0 ..< len(l) {
+		l[i] *= g
+		r[i] *= g
+		a := max(abs(l[i]), abs(r[i]))
+		peak = max(peak, a)
+		if a > 1 {
+			m.stats.clipped_before += 1
+		}
+	}
+	m.stats.peak_before = max(m.stats.peak_before, peak)
+	if len(m.states) == 0 {
+		return
+	}
+	for i in 0 ..< len(m.states) {
+		kind, p := master_run_row(m, i)
+		device.DEVICE_TABLE[kind].effect(m.states[i], &p, l, r, nil, nil)
+	}
+	after: f32
+	for i in 0 ..< len(l) {
+		after = max(after, abs(l[i]), abs(r[i]))
+	}
+	if peak > 0 && after < peak {
+		m.stats.reduction_db = min(m.stats.reduction_db, f32(base.gain_to_db(f64(after / peak))))
+	}
+}
+
 master_from_name :: proc(name: string) -> (Master, bool) {
 	for row, m in MASTER_TABLE {
 		if row.name == name {
@@ -43,7 +173,8 @@ master_from_name :: proc(name: string) -> (Master, bool) {
 // and a true-peak limiter at the ceiling, and passes measure again (the
 // limiter takes a little loudness) until within 0.3 LU, at most three; the
 // last goes to the sink. Rendering again is cheap; holding the song is not.
-// The song's master is left as the target sets it.
+// The target's master is the export's (Options.mastering): the song is left
+// as it is.
 master_export :: proc(s: ^song.Song, opts: Options, m: Master, sink: Sink) -> analyze.Loudness {
 	measure :: proc(s: ^song.Song, opts: Options, also: Sink) -> analyze.Loudness {
 		Measured :: struct {
@@ -68,30 +199,26 @@ master_export :: proc(s: ^song.Song, opts: Options, m: Master, sink: Sink) -> an
 	row := MASTER_TABLE[m]
 	o := opts
 	o.stems = false // measuring passes need the mix only
-	s.master_gain_db, s.master = 0, {}
+	o.mastering = {on = true} // the mix as it is, no master
 	before := measure(s, o, {})
 	if math.is_inf(before.integrated) || before.integrated < -150 {
-		return measure(s, opts, sink)
+		final := opts
+		final.mastering = o.mastering
+		return measure(s, final, sink)
 	}
-	// the limiter at the ceiling, on the master
-	p := device.params_from_kind(.Limiter)
-	p[.Threshold] = f32(row.ceiling)
-	append(&s.devices, device.Device_Kind.Limiter)
-	append(&s.labels, device.DEVICE_TABLE[.Limiter].name)
-	append(&s.params, p)
-	s.master = {i32(len(s.chain)), 1}
-	append(&s.chain, i32(len(s.devices) - 1))
-	gain := row.lufs - before.integrated
+	// its gain, then the limiter at the ceiling
+	o.mastering = {on = true, gain_db = row.lufs - before.integrated, limit = true, ceiling_db = row.ceiling}
 	for pass in 0 ..< 3 {
-		s.master_gain_db = gain
 		got := measure(s, o, {})
 		miss := row.lufs - got.integrated
 		if math.abs(miss) < 0.3 || pass == 2 {
 			break
 		}
-		gain += miss
+		o.mastering.gain_db += miss
 	}
-	return measure(s, opts, sink)
+	final := opts
+	final.mastering = o.mastering
+	return measure(s, final, sink)
 }
 
 // ---- WAV, written as it comes ------------------------------------------------------------
