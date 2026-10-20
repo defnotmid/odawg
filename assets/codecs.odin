@@ -2,11 +2,11 @@ package odawg_assets
 
 import "base:runtime"
 import "core:fmt"
-import flac "deps:odecs/codec/flac"
-import wav "deps:odecs/codec/container/wav"
+import flac "deps:odecs/flac"
+import wav "deps:odecs/wav"
 
-// The decoders are odecs's: WAV (deps:odecs/codec/container/wav) and FLAC
-// (deps:odecs/codec/flac), each read as f32 or straight to i16.
+// The decoders are odecs's: WAV (deps:odecs/wav) and FLAC
+// (deps:odecs/flac), each read as f32 or straight to i16.
 
 // ---- WAV ---------------------------------------------------------------------------
 

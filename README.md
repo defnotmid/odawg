@@ -26,7 +26,7 @@ licensed. [API.md](API.md) is the design; [WORKFLOWS.md](WORKFLOWS.md) walks
 through using it.
 
 It builds against odecs (WAV and FLAC decoding) checked out beside it:
-`git clone -b v0.0.1 https://github.com/defnotmid/odecs ../odecs`.
+`git clone -b v0.0.5 https://github.com/defnotmid/odecs ../odecs`.
 
 ```sh
 make build                                     # build/odawg
