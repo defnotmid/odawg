@@ -111,10 +111,13 @@ Sfz_Cc_Mod :: enum u8 {
 	Step, // _stepccN: its steps (likewise)
 }
 
-// An opcode's name read: its reference row (-1: none), the CC moving it
-// (`mod` None: none), and the numbers in its name (lfo2_freq: 2).
+// An opcode's name read: its reference row (-1: none), the numbers in its
+// name (lfo2_freq: 2) and, for a CC's form of another opcode (cutoff_oncc1,
+// v1's cutoff_cc1; the reference lists some forms as rows of their own),
+// the opcode it moves (`base`, its row; -1: none), how (`mod`) and by which CC.
 Sfz_Name :: struct {
 	row:     int,
+	base:    int,
 	mod:     Sfz_Cc_Mod,
 	cc:      int,
 	numbers: [4]int,
@@ -128,24 +131,26 @@ SFZ_CC_SUFFIXES := [?]struct {
 } {{"_oncc", .On}, {"_curvecc", .Curve}, {"_smoothcc", .Smooth}, {"_stepcc", .Step}, {"_cc", .On}, {"cc", .On}}
 
 sfz_name :: proc(name: string) -> (n: Sfz_Name) {
-	n.row = sfz_row_of(name)
-	if n.row < 0 {
-		// a CC's modulation of an opcode the reference has
-		digits := len(name)
-		for digits > 0 && name[digits - 1] >= '0' && name[digits - 1] <= '9' {
-			digits -= 1
-		}
-		if digits < len(name) {
-			for x in SFZ_CC_SUFFIXES {
-				if strings.has_suffix(name[:digits], x.suffix) {
-					if row := sfz_row_of(name[:digits - len(x.suffix)]); row >= 0 {
-						n.row, n.mod = row, x.mod
-						n.cc, _ = strconv.parse_int(name[digits:])
-						break
-					}
+	n.row, n.base = sfz_row_of(name), -1
+	// a CC's form of an opcode the reference has: its row, unless the
+	// reference lists the form itself
+	digits := len(name)
+	for digits > 0 && name[digits - 1] >= '0' && name[digits - 1] <= '9' {
+		digits -= 1
+	}
+	if digits < len(name) {
+		for x in SFZ_CC_SUFFIXES {
+			if strings.has_suffix(name[:digits], x.suffix) {
+				if row := sfz_row_of(name[:digits - len(x.suffix)]); row >= 0 {
+					n.base, n.mod = row, x.mod
+					n.cc, _ = strconv.parse_int(name[digits:])
+					break
 				}
 			}
 		}
+	}
+	if n.row < 0 {
+		n.row = n.base
 	}
 	for k := 0; k < len(name) && n.count < 4; {
 		if name[k] < '0' || name[k] > '9' {
@@ -162,6 +167,19 @@ sfz_name :: proc(name: string) -> (n: Sfz_Name) {
 	return
 }
 
+// The opcode a CC's form moves, as its own name reads (cutoff_oncc1:
+// cutoff; lfo1_freq_oncc2: lfo1_freq); n itself when it is none.
+sfz_moved :: proc(n: Sfz_Name) -> Sfz_Name {
+	if n.base < 0 {
+		return n
+	}
+	m := Sfz_Name{row = n.base, base = -1, count = max(n.count - 1, 0)}
+	for i in 0 ..< m.count {
+		m.numbers[i] = n.numbers[i]
+	}
+	return m
+}
+
 // A name's row: an exact name's from SFZ_EXACT, else the first pattern (N,
 // X, Y) it matches.
 @(private = "file")
@@ -171,6 +189,19 @@ sfz_row_of :: proc(name: string) -> int {
 	}
 	for i in SFZ_PATTERNS {
 		if sfz_name_matches(SFZ_OPCODES[i].name, name) {
+			return i
+		}
+	}
+	return -1
+}
+
+// The row the reference names `name` (a pattern's too: loccN). -1: none.
+sfz_row_named :: proc(name: string) -> int {
+	if row, found := SFZ_EXACT[name]; found {
+		return row
+	}
+	for i in SFZ_PATTERNS {
+		if SFZ_OPCODES[i].name == name {
 			return i
 		}
 	}
@@ -685,6 +716,17 @@ sfz_value :: proc(s: ^Sfz, region: int, name: string) -> (string, bool) {
 	sp := s.regions[region].opcodes
 	#reverse for op in s.opcodes[sp.first:base.span_end(sp)] {
 		if op.name == name {
+			return op.value, true
+		}
+	}
+	return "", false
+}
+
+// The value a region gives the opcode read as `n` (the last written).
+sfz_value_of :: proc(s: ^Sfz, region: int, n: Sfz_Name) -> (string, bool) {
+	sp := s.regions[region].opcodes
+	#reverse for op in s.opcodes[sp.first:base.span_end(sp)] {
+		if op.read == n {
 			return op.value, true
 		}
 	}

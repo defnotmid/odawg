@@ -44,14 +44,57 @@ sfz_cc_curve :: proc(s: ^Sfz, index: int, x: f64) -> f64 {
 	return x
 }
 
+// The reference's rows compiling reads by their pattern: a run of opcodes,
+// a number each (locc64: CC 64's).
+@(private = "file")
+Sfz_Pattern :: enum {
+	Locc,
+	Hicc,
+	Xfin_Locc,
+	Xfin_Hicc,
+	Xfout_Locc,
+	Xfout_Hicc,
+	Amp_Velcurve,
+}
+
+@(private = "file")
+SFZ_PATTERN_NAMES := [Sfz_Pattern]string {
+	.Locc         = "loccN",
+	.Hicc         = "hiccN",
+	.Xfin_Locc    = "xfin_loccN",
+	.Xfin_Hicc    = "xfin_hiccN",
+	.Xfout_Locc   = "xfout_loccN",
+	.Xfout_Hicc   = "xfout_hiccN",
+	.Amp_Velcurve = "amp_velcurve_N",
+}
+
 // What compiling reads of a region: the instrument, its CC values, the
-// opcodes it read (so the rest are findings).
+// opcodes it read (so the rest are findings): a row read whole (an exact
+// name, every CC moving it too; a pattern), or one opcode of a row (lfo1_freq
+// of lfoN_freq), as the reader names them.
 @(private = "file")
 Sfz_Compile :: struct {
 	s:         ^Sfz,
 	cc:        [128]f32,
-	read:      map[string]bool, // opcode names (as the reference spells them) read
+	rows_read: []bool, // by row of SFZ_OPCODES
+	read:      map[Sfz_Name]bool,
+	patterns:  [Sfz_Pattern]int, // their rows
 	overrides: map[string]f64, // opcodes the row sets for every region (the Sampler form's attack, release)
+}
+
+// `name` read: its row whole when it is the row's own name, else that one
+// opcode of it.
+@(private = "file")
+mark :: proc(c: ^Sfz_Compile, name: string) -> Sfz_Name {
+	n := sfz_name(name)
+	if n.row >= 0 {
+		if SFZ_OPCODES[n.row].name == name {
+			c.rows_read[n.row] = true
+		} else {
+			c.read[n] = true
+		}
+	}
+	return n
 }
 
 // `name`'s value in the region (its default when it gives none), plus what
@@ -59,25 +102,29 @@ Sfz_Compile :: struct {
 // CC through name_curveccN's curve).
 @(private = "file")
 param :: proc(c: ^Sfz_Compile, region: int, name: string, fallback: f64) -> f64 {
-	c.read[name] = true
+	id := mark(c, name)
 	if v, given := c.overrides[name]; given {
 		return v
 	}
 	v := sfz_number(c.s, region, name, fallback)
-	row := sfz_name(name).row
-	if row < 0 {
+	if id.row < 0 {
 		return v
 	}
 	sp := c.s.regions[region].opcodes
-	for op in c.s.opcodes[sp.first:base.span_end(sp)] {
+	ops := c.s.opcodes[sp.first:base.span_end(sp)]
+	for op in ops {
 		n := op.read
-		if n.row != row || n.mod != .On || n.cc < 0 || n.cc >= 128 {
+		if n.mod != .On || n.cc < 0 || n.cc >= 128 || sfz_moved(n) != id {
 			continue
 		}
 		amount, _ := strconv.parse_f64(op.value)
+		// its curve: name_curveccN (the last written)
 		curve := 0
-		if cv, found := sfz_value(c.s, region, strings.concatenate({name, "_curvecc", op.name[strings.last_index_any(op.name, "abcdefghijklmnopqrstuvwxyz") + 1:]}, context.temp_allocator)); found {
-			curve, _ = strconv.parse_int(cv)
+		#reverse for x in ops {
+			if x.read.mod == .Curve && x.read.cc == n.cc && sfz_moved(x.read) == id {
+				curve, _ = strconv.parse_int(x.value)
+				break
+			}
 		}
 		v += amount * sfz_cc_curve(c.s, curve, f64(c.cc[n.cc]) / 127)
 	}
@@ -86,14 +133,14 @@ param :: proc(c: ^Sfz_Compile, region: int, name: string, fallback: f64) -> f64 
 
 @(private = "file")
 key_of :: proc(c: ^Sfz_Compile, region: int, name: string, fallback: int) -> int {
-	c.read[name] = true
+	mark(c, name)
 	v, found := sfz_value(c.s, region, name)
 	return found ? sfz_key(c.s, v, fallback) : fallback
 }
 
 @(private = "file")
 text_of :: proc(c: ^Sfz_Compile, region: int, name: string) -> (string, bool) {
-	c.read[name] = true
+	mark(c, name)
 	return sfz_value(c.s, region, name)
 }
 
@@ -102,17 +149,18 @@ text_of :: proc(c: ^Sfz_Compile, region: int, name: string) -> (string, bool) {
 cc_conditions :: proc(c: ^Sfz_Compile, region: int) -> bool {
 	sp := c.s.regions[region].opcodes
 	for op in c.s.opcodes[sp.first:base.span_end(sp)] {
-		if !strings.has_prefix(op.name, "locc") && !strings.has_prefix(op.name, "hicc") {
+		lo := op.read.row == c.patterns[.Locc]
+		if !lo && op.read.row != c.patterns[.Hicc] {
 			continue
 		}
-		c.read[op.name[:4] == "locc" ? "loccN" : "hiccN"] = true
-		cc, ok := strconv.parse_int(op.name[4:])
-		if !ok || cc < 0 || cc >= 128 {
+		c.rows_read[op.read.row] = true
+		cc := op.read.numbers[0]
+		if cc < 0 || cc >= 128 {
 			continue
 		}
 		bound, _ := strconv.parse_f64(op.value)
 		v := f64(c.cc[cc])
-		if (op.name[:4] == "locc" && v < bound) || (op.name[:4] == "hicc" && v > bound) {
+		if (lo && v < bound) || (!lo && v > bound) {
 			return false
 		}
 	}
@@ -173,9 +221,13 @@ lfo_wave :: proc(n: int) -> string {
 // region with a sample, in order), `cc` the values its CCs sit at.
 sfz_program_desc :: proc(s: ^Sfz, set: i32, cc: [128]f32, path: string, findings: ^base.Findings, overrides: map[string]f64 = nil) -> ^device.Program_Desc {
 	c := Sfz_Compile{s = s, cc = cc, overrides = overrides}
-	c.read = make(map[string]bool, context.temp_allocator)
+	c.rows_read = make([]bool, len(SFZ_OPCODES), context.temp_allocator)
+	c.read = make(map[Sfz_Name]bool, context.temp_allocator)
+	for name, p in SFZ_PATTERN_NAMES {
+		c.patterns[p] = sfz_row_named(name)
+	}
 	for k in ([]string{"sample", "region_label", "group_label", "master_label", "global_label", "sw_label", "key", "lokey", "hikey", "pitch_keycenter"}) {
-		c.read[k] = true
+		mark(&c, k)
 	}
 	desc := new(device.Program_Desc, context.temp_allocator)
 	desc.path, desc.out = path, "out"
@@ -449,7 +501,7 @@ sfz_region_desc :: proc(c: ^Sfz_Compile, r: int, set: i32, zone: int, sample: st
 		cutoff_name := k == 0 ? "cutoff" : "cutoff2"
 		type_name := k == 0 ? "fil_type" : "fil2_type"
 		if _, has := sfz_value(s, r, cutoff_name); !has {
-			c.read[cutoff_name] = true
+			mark(c, cutoff_name)
 			continue
 		}
 		t, _ := text_of(c, r, type_name)
@@ -706,26 +758,30 @@ cc_crossfade :: proc(c: ^Sfz_Compile, r: int) -> f64 {
 	}
 	sp := c.s.regions[r].opcodes
 	for op in c.s.opcodes[sp.first:base.span_end(sp)] {
-		for prefix in ([]string{"xfin_locc", "xfout_locc"}) {
-			if !strings.has_prefix(op.name, prefix) {
-				continue
-			}
-			cc, ok := strconv.parse_int(op.name[len(prefix):])
-			if !ok || cc < 0 || cc >= 128 {
-				continue
-			}
-			c.read[strings.concatenate({prefix, "N"}, context.temp_allocator)] = true
-			hi_name := strings.concatenate({prefix[:len(prefix) - 4], "hicc", op.name[len(prefix):]}, context.temp_allocator)
-			c.read[strings.concatenate({prefix[:len(prefix) - 4], "hiccN"}, context.temp_allocator)] = true
-			lo, _ := strconv.parse_f64(op.value)
-			hi := sfz_number(c.s, r, hi_name, lo)
-			x := f64(c.cc[cc])
-			t := hi > lo ? clamp((x - lo) / (hi - lo), 0, 1) : (x >= hi ? 1 : 0)
-			if strings.has_prefix(prefix, "xfout") {
-				t = 1 - t
-			}
-			g *= power ? math.sqrt(t) : t
+		// xfin_locc64 (and its xfin_hicc64), or xfout's
+		fade_out := op.read.row == c.patterns[.Xfout_Locc]
+		if !fade_out && op.read.row != c.patterns[.Xfin_Locc] {
+			continue
 		}
+		cc := op.read.numbers[0]
+		if cc < 0 || cc >= 128 {
+			continue
+		}
+		hi_row := c.patterns[fade_out ? .Xfout_Hicc : .Xfin_Hicc]
+		c.rows_read[op.read.row], c.rows_read[hi_row] = true, true
+		lo, _ := strconv.parse_f64(op.value)
+		hi := lo
+		if v, found := sfz_value_of(c.s, r, Sfz_Name{row = hi_row, base = -1, numbers = {cc, 0, 0, 0}, count = 1}); found {
+			if h, ok := strconv.parse_f64(v); ok {
+				hi = h
+			}
+		}
+		x := f64(c.cc[cc])
+		t := hi > lo ? clamp((x - lo) / (hi - lo), 0, 1) : (x >= hi ? 1 : 0)
+		if fade_out {
+			t = 1 - t
+		}
+		g *= power ? math.sqrt(t) : t
 	}
 	return g
 }
@@ -741,9 +797,9 @@ velocity_table :: proc(c: ^Sfz_Compile, r: int) -> (table: []f32, plain: bool) {
 	any_given := false
 	sp := c.s.regions[r].opcodes
 	for op in c.s.opcodes[sp.first:base.span_end(sp)] {
-		if strings.has_prefix(op.name, "amp_velcurve_") {
-			c.read["amp_velcurve_N"] = true
-			if k, ok := strconv.parse_int(op.name[len("amp_velcurve_"):]); ok && k >= 0 && k < 128 {
+		if op.read.row == c.patterns[.Amp_Velcurve] {
+			c.rows_read[op.read.row] = true
+			if k := op.read.numbers[0]; k >= 0 && k < 128 {
 				v, _ := strconv.parse_f64(op.value)
 				points[k], given[k], any_given = f32(v), true, true
 			}
@@ -845,15 +901,19 @@ sfz_findings :: proc(c: ^Sfz_Compile, path: string, findings: ^base.Findings) {
 				continue // not in the reference: the reader's finding
 			}
 			row := SFZ_OPCODES[n.row]
-			if c.read[row.name] || c.read[op.name] || row.status == .Info || n.mod == .Smooth || n.mod == .Step {
+			if c.rows_read[n.row] || c.read[n] || row.status == .Info || n.mod == .Smooth || n.mod == .Step {
 				continue
 			}
 			if n.mod == .Curve {
 				continue // a curve read with the modulation it shapes
 			}
-			key := n.mod == .On ? strings.concatenate({row.name, " (by a CC)"}, context.temp_allocator) : row.name
-			if n.mod == .On && c.read[row.name] {
-				continue
+			key := row.name
+			if n.base >= 0 {
+				// a CC's form: read with the opcode it moves
+				if c.rows_read[n.base] || c.read[sfz_moved(n)] {
+					continue
+				}
+				key = strings.concatenate({SFZ_OPCODES[n.base].name, " (by a CC)"}, context.temp_allocator)
 			}
 			u, seen := unread[key]
 			if !seen {
