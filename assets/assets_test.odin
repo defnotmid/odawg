@@ -225,10 +225,10 @@ test_register_sanity :: proc(t: ^testing.T) {
 		testing.expect(t, s.zones.count > 0 && base.span_end(s.zones) <= i32(len(ZONE_TABLE)))
 		zones := set_zones(&s)
 		for &z, i in zones {
-			f, ok := file_row_from_path(s.source, z.path)
+			f, ok := file_index_from_path(s.source, z.path)
 			testing.expectf(t, ok, "%s: %s isn't pinned", s.name, z.path)
 			if ok {
-				used[intrinsics_index(f)] = true
+				used[f] = true
 			}
 			testing.expect(t, z.lo_key <= z.hi_key && z.lo_velocity <= z.hi_velocity && z.hi_velocity <= 127)
 			// zones that overlap answer the same keys and velocities (a round robin)
@@ -282,11 +282,6 @@ test_register_sanity :: proc(t: ^testing.T) {
 	testing.expect_value(t, file_url(&f), "https://raw.githubusercontent.com/sgossner/VSCO-2-CE/440300901dfe9275fd84e0b7763af1f8443ae62e/Strings/Violin%20Section/susVib/VlnEns_susVib_F%233_v1.wav")
 }
 
-@(private = "file")
-intrinsics_index :: proc(f: ^File_Row) -> int {
-	return int((uintptr(f) - uintptr(&FILE_TABLE[0])) / size_of(File_Row))
-}
-
 // ---- loading into a bank (no network) ------------------------------------------------
 
 @(private = "file")
@@ -310,8 +305,8 @@ test_load_set :: proc(t: ^testing.T) {
 	testing.expect(t, ok)
 	frames := 2205 // 50 ms
 	for &z in set_zones(s) {
-		f, _ := file_row_from_path(s.source, z.path)
-		path := file_path(root, f)
+		f, _ := file_index_from_path(s.source, z.path)
+		path := file_path(root, &FILE_TABLE[f])
 		os.make_directory_all(filepath.dir(path))
 		werr := os.write_entire_file(path, wav_write({format = 1, bits = 24, channels = 1, rate = 44100}, frames, 220))
 		testing.expect(t, werr == nil)

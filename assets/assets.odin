@@ -204,10 +204,11 @@ ensure_pinned :: proc(path, url, sha256: string, size: i64, verify := false) -> 
 set_files :: proc(s: ^Set_Row, allocator := context.temp_allocator) -> (files: [dynamic]^File_Row, err: Error) {
 	files = make([dynamic]^File_Row, allocator)
 	for &z in set_zones(s) {
-		f, ok := file_row_from_path(s.source, z.path)
+		i, ok := file_index_from_path(s.source, z.path)
 		if !ok {
 			return files, fmt.tprintf("%s: %s is not pinned", s.name, z.path)
 		}
+		f := &FILE_TABLE[i]
 		seen := false
 		for g in files {
 			if g == f {

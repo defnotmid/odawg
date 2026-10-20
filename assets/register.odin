@@ -155,15 +155,6 @@ set_row_from_name :: proc(name: string) -> (^Set_Row, bool) {
 	return nil, false
 }
 
-file_row_from_path :: proc(source: Source, path: string) -> (^File_Row, bool) {
-	for &f in FILE_TABLE {
-		if f.source == source && f.path == path {
-			return &f, true
-		}
-	}
-	return nil, false
-}
-
 file_index_from_path :: proc(source: Source, path: string) -> (i32, bool) {
 	for f, i in FILE_TABLE {
 		if f.source == source && f.path == path {
