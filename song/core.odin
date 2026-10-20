@@ -54,8 +54,8 @@ Marker :: struct {
 	beat, seconds: f64,
 }
 
-// Where a track is let through: from `start` to `stop` seconds (stop <=
-// start: always), fading in and out over its edges with `curve`.
+// Where a placed song is let through: from `start` to `stop` seconds (stop
+// <= start: always), fading in and out over its edges with `curve`.
 Window :: struct {
 	start, stop:       f64,
 	fade_in, fade_out: f64,
@@ -92,8 +92,7 @@ Track :: struct {
 	pan_law:    Pan_Law,
 	voice:      bool, // speech: what a spans sidechain ducks under
 	muted:      bool, // heard by nothing (still ducking the ducked: one track heard alone)
-	window:     Window, // where it is let through, with fades (a placed song's)
-	room:       f64, // dB it dips by where the song makes room
+	room:       f64, // dB it dips by where its song makes room
 	pad_gains:  [PAD_GAINS]Pad_Gain, // pads at a level of their own (Pad_Gain_Set)
 	chain:      Span, // into chain: its effects in order
 	sends:      Span, // into sends
@@ -142,6 +141,32 @@ Return :: struct {
 	chain: Span,
 }
 
+// A song where it plays (its own, composed; or placed in a mix by
+// append_song): the rows it owns, where its clock starts on the song's,
+// and what its node does to everything it plays (the graph's .Song node,
+// between its parts, returns and buses and the master): its level (the
+// spec's gain, and a placement's), a duck under the voice (a spans
+// sidechain; .None: none) and a window. Its effects keep its clock: a
+// placed song sounds as it does alone.
+Placement :: struct {
+	name:    string, // the song's, or what a mix calls it ("score")
+	at:      f64, // seconds its clock starts on this one
+	gain_db: f64,
+	duck:    Sidechain,
+	window:  Window,
+	tracks:  Span,
+	parts:   Span,
+	returns: Span,
+	buses:   Span,
+}
+
+// A stretch where a placed song makes room (its parts dip by their room
+// dB, ramping in and out): its own spans, or the host's for it (a mix).
+Room_Span :: struct {
+	placement:   i32, // into placements
+	start, stop: f64, // song seconds
+}
+
 // Where a part is triggered: an entry (the spec's own, or its style's in a
 // section) over a range of the song, or a transition's sound. The song is
 // its parts' regions: a part sounds only in them (and their tails), and
@@ -169,6 +194,10 @@ Note_Row :: struct {
 	keyswitch:      u8, // 1 + the last keyswitch key before it (0: none)
 	legato:         bool, // another note of its track is held when it starts
 	level:          f32, // a gain on it (0: 1)
+	// its draws, from its song's seed, its part and variant, its time,
+	// pitch and pad as the song composed them (note_seed): the same in a
+	// mix, where the song is moved, renamed and seeded otherwise
+	seed:           u64,
 }
 
 // A note row as the engine and the devices read it.
@@ -177,11 +206,18 @@ note_of :: proc(s: ^Song, i: int) -> device.Note {
 	return {n.time, n.duration, n.pitch, n.velocity, n.pad, n.accent, n.kind, n.round, n.keyswitch, n.legato, n.level}
 }
 
+// A composed note's seed: its track's (the song's seed, its part and
+// variant), then its time, pitch and pad (the same from a seek).
+note_seed :: proc(s: ^Song, t: Track, n: Note_Row) -> u64 {
+	track := base.hash_combine(s.seed, base.hash_combine(base.hash_string(s.parts[t.part]), base.hash_string(t.variant)))
+	return base.hash_combine(track, base.hash_combine(u64(n.time * base.RATE + 0.5), u64(n.pitch * 100) ~ u64(n.pad) << 32))
+}
+
 Song :: struct {
 	name:     string,
 	start:    f64, // on the outside clock
 	duration: f64, // seconds to the end of the last section
-	gain_db:  f64, // the spec's: in every track's level
+	gain_db:  f64, // the spec's: its placement's level
 	key:      theory.Key,
 	seed:     u64,
 	tempo:    tempo.Tempo_Map,
@@ -207,10 +243,11 @@ Song :: struct {
 	edges:    [dynamic]Edge, // by `to`, then `from`
 	notes:    #soa[dynamic]Note_Row, // by track, then time
 	by_time:  [dynamic]i32, // notes in time order
-	room:     [dynamic][2]f64, // song seconds
+	room:     [dynamic]Room_Span,
 	// Or where a sound the host places plays, by name ("voice"): a mix the
 	// song joins adds its spans to `room` (append_song's caller).
 	room_from: string,
+	placements: [dynamic]Placement, // the songs it plays (its own: one)
 	voices:   [dynamic][2]f64, // the voice tracks' spans, sorted (a spans sidechain ducks under them)
 	sidechains: [dynamic]Sidechain,
 	// The master: its gain, then its chain (into chain; a mix's limiter).
@@ -266,7 +303,7 @@ song_from_spec :: proc(s: ^spec.Spec, out: ^Song, bank: ^device.Bank = nil) -> b
 	}
 	out.room_from = s.room_from
 	for span in s.room {
-		append(&out.room, [2]f64{span[0] - s.start, span[1] - s.start})
+		append(&out.room, Room_Span{0, span[0] - s.start, span[1] - s.start})
 	}
 	work: Work
 	work.notes = make([dynamic][dynamic]Note_Row, context.temp_allocator)
@@ -275,6 +312,11 @@ song_from_spec :: proc(s: ^spec.Spec, out: ^Song, bank: ^device.Bank = nil) -> b
 	layered_notes(out, &work)
 	index_notes(out, &work)
 	sort_regions(out)
+	append(&out.placements, Placement {
+		name = out.name, gain_db = out.gain_db,
+		tracks = {0, i32(len(out.tracks))}, parts = {0, i32(len(out.parts))},
+		returns = {0, i32(len(out.returns))}, buses = {0, i32(len(out.buses))},
+	})
 	graph_build(out)
 	return true
 }

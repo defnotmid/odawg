@@ -76,10 +76,7 @@ FILTER_CHOICES := []string{"lowpass", "highpass", "bandpass", "lowshelf", "highs
 NOISE_CHOICES := []string{"white", "pink", "brown"}
 CURVE_CHOICES := []string{"linear", "equal_power"}
 
-Curve :: enum u8 {
-	Linear,
-	Equal_Power,
-}
+Curve :: dsp.Curve
 
 PARAM_TABLE := [Param]Param_Row {
 	.None                           = {"", .Number, nil},

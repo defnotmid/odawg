@@ -1,5 +1,6 @@
 package odawg_dsp
 
+import "core:math"
 import "core:testing"
 
 // Tone's envelope: a linear attack, a decay approaching the sustain (not
@@ -7,7 +8,11 @@ import "core:testing"
 // to nothing by its time; the same samples however the run is cut.
 @(test)
 test_envelope_curves :: proc(t: ^testing.T) {
-	envelope :: proc() -> Adsr {return {attack = 0.01, decay = 0.2, sustain = 0.5, release = 0.3, stage = .Attack}}
+	envelope :: proc() -> Adsr {
+		e := Adsr{attack = 0.01, decay = 0.2, sustain = 0.5, release = 0.3}
+		adsr_init(&e)
+		return e
+	}
 	whole := make([]f32, int(0.8 * RATE), context.temp_allocator)
 	e := envelope()
 	adsr_run(&e, whole, int(0.4 * RATE))
@@ -36,11 +41,12 @@ test_envelope_curves :: proc(t: ^testing.T) {
 	}
 }
 
-// adsr_run's spans give the samples of stepping every one (adsr_step), bit
+// The stage table gives the samples of Tone's envelope stepped a sample at a
+// time (the state machine below, the envelope as it was first written), bit
 // for bit: every stage, each kind of attack, the gate closing in each stage,
 // however the run is cut.
 @(test)
-test_envelope_spans :: proc(t: ^testing.T) {
+test_envelope_stages :: proc(t: ^testing.T) {
 	shapes := []Adsr {
 		{attack = 0.01, decay = 0.2, sustain = 0.5, release = 0.3},
 		{attack = 0.3, decay = 0, sustain = 1, release = 0.05},
@@ -53,23 +59,15 @@ test_envelope_spans :: proc(t: ^testing.T) {
 	length := int(1.2 * RATE)
 	for shape, k in shapes {
 		for gate in ([]int{0, 100, 500, int(0.02 * RATE), int(0.15 * RATE), int(0.6 * RATE), length + 10}) {
-			start :: proc(shape: Adsr) -> Adsr {
-				e := shape
-				e.stage, e.from = e.delay > 0 ? .Delay : .Attack, e.start
-				return e
-			}
 			want := make([]f32, length, context.temp_allocator)
-			x := start(shape)
-			adsr_begin(&x)
+			x := Stepped{adsr = shape}
 			for i in 0 ..< length {
-				if i == gate {
-					adsr_release(&x)
-				}
-				want[i] = adsr_step(&x)
+				want[i] = stepped_sample(&x, i == gate)
 			}
 			for step in ([]int{1, 7, 256, 300, length}) {
 				got := make([]f32, length, context.temp_allocator)
-				e := start(shape)
+				e := shape
+				adsr_init(&e)
 				for at := 0; at < length; at += step {
 					end := min(at + step, length)
 					rel := gate - at
@@ -86,4 +84,105 @@ test_envelope_spans :: proc(t: ^testing.T) {
 			}
 		}
 	}
+}
+
+// The envelope stepped a sample at a time, every stage a branch: the
+// reference the stage table is held to.
+@(private = "file")
+Stepped :: struct {
+	adsr:    Adsr,
+	started: bool,
+	length:  f64,
+	inv_tc:  f32,
+	v90:     f32,
+}
+
+@(private = "file")
+stepped_sample :: proc(x: ^Stepped, gate_closes: bool) -> f32 {
+	e := &x.adsr
+	set :: proc(x: ^Stepped, ramp, target: f32) {
+		r := f64(ramp)
+		x.length = r * RATE
+		if r <= 0 {
+			return
+		}
+		tc := math.ln(r + 1) / math.ln(f64(200))
+		x.inv_tc = f32(1 / (tc * RATE))
+		x.v90 = f32(f64(target) + f64(x.adsr.from - target) * math.exp(-0.9 * r / tc))
+	}
+	value :: proc(x: ^Stepped, target: f32) -> (f32, bool) {
+		k := x.adsr.samples
+		v := f64(k)
+		if v >= x.length {
+			return target, true
+		}
+		if v < 0.9 * x.length {
+			return target + (x.adsr.from - target) * exp_decay(-f32(k) * x.inv_tc), false
+		}
+		return f32(f64(x.v90) + (f64(target) - f64(x.v90)) * (v - 0.9 * x.length) / (0.1 * x.length)), false
+	}
+	if !x.started {
+		x.started = true
+		e.stage, e.from = e.delay > 0 ? .Delay : .Attack, e.start
+		if e.stage == .Attack && e.exponential_attack {
+			set(x, e.attack, 1)
+		}
+	}
+	if gate_closes && e.stage != .Idle {
+		e.stage, e.samples, e.from = .Release, 0, e.value
+		set(x, e.release, 0)
+	}
+	done: bool
+	switch e.stage {
+	case .Idle:
+		e.value = 0
+	case .Delay:
+		e.value = 0
+		if f64(e.samples) >= f64(e.delay) * RATE {
+			e.stage, e.samples, e.from = .Attack, 0, e.start
+			x.length = 0
+			if e.exponential_attack {
+				set(x, e.attack, 1)
+			}
+			e.value = e.start
+		}
+	case .Attack:
+		a := f64(e.attack)
+		tt := f64(e.samples) / RATE
+		if e.exponential_attack {
+			e.value, done = value(x, 1)
+		} else if tt >= a {
+			e.value, done = 1, true
+		} else {
+			e.value = e.from + (1 - e.from) * f32(tt / a)
+		}
+		if done {
+			if e.hold > 0 {
+				e.stage, e.samples = .Hold, 0
+			} else {
+				e.stage, e.samples, e.from = .Decay, 0, 1
+				set(x, e.decay, e.sustain)
+			}
+		}
+	case .Hold:
+		e.value = 1
+		if f64(e.samples) >= f64(e.hold) * RATE {
+			e.stage, e.samples, e.from = .Decay, 0, 1
+			set(x, e.decay, e.sustain)
+		}
+	case .Decay:
+		e.value, done = value(x, e.sustain)
+		if done {
+			e.stage = .Sustain
+		}
+	case .Sustain:
+		e.value = e.sustain
+	case .Release:
+		e.value, done = value(x, 0)
+		if done {
+			e.stage, e.value = .Idle, 0
+		}
+	}
+	e.samples += 1
+	return e.value
 }

@@ -176,7 +176,7 @@ part_from_path :: proc(s: ^Song, path: string) -> (part: int, rest: string) {
 @(private = "file")
 part_gain :: proc(s: ^Song, tracks: []int, db: f64, step: bool) -> bool {
 	for ti in tracks {
-		s.tracks[ti].gain_db = step ? s.tracks[ti].gain_db + db : db + s.gain_db
+		s.tracks[ti].gain_db = step ? s.tracks[ti].gain_db + db : db
 	}
 	return len(tracks) > 0
 }

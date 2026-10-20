@@ -168,7 +168,8 @@ nodes_init :: proc "contextless" () {
 
 CURVE_NAMES := []string{"linear", "exponential"}
 
-// A per-node draw from the note's seed (the same however the song is cut).
+// A per-node draw from the note's seed and the node's name (its identity in
+// its instrument: the same however the song is cut, or nodes are added).
 @(private = "file")
 node_seed :: #force_inline proc "contextless" (c: ^Node_Call, lane: ^Lane, salt: u64 = 0) -> u64 {
 	return base.hash_combine(base.hash_combine(lane.seed, u64(c.node.name)), salt)
@@ -339,13 +340,10 @@ process_env :: proc(c: ^Node_Call) {
 			s^ = {
 				attack = max(node_value(c, &lane, 3), 0), decay = max(node_value(c, &lane, 4), 0),
 				sustain = clamp(node_value(c, &lane, 5), 0, 1), release = max(node_value(c, &lane, 6), 0),
-				exponential_attack = node_values(c, &lane)[7] == 1, stage = .Attack,
+				exponential_attack = node_values(c, &lane)[7] == 1,
 				delay = max(node_value(c, &lane, 8), 0), hold = max(node_value(c, &lane, 9), 0), start = clamp(node_value(c, &lane, 10), 0, 1),
 			}
-			if s.delay > 0 {
-				s.stage = .Delay
-			}
-			s.from = s.start
+			dsp.adsr_init(s)
 		}
 		l, _ := node_out(c, &lane)
 		dsp.adsr_run(s, l, lane.release)
@@ -1008,15 +1006,13 @@ tail_sampler_node :: proc(c: ^Node_Call, lane: ^Lane) -> f64 {
 // A clip played as recorded (Tone's Player; onimite's track, sample for
 // sample: its envelope is onimite's track_envelope): the first sample of
 // bank set `set`, from `offset` seconds in, for the note's gate, with fades
-// in and out (each at least DECLICK, so nothing clicks) of `curve`'s shape,
+// in and out of `curve`'s shape (dsp.edge_fade: at least a declick where it
+// cuts into its file),
 // `mono` folding the sides together, at `rate` (a tape's: 2 plays twice as
 // fast an octave up, -1 backwards from `offset`; beyond the recording's
 // ends, silence) through the Sampler's kernel. Its output is a function of
 // where the note is (a seek jumps there): sample k of the note reads frame
 // offset + k * rate, never a sum of steps. The fades are the note's.
-
-// The shortest fade a clip starts and ends with: 3 ms.
-DECLICK :: RATE * 3 / 1000
 
 CLIP_SET :: 3
 CLIP_OFFSET :: 4
@@ -1055,12 +1051,16 @@ clip_run :: proc(v: ^[MAX_FIELDS]f32, lane: ^Lane, data: []$T, channels: int, sc
 	frames := i64(len(data) / channels)
 	first := i64(math.round(f64(v[CLIP_OFFSET]) * RATE))
 	length := lane.gate
-	fade_in := max(i64(math.round(f64(v[CLIP_FADE_IN]) * RATE)), DECLICK)
-	fade_out := max(i64(math.round(f64(v[CLIP_FADE_OUT]) * RATE)), DECLICK)
+	rate := f64(v[CLIP_RATE])
+	// its edges cut into the file unless it starts at the file's first frame
+	// and ends at its last or past it
+	last := f64(first) + f64(length) * rate
+	fade_in := dsp.edge_fade(i64(math.round(f64(v[CLIP_FADE_IN]) * RATE)), first > 0)
+	fade_out := dsp.edge_fade(i64(math.round(f64(v[CLIP_FADE_OUT]) * RATE)), last > 0 && last < f64(frames))
 	curve := Curve(clamp(int(v[CLIP_CURVE]), 0, len(Curve) - 1))
 	mono := v[CLIP_MONO] > 0.5
 	right := channels > 1 ? 1 : 0
-	if rate := f64(v[CLIP_RATE]); rate != 1 {
+	if rate != 1 {
 		clip_run_rate(data, channels, scale, frames, first, rate, length, fade_in, fade_out, curve, mono, lane.at, l, r)
 		return
 	}
@@ -1070,7 +1070,7 @@ clip_run :: proc(v: ^[MAX_FIELDS]f32, lane: ^Lane, data: []$T, channels: int, sc
 		if k >= length || src < 0 || src >= frames {
 			continue
 		}
-		g := fade_gain(k, fade_in, curve) * fade_gain(length - 1 - k, fade_out, curve)
+		g := dsp.fade_gain(k, fade_in, curve) * dsp.fade_gain(length - 1 - k, fade_out, curve)
 		a := f32(data[src * i64(channels)]) * scale
 		b := f32(data[src * i64(channels) + i64(right)]) * scale
 		if mono {
@@ -1096,7 +1096,7 @@ clip_run_rate :: proc(data: []$T, channels: int, scale: f32, frames, first: i64,
 			continue
 		}
 		a, b := sinc_frame(data, i64(channels), right, frames, pos, cutoff, taps, scale)
-		g := fade_gain(k, fade_in, curve) * fade_gain(length - 1 - k, fade_out, curve)
+		g := dsp.fade_gain(k, fade_in, curve) * dsp.fade_gain(length - 1 - k, fade_out, curve)
 		if mono {
 			a = a * 0.70710678 + b * 0.70710678
 			b = a
@@ -1104,16 +1104,6 @@ clip_run_rate :: proc(data: []$T, channels: int, scale: f32, frames, first: i64,
 		l[i] = a * g
 		r[i] = b * g
 	}
-}
-
-// Gain 0..1 `k` samples into a fade of `length` samples.
-@(private = "file")
-fade_gain :: #force_inline proc "contextless" (k, length: i64, curve: Curve) -> f32 {
-	if length <= 0 || k >= length {
-		return 1
-	}
-	t := f32(max(k, 0)) / f32(length)
-	return curve == .Equal_Power ? math.sin(t * math.PI / 2) : t
 }
 
 @(private = "file")

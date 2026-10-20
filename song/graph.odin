@@ -14,20 +14,21 @@ import base "../base"
 //
 // Composing builds the default routing (graph_build): each track into its
 // part, its sends into their returns, the parts and the returns into the
-// master. Nodes are laid out tracks, parts, returns, buses, master, so a
-// part's node is `len(tracks) + part`.
+// master. Nodes are laid out tracks, parts, returns, buses, songs (the
+// placements'), master, so a part's node is `len(tracks) + part`.
 
 Node_Kind :: enum u8 {
 	Track,
 	Part,
 	Return,
 	Bus,
+	Song, // a placement's: what its song plays, at its level, ducked, windowed
 	Master,
 }
 
 Node :: struct {
 	kind: Node_Kind,
-	ref:  i32, // Track: into tracks; Part: into parts; Return: into returns; Bus: into buses
+	ref:  i32, // Track: into tracks; Part: into parts; Return: into returns; Bus: into buses; Song: into placements
 }
 
 // A node's effects, read from what it stands for (never copied: a chain
@@ -37,7 +38,42 @@ NODE_CHAIN := [Node_Kind]proc(s: ^Song, ref: i32) -> Span {
 	.Part   = proc(s: ^Song, ref: i32) -> Span {return {}},
 	.Return = proc(s: ^Song, ref: i32) -> Span {return s.returns[ref].chain},
 	.Bus    = proc(s: ^Song, ref: i32) -> Span {return s.buses[ref].chain},
+	.Song   = proc(s: ^Song, ref: i32) -> Span {return {}},
 	.Master = proc(s: ^Song, ref: i32) -> Span {return s.master},
+}
+
+// The rows of a kind a placement owns (a song node is its own; the master
+// is no song's).
+PLACEMENT_ROWS := [Node_Kind]proc(pl: Placement) -> Span {
+	.Track  = proc(pl: Placement) -> Span {return pl.tracks},
+	.Part   = proc(pl: Placement) -> Span {return pl.parts},
+	.Return = proc(pl: Placement) -> Span {return pl.returns},
+	.Bus    = proc(pl: Placement) -> Span {return pl.buses},
+	.Song   = proc(pl: Placement) -> Span {return {}},
+	.Master = proc(pl: Placement) -> Span {return {}},
+}
+
+// The placement node k plays in (into placements; -1: none, a clip's or the
+// master).
+node_placement :: proc(s: ^Song, k: int) -> i32 {
+	nd := s.nodes[k]
+	if nd.kind == .Song {
+		return nd.ref
+	}
+	for pl, i in s.placements {
+		rows := PLACEMENT_ROWS[nd.kind](pl)
+		if nd.ref >= rows.first && nd.ref < base.span_end(rows) {
+			return i32(i)
+		}
+	}
+	return -1
+}
+
+// Where a node's output goes unless routed: its placement's node, or the
+// master.
+node_out :: proc(s: ^Song, k: int) -> i32 {
+	pl := node_placement(s, k)
+	return pl >= 0 ? song_node(s, int(pl)) : master_node(s)
 }
 
 node_chain :: proc(s: ^Song, k: int) -> Span {
@@ -74,7 +110,10 @@ Route :: struct {
 }
 
 // Builds the default routing from the tracks, their sends and the returns
-// (and the spec's buses, routed by graph_route).
+// (and the spec's buses, routed by graph_route): each track into its part,
+// its sends into their returns; the parts, returns and buses into their
+// placement's node (the master for a clip's), the placements' into the
+// master. A route to "master" goes to the router's placement's node.
 graph_build :: proc(s: ^Song) {
 	clear(&s.nodes)
 	clear(&s.edges)
@@ -90,6 +129,9 @@ graph_build :: proc(s: ^Song) {
 	for _, i in s.buses {
 		append(&s.nodes, Node{.Bus, i32(i)})
 	}
+	for _, i in s.placements {
+		append(&s.nodes, Node{.Song, i32(i)})
+	}
 	append(&s.nodes, Node{.Master, 0})
 	master := i32(len(s.nodes) - 1)
 	for t, i in s.tracks {
@@ -98,14 +140,8 @@ graph_build :: proc(s: ^Song) {
 			append(&s.edges, Edge{i32(i), return_node(s, int(snd.ret)), snd.gain, .Audio})
 		}
 	}
-	for _, i in s.parts {
-		append(&s.edges, Edge{part_node(s, i), master, 1, .Audio})
-	}
-	for _, i in s.returns {
-		append(&s.edges, Edge{return_node(s, i), master, 1, .Audio})
-	}
-	for _, i in s.buses {
-		append(&s.edges, Edge{bus_node(s, i), master, 1, .Audio})
+	for k in len(s.tracks) ..< int(master) {
+		append(&s.edges, Edge{i32(k), s.nodes[k].kind == .Song ? master : node_out(s, k), 1, .Audio})
 	}
 	for rt in s.routes {
 		from, to := node_from_name(s, rt.from), node_from_name(s, rt.to)
@@ -113,10 +149,14 @@ graph_build :: proc(s: ^Song) {
 			base.report(&s.findings, "bad_value", .Error, "routing", "routing: %q into %q: there is no part, return or bus %q", rt.from, rt.to, from < 0 ? rt.from : rt.to)
 			continue
 		}
+		out := node_out(s, int(from))
+		if to == master {
+			to = out
+		}
 		switch {
 		case rt.moves:
 			for &x in s.edges {
-				if x.from == from && x.to == master && x.kind == .Audio {
+				if x.from == from && x.to == out && x.kind == .Audio {
 					x.to = to
 				}
 			}
@@ -168,6 +208,7 @@ node_from_name :: proc(s: ^Song, name: string) -> i32 {
 part_node :: proc(s: ^Song, part: int) -> i32 {return i32(len(s.tracks) + part)}
 return_node :: proc(s: ^Song, ret: int) -> i32 {return i32(len(s.tracks) + len(s.parts) + ret)}
 bus_node :: proc(s: ^Song, bus: int) -> i32 {return i32(len(s.tracks) + len(s.parts) + len(s.returns) + bus)}
+song_node :: proc(s: ^Song, placement: int) -> i32 {return i32(len(s.tracks) + len(s.parts) + len(s.returns) + len(s.buses) + placement)}
 master_node :: proc(s: ^Song) -> i32 {return i32(len(s.nodes) - 1)}
 
 // The edges by where they go, then where they come from: a node's inputs
@@ -291,6 +332,8 @@ node_name :: proc(s: ^Song, k: i32, allocator := context.temp_allocator) -> stri
 		return strings.concatenate({"return ", s.returns[nd.ref].name}, allocator)
 	case .Bus:
 		return strings.concatenate({"bus ", s.buses[nd.ref].name}, allocator)
+	case .Song:
+		return strings.concatenate({"song ", s.placements[nd.ref].name}, allocator)
 	case .Master:
 	}
 	return "master"

@@ -60,14 +60,15 @@ test_routes :: proc(t: ^testing.T) {
 	testing.expect(t, !has_finding(s, "bad_value"))
 	drums, lead, pad := song.part_index(s, "drums"), song.part_index(s, "lead"), song.part_index(s, "pad")
 	glue := song.node_from_name(s, "glue")
-	master := song.master_node(s)
+	song_out := song.song_node(s, 0) // the song's node: what it plays, into the master
 	testing.expect(t, glue >= 0 && s.nodes[glue].kind == .Bus)
-	// drums go to the bus, not the master; the lead goes to both
+	testing.expect(t, has_edge(s, song_out, song.master_node(s), .Audio))
+	// drums go to the bus, not the song's out; the lead goes to both
 	testing.expect(t, has_edge(s, song.part_node(s, drums), glue, .Audio))
-	testing.expect(t, !has_edge(s, song.part_node(s, drums), master, .Audio))
+	testing.expect(t, !has_edge(s, song.part_node(s, drums), song_out, .Audio))
 	testing.expect(t, has_edge(s, song.part_node(s, lead), glue, .Audio))
-	testing.expect(t, has_edge(s, song.part_node(s, lead), master, .Audio))
-	testing.expect(t, has_edge(s, glue, master, .Audio))
+	testing.expect(t, has_edge(s, song.part_node(s, lead), song_out, .Audio))
+	testing.expect(t, has_edge(s, glue, song_out, .Audio))
 	// the pad's tracks hear the drums as their key
 	keyed := false
 	for tr, i in s.tracks {

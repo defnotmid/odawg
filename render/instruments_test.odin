@@ -269,6 +269,69 @@ test_clip :: proc(t: ^testing.T) {
 	testing.expectf(t, moved > 0.05, "the filter changed the clip by %g", moved)
 }
 
+// A song sounds the same wherever a mix places it: its notes' draws (a
+// pluck's noise) are its own, its effects (a delay, a chorus's and an
+// auto-filter's LFO, a reverb return's wobble) keep its clock, and a window
+// opening at or before its start doesn't declick its first attack.
+@(test)
+test_song_placed_sounds_alone :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	s := compose_with(t, `{ name: "s", bpm: 120, seed: 9, sections: [ { name: "a", duration: "2m" } ],
+		returns: { hall: [ { name: "Reverb", decay: 2 } ] },
+		parts: {
+			drums: { instrument: "MembraneSynth", play: [ { name: "a", notes: "C2 - C2 -", subdivision: "8n" } ] },
+			lead: { instrument: "PluckSynth", sends: { hall: -6 }, effects: [ { name: "FeedbackDelay", delay_time: "8n", feedback: 0.4, wet: 0.3 } ],
+				play: [ { name: "a", notes: "A4 C5 E5 -", subdivision: "8n" } ] },
+			pad: { instrument: "Synth", effects: [ { name: "Chorus" }, { name: "AutoFilter" } ], play: [ { name: "a", notes: "A3 - C4 -", subdivision: "4n" } ] } } }`, &arena)
+	alone := output_from_song(s, {threads = 1})
+	length := f64(alone.frames) / RATE
+	for place in ([][2]f64{{1.25, 1.25}, {0.1, 0}}) {
+		at, opens := place[0], place[1]
+		m: song.Song
+		song.mix_init(&m)
+		song.append_song(&m, s, at, "s", 0, {opens, at + length + 1, 0, 0, .Linear})
+		song.mix_end(&m)
+		placed := output_from_song(&m, {threads = 1, from = at, to = at + length})
+		testing.expect_value(t, placed.frames, alone.frames)
+		first := -1
+		for v, i in alone.left[:min(alone.frames, placed.frames)] {
+			if v != placed.left[i] || alone.right[i] != placed.right[i] {
+				first = i
+				break
+			}
+		}
+		testing.expectf(t, first < 0, "placed at %gs (its window from %gs) it differs from alone from sample %d", at, opens, first)
+	}
+	// a window cutting into it, at a level, faded: what it plays (its
+	// echoes and its return's tails of notes before the cut too) through the
+	// envelope, as its render played as a clip with the same placing is
+	frames := make([]f32, 2 * alone.frames)
+	for i in 0 ..< alone.frames {
+		frames[2 * i], frames[2 * i + 1] = alone.left[i], alone.right[i]
+	}
+	start, offset, stop := 2000.0 / RATE, 1500.0 / RATE, length - 4000.0 / RATE
+	placed, clip: Output
+	for as_clip in ([]bool{false, true}) {
+		bank: device.Bank
+		m: song.Song
+		song.mix_init(&m)
+		if as_clip {
+			m.bank = &bank
+			song.append_clip(&m, {name = "s", set = device.bank_borrow(&bank, "s", frames), start = start, stop = stop, offset = offset, gain_db = -3, fade_in = 0.2, fade_out = 0.3})
+		} else {
+			song.append_song(&m, s, start - offset, "s", -3, {start, stop, 0.2, 0.3, .Linear})
+		}
+		song.mix_end(&m)
+		(as_clip ? &clip : &placed)^ = output_from_song(&m, {threads = 1, to = length})
+	}
+	worst: f32
+	for v, i in placed.left {
+		worst = max(worst, abs(v - clip.left[i]), abs(placed.right[i] - clip.right[i]))
+	}
+	testing.expectf(t, worst < 1e-5, "a window cutting into it differs from its render as a clip by %g", worst)
+}
+
 // A host's 16-bit render lent as it is (bank_borrow over i16) plays as the
 // same frames as floats: full scale 32768, a power of two, so exactly.
 @(test)

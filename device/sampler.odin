@@ -34,7 +34,7 @@ SAMPLER_ONE_SHOT_TAIL :: 8.0
 
 // The shortest release, so a cut never clicks: 3 ms.
 @(private = "file")
-SAMPLER_DECLICK :: 3.0 / 1000
+SAMPLER_DECLICK :: f64(dsp.DECLICK) / RATE
 
 // One side of the kernel at SINC_STEPS points per tap (symmetric), zero for
 // two taps past its edge, so a tap at the edge reads it without a check.

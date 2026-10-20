@@ -413,7 +413,7 @@ track_for :: proc(song: ^Song, src: ^Sources, work: ^Work, pi: i32, name, varian
 			break
 		}
 	}
-	t := Track{part = pi, variant = variant, gain_db = PART_GAIN_DB + src.own.gain_db, room = PART_ROOM_DB, instrument = -1}
+	t := Track{part = pi, variant = variant, gain_db = PART_GAIN_DB, room = PART_ROOM_DB, instrument = -1}
 	style := variant != "" ? style_spec(src, variant, &song.findings) : nil
 	layers := [2]^spec.Spec{style, src.own}
 	instrument: struct {
@@ -429,7 +429,7 @@ track_for :: proc(song: ^Song, src: ^Sources, work: ^Work, pi: i32, name, varian
 			instrument = {from, p.instrument}
 		}
 		if !math.is_nan(p.gain_db) {
-			t.gain_db = p.gain_db + src.own.gain_db
+			t.gain_db = p.gain_db
 		}
 		if !math.is_nan(p.room_db) {
 			t.room = p.room_db
@@ -1131,6 +1131,7 @@ index_notes :: proc(song: ^Song, work: ^Work) {
 		for n in notes {
 			row := n
 			row.track = u16(ti)
+			row.seed = note_seed(song, song.tracks[ti], row)
 			append_soa(&song.notes, row)
 		}
 	}

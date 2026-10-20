@@ -3,9 +3,37 @@
 // slice in one typed loop; nothing here knows devices, songs or params.
 package odawg_dsp
 
+import "core:math"
 import base "../base"
 
 RATE :: base.RATE
+
+// ---- fades ---------------------------------------------------------------------------
+
+// A fade's shape.
+Curve :: enum u8 {
+	Linear,
+	Equal_Power,
+}
+
+// The least fade an edge that cuts into a sound gets, so it doesn't click
+// (3 ms); an edge that cuts nothing (a clip from its file's first sample, a
+// window opening where its song starts) gets only its own.
+DECLICK :: RATE * 3 / 1000
+
+// An edge's fade in samples: its own, at least DECLICK where it cuts in.
+edge_fade :: #force_inline proc "contextless" (samples: i64, cuts: bool) -> i64 {
+	return cuts ? max(samples, DECLICK) : samples
+}
+
+// Gain 0..1 `k` samples into a fade of `length` samples (past it: 1).
+fade_gain :: #force_inline proc "contextless" (k, length: i64, curve: Curve) -> f32 {
+	if length <= 0 || k >= length {
+		return 1
+	}
+	t := f32(max(k, 0)) / f32(length)
+	return curve == .Equal_Power ? math.sin(t * math.PI / 2) : t
+}
 
 // ---- per-sample math ---------------------------------------------------------------------
 

@@ -9,9 +9,11 @@ import spec "../spec"
 
 // A mix: songs and clips on one timeline (onimite's video), as one Song the
 // engine streams. A song is appended by copying its tables with every index
-// moved past what is there and every time moved to where it starts; a clip
-// is a track of its own playing one note on a program of one Clip node. The form, chords and
-// markers stay with the songs (questions go to them); the mix is what plays.
+// moved past what is there and every time moved to where it starts, and a
+// placement row saying where it plays and how (core.odin); a clip is a track
+// of its own playing one note on a program of one Clip node. The form,
+// chords and markers stay with the songs (questions go to them); the mix is
+// what plays.
 
 mix_init :: proc(m: ^Song) {
 	m^ = {}
@@ -19,16 +21,19 @@ mix_init :: proc(m: ^Song) {
 }
 
 // Appends a composed song starting at `at` seconds on the mix's clock, its
-// parts named `prefix/part` ("score/drums"), `gain_db` added to its tracks.
-// `window` (on the mix's clock) lets it through with fades, as a placed
-// clip is; `duck` (a spans sidechain) dips every track of it under the voice
-// too, on top of what already ducks it (the bass under the kick).
-append_song :: proc(m: ^Song, s: ^Song, at: f64, prefix: string, gain_db: f64 = 0, window: Window = {}, duck: Sidechain = {}) {
+// parts named `prefix/part` ("score/drums"): its rows copied with every
+// index moved past what is there and every time to where it starts, and its
+// placement, where the rest of its playing is said once: `gain_db` on its
+// level, `window` (on the mix's clock) letting it through with fades as a
+// placed clip is, `duck` (a spans sidechain) dipping all it plays under the
+// voice. Returns its placement (a host's room spans for it name it).
+append_song :: proc(m: ^Song, s: ^Song, at: f64, prefix: string, gain_db: f64 = 0, window: Window = {}, duck: Sidechain = {}) -> i32 {
 	if m.bank == nil {
 		m.bank = s.bank
 	}
 	part0, dev0, chain0 := i32(len(m.parts)), i32(len(m.devices)), i32(len(m.chain))
 	send0, ret0, track0, note0 := i32(len(m.sends)), i32(len(m.returns)), i32(len(m.tracks)), i32(len(m.notes))
+	bus0, place0 := i32(len(m.buses)), i32(len(m.placements))
 	shift :: proc(sp: Span, by: i32) -> Span {return {sp.first + by, sp.count}}
 	for p in s.parts {
 		append(&m.parts, strings.concatenate({prefix, "/", p}))
@@ -62,13 +67,6 @@ append_song :: proc(m: ^Song, s: ^Song, at: f64, prefix: string, gain_db: f64 = 
 		x.chain = shift(t.chain, chain0)
 		x.sends = shift(t.sends, send0)
 		x.notes = shift(t.notes, note0)
-		x.gain_db += gain_db
-		x.window = window
-		// it makes room only where it asked for it (the mix's room spans are
-		// every song's)
-		if len(s.room) == 0 && s.room_from == "" {
-			x.room = 0
-		}
 		x.sidechains = {i32(len(m.sidechains)), 0}
 		for sc in s.sidechains[t.sidechains.first:base.span_end(t.sidechains)] {
 			y := sc
@@ -76,10 +74,6 @@ append_song :: proc(m: ^Song, s: ^Song, at: f64, prefix: string, gain_db: f64 = 
 				y.part += part0
 			}
 			append(&m.sidechains, y)
-			x.sidechains.count += 1
-		}
-		if duck.mode != .None {
-			append(&m.sidechains, duck)
 			x.sidechains.count += 1
 		}
 		append(&m.tracks, x)
@@ -90,14 +84,11 @@ append_song :: proc(m: ^Song, s: ^Song, at: f64, prefix: string, gain_db: f64 = 
 		n.track += u16(track0)
 		append_soa(&m.notes, n)
 	}
-	for r in s.room {
-		append(&m.room, [2]f64{r[0] + at, r[1] + at})
-	}
 	for r in s.regions {
 		append(&m.regions, Region{r.part + part0, r.start + at, r.stop + at, r.source})
 	}
 	// its buses and routes, named under the prefix ("score/glue"); what went
-	// to its master goes to the mix's
+	// to its master goes to its placement's node (graph_build)
 	for b in s.buses {
 		append(&m.buses, Bus{strings.concatenate({prefix, "/", b.name}), shift(b.chain, chain0)})
 	}
@@ -109,7 +100,28 @@ append_song :: proc(m: ^Song, s: ^Song, at: f64, prefix: string, gain_db: f64 = 
 		}
 		append(&m.routes, x)
 	}
+	// its placements (a composed song's one) moved here; this placing's
+	// level adds to theirs, its window and duck are theirs
+	for pl in s.placements {
+		x := pl
+		x.name = prefix
+		x.at += at
+		x.gain_db += gain_db
+		if window.stop > window.start {
+			x.window = window
+		}
+		if duck.mode != .None {
+			x.duck = duck
+		}
+		x.tracks, x.parts = shift(pl.tracks, track0), shift(pl.parts, part0)
+		x.returns, x.buses = shift(pl.returns, ret0), shift(pl.buses, bus0)
+		append(&m.placements, x)
+	}
+	for r in s.room {
+		append(&m.room, Room_Span{r.placement + place0, r.start + at, r.stop + at})
+	}
 	m.duration = max(m.duration, at + s.duration)
+	return place0
 }
 
 // A clip on the mix: a bank set played from `offset` seconds in, from
