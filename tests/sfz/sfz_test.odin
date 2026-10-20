@@ -15,36 +15,24 @@ import device "../../device"
 import render "../../render"
 import song "../../song"
 import spec "../../spec"
+import wav "deps:odecs/audio/wav"
 
 RATE :: 48000
 
 // A mono 16-bit WAV of a sine at `hz`, `seconds` long.
 sine_wav :: proc(hz: f64, seconds: f64) -> []u8 {
-	frames := int(seconds * RATE)
-	out := make([]u8, 44 + 2 * frames, context.temp_allocator)
-	put :: proc(b: []u8, at: int, v: u32, n: int) {
-		for k in 0 ..< n {
-			b[at + k] = u8(v >> (8 * u32(k)))
-		}
+	samples := make([]f32, int(seconds * RATE), context.temp_allocator)
+	for &v, i in samples {
+		v = f32(math.sin(2 * math.PI * hz * f64(i) / RATE) * 16000 / 32767)
 	}
-	copy(out[0:], "RIFF")
-	put(out, 4, u32(36 + 2 * frames), 4)
-	copy(out[8:], "WAVEfmt ")
-	put(out, 16, 16, 4)
-	put(out, 20, 1, 2)
-	put(out, 22, 1, 2)
-	put(out, 24, RATE, 4)
-	put(out, 28, RATE * 2, 4)
-	put(out, 32, 2, 2)
-	put(out, 34, 16, 2)
-	copy(out[36:], "data")
-	put(out, 40, u32(2 * frames), 4)
-	for i in 0 ..< frames {
-		v := i16(math.sin(2 * math.PI * hz * f64(i) / RATE) * 16000)
-		put(out, 44 + 2 * i, u32(u16(v)), 2)
-	}
-	return out
+	data, _ := wav.encode(samples, RATE, 1, .S16, context.temp_allocator)
+	return data
 }
+
+// The same at 880 Hz, a second, as Ogg Vorbis: ffmpeg -f lavfi -i
+// "aevalsrc=0.488*sin(2*PI*880*t):s=48000:d=1" -c:a libvorbis -q:a 2
+// -map_metadata -1 -fflags +bitexact c880.ogg
+C880_OGG :: #load("c880.ogg")
 
 SFZ :: `// what the test hears
 <control> default_path=samples/ set_cc20=0 label_cc20=Mic
@@ -56,7 +44,7 @@ SFZ :: `// what the test hears
 // a round robin on D4: 440, then 880
 <group> key=62
 <region> sample=a440.wav seq_length=2 seq_position=1
-<region> sample=c880.wav seq_length=2 seq_position=2
+<region> sample=c880.ogg seq_length=2 seq_position=2
 <group>
 // pitch: A4 from a 440 whose key is A3, an octave up
 <region> sample=a440.wav key=69 pitch_keycenter=57
@@ -98,9 +86,10 @@ test_sfz_instrument :: proc(t: ^testing.T) {
 	for f in ([]struct {
 			name: string,
 			hz:   f64,
-		}{{"a440.wav", 440}, {"b660.wav", 660}, {"c880.wav", 880}, {"d330.wav", 330}, {"r2000.wav", 2000}}) {
+		}{{"a440.wav", 440}, {"b660.wav", 660}, {"d330.wav", 330}, {"r2000.wav", 2000}}) {
 		write(root, join("inst/samples", f.name), sine_wav(f.hz, f.name == "r2000.wav" ? 0.2 : 1))
 	}
+	write(root, "inst/samples/c880.ogg", C880_OGG)
 	sp := new(spec.Spec)
 	findings := make(base.Findings)
 	testing.expect(t, spec.spec_from_json(`{ bpm: 120, gain_db: 0, seed: 1, sections: [ { name: "a", duration: "8m" } ],
@@ -159,7 +148,7 @@ test_sfz_instrument :: proc(t: ^testing.T) {
 	near(t, "a soft C4: the soft layer", out, 0, 440)
 	near(t, "a loud C4: the loud layer", out, 0.5, 660)
 	near(t, "D4, first in its round robin", out, 1, 440)
-	near(t, "D4, second", out, 1.5, 880)
+	near(t, "D4, second: an Ogg Vorbis sample", out, 1.5, 880)
 	near(t, "A4 from an A3 recording", out, 2, 880)
 	near(t, "E4", out, 2.5, 440)
 	{

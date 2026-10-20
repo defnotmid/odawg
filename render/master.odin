@@ -3,6 +3,8 @@ package odawg_render
 import "core:math"
 import "core:mem"
 import "core:os"
+import "core:slice"
+import wav "deps:odecs/audio/wav"
 import analyze "../analyze"
 import base "../base"
 import device "../device"
@@ -227,11 +229,11 @@ master_export :: proc(s: ^song.Song, opts: Options, m: Master, sink: Sink) -> an
 // ---- WAV, written as it comes ------------------------------------------------------------
 
 // A stereo WAV at RATE being written: 16-bit PCM (dithered with seeded
-// triangular noise, carried across pieces) or 32-bit float; the sizes in its
-// header are written when it closes.
+// triangular noise, carried across pieces) or 32-bit float. The header is
+// odecs's, written again with the frame count when the file closes.
 Wav_Writer :: struct {
 	file:   ^os.File,
-	float:  bool,
+	format: wav.Write_Format,
 	frames: i64,
 	rng:    base.Rng,
 	ok:     bool,
@@ -242,11 +244,11 @@ wav_open :: proc(w: ^Wav_Writer, path: string, float := false) -> bool {
 	if err != nil {
 		return false
 	}
-	w^ = {file = f, float = float, rng = base.rng_init(0x6f646177), ok = true}
-	header: [44]u8
-	wav_header(header[:], 0, float)
+	w^ = {file = f, format = float ? .F32 : .S16, rng = base.rng_init(0x6f646177), ok = true}
+	header: [wav.HEADER_SIZE]u8
+	w.ok = wav.header_into(header[:], 0, RATE, 2, w.format) == .None
 	_, werr := os.write(f, header[:])
-	w.ok = werr == nil
+	w.ok &= werr == nil
 	return w.ok
 }
 
@@ -255,20 +257,23 @@ wav_push :: proc(w: ^Wav_Writer, l, r: []f32) {
 		return
 	}
 	n := min(len(l), len(r))
-	bytes := make([]u8, n * (w.float ? 8 : 4), context.temp_allocator)
-	at := 0
-	for i in 0 ..< n {
-		if w.float {
-			put32(bytes, at, transmute(u32)l[i])
-			put32(bytes, at + 4, transmute(u32)r[i])
-			at += 8
-			continue
+	bytes: []u8
+	switch w.format {
+	case .F32:
+		out := make([]f32, 2 * n, context.temp_allocator)
+		for i in 0 ..< n {
+			out[2 * i], out[2 * i + 1] = l[i], r[i]
 		}
-		for v in ([2]f32{l[i], r[i]}) {
-			dither := (base.rng_unit(&w.rng) - base.rng_unit(&w.rng)) / 32768
-			put16(bytes, at, transmute(u16)i16(clamp(math.round((f64(v) + dither) * 32767), -32768, 32767)))
-			at += 2
+		bytes = slice.to_bytes(out)
+	case .S16:
+		out := make([]i16, 2 * n, context.temp_allocator)
+		for i in 0 ..< n {
+			for v, c in ([2]f32{l[i], r[i]}) {
+				dither := (base.rng_unit(&w.rng) - base.rng_unit(&w.rng)) / 32768
+				out[2 * i + c] = i16(clamp(math.round((f64(v) + dither) * 32767), -32768, 32767))
+			}
 		}
+		bytes = slice.to_bytes(out)
 	}
 	_, err := os.write(w.file, bytes)
 	w.ok = err == nil
@@ -279,36 +284,15 @@ wav_close :: proc(w: ^Wav_Writer) -> bool {
 	if w.file == nil {
 		return false
 	}
-	header: [44]u8
-	wav_header(header[:], w.frames, w.float)
-	_, err := os.write_at(w.file, header[:], 0)
+	header: [wav.HEADER_SIZE]u8
+	sized := wav.header_into(header[:], int(w.frames), RATE, 2, w.format) == .None
+	err: os.Error
+	if sized {
+		_, err = os.write_at(w.file, header[:], 0)
+	}
 	os.close(w.file)
 	w.file = nil
-	return w.ok && err == nil
-}
-
-@(private = "file")
-put32 :: proc(b: []u8, at: int, v: u32) {b[at], b[at + 1], b[at + 2], b[at + 3] = u8(v), u8(v >> 8), u8(v >> 16), u8(v >> 24)}
-
-@(private = "file")
-put16 :: proc(b: []u8, at: int, v: u16) {b[at], b[at + 1] = u8(v), u8(v >> 8)}
-
-@(private = "file")
-wav_header :: proc(h: []u8, frames: i64, float: bool) {
-	bits := float ? 32 : 16
-	data := u32(frames * i64(2 * bits / 8))
-	copy(h[0:], "RIFF")
-	put32(h, 4, 36 + data)
-	copy(h[8:], "WAVEfmt ")
-	put32(h, 16, 16)
-	put16(h, 20, float ? 3 : 1)
-	put16(h, 22, 2)
-	put32(h, 24, RATE)
-	put32(h, 28, u32(RATE * 2 * bits / 8))
-	put16(h, 32, u16(2 * bits / 8))
-	put16(h, 34, u16(bits))
-	copy(h[36:], "data")
-	put32(h, 40, data)
+	return w.ok && sized && err == nil
 }
 
 // The peak of a buffer pair, linear.

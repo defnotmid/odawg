@@ -20,8 +20,8 @@ import spec "../spec"
 // relative path is from it). `read`: a file's samples, decoded by the host
 // (any format it reads) and lent, at the file's own rate: it may be called
 // from any of the loader's threads, and what it returns must outlive the
-// banks that borrow it; .Declined leaves the file to the loader (its own
-// WAV and FLAC, loops included). Without it, the loader reads every file
+// banks that borrow it; .Declined leaves the file to the loader (odecs's
+// audio, loops included). Without it, the loader reads every file
 // from root itself. `text`: a file's text (an SFZ), and `stamp`: its content's
 // identity (a changed file declares its set again); without them, from
 // root, by its size and time. `pinning`: fetch a source's files its pins

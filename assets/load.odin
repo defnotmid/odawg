@@ -10,9 +10,8 @@ import "core:os"
 import "core:strings"
 import "core:thread"
 
-// Loading: a set's files decoded (WAV and FLAC by odecs: a row per
-// extension), made
-// stereo, resampled to device.RATE through a Kaiser-windowed sinc and appended
+// Loading: a set's files decoded (by odecs's audio, any format it reads),
+// made stereo, resampled to device.RATE through a Kaiser-windowed sinc and appended
 // to a device.Bank (frames to its slab, a sample row each, a zone row per
 // register zone, the set's row naming them).
 
@@ -24,39 +23,6 @@ Decoded :: struct {
 	rate:      int,
 	loop_from: i64,
 	loop_to:   i64,
-}
-
-Decode_Proc :: #type proc(data: []u8, allocator := context.allocator) -> (Decoded, Error)
-// A file straight to the bank's 16 bits, at most `keep` of its channels
-// (interleaved), with no floats between.
-Decode_I16_Proc :: #type proc(data: []u8, keep: int, allocator := context.allocator) -> (pcm: []i16, d: Decoded, err: Error)
-// What a file holds, from its header alone: to size the bank before decoding.
-Info_Proc :: #type proc(data: []u8) -> (frames, channels, rate: int, ok: bool)
-
-// The decoder for a file, by its extension: a row each.
-Format_Row :: struct {
-	extension: string,
-	decode:     Decode_Proc,
-	decode_i16: Decode_I16_Proc,
-	info:       Info_Proc,
-}
-
-FORMAT_TABLE := []Format_Row{{".wav", wav_decode, wav_decode_i16, wav_info}, {".flac", flac_decode, flac_decode_i16, flac_info}}
-
-format_from_path :: proc(path: string) -> (^Format_Row, bool) {
-	for &f in FORMAT_TABLE {
-		if strings.has_suffix(strings.to_lower(path, context.temp_allocator), f.extension) {
-			return &f, true
-		}
-	}
-	return nil, false
-}
-
-decode :: proc(path: string, data: []u8, allocator := context.allocator) -> (Decoded, Error) {
-	if f, ok := format_from_path(path); ok {
-		return f.decode(data, allocator)
-	}
-	return {}, fmt.tprintf("%s: no decoder for its extension", path)
 }
 
 // ---- resampling --------------------------------------------------------------------
@@ -433,18 +399,13 @@ decode_all :: proc(jobs: []Decode_Job) {
 			j.err = fmt.aprintf("%s can't be read", j.name, allocator = runtime.heap_allocator())
 			return
 		}
-		format, known := format_from_path(j.path)
-		if !known {
-			j.err = fmt.aprintf("%s can't be decoded", j.name, allocator = runtime.heap_allocator())
-			return
-		}
 		// straight to 16 bits, in the bank's memory
-		pcm, d, derr := format.decode_i16(data, 2, runtime.heap_allocator())
+		pcm, d, derr := decode_i16(data, 2, runtime.heap_allocator())
 		if derr != nil {
 			j.err = fmt.aprintf("%s can't be decoded", j.name, allocator = runtime.heap_allocator())
 			return
 		}
-		j.pcm, j.channels = pcm, clamp(d.channels, 1, 2)
+		j.pcm, j.channels = pcm, d.channels
 		j.rate = d.rate > 0 ? d.rate : device.RATE
 		j.loop_from, j.loop_to = d.loop_from, d.loop_to
 	}

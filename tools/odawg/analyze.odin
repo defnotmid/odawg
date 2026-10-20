@@ -184,7 +184,7 @@ reference_from_file :: proc(path: string, mix: render.Measures) -> (out: Referen
 		fmt.eprintfln("odawg analyze: can't read %s", path)
 		return
 	}
-	d, derr := assets.decode(path, data)
+	d, derr := assets.decode(data)
 	if derr != nil {
 		fmt.eprintfln("odawg analyze: %s: %v", path, derr)
 		return

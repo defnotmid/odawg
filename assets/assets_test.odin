@@ -111,7 +111,7 @@ test_wav_decode :: proc(t: ^testing.T) {
 	for spec in specs {
 		frames := 1000
 		data := wav_write(spec, frames, 441)
-		d, err := decode("x.WAV", data, context.temp_allocator)
+		d, err := decode(data, context.temp_allocator)
 		testing.expectf(t, err == nil, "%v: %v", spec, err)
 		testing.expect_value(t, d.channels, spec.channels)
 		testing.expect_value(t, d.rate, spec.rate)
@@ -132,10 +132,8 @@ test_wav_decode :: proc(t: ^testing.T) {
 			testing.expect(t, d.loop_to <= d.loop_from)
 		}
 	}
-	_, err := decode("x.wav", transmute([]u8)string("RIFF\x04\x00\x00\x00WAVE"), context.temp_allocator)
+	_, err := decode(transmute([]u8)string("RIFF\x04\x00\x00\x00WAVE"), context.temp_allocator)
 	testing.expect(t, err != nil)
-	_, err2 := decode("x.ogg", wav_write(specs[0], 10, 441), context.temp_allocator)
-	testing.expect(t, err2 != nil) // no row for the extension
 }
 
 // ---- resampling ----------------------------------------------------------------------
@@ -389,9 +387,9 @@ test_wav_decode_i16 :: proc(t: ^testing.T) {
 	for spec in specs {
 		frames := 1000
 		data := wav_write(spec, frames, 441)
-		d, err := decode("x.wav", data, context.temp_allocator)
+		d, err := decode(data, context.temp_allocator)
 		testing.expectf(t, err == nil, "%v: %v", spec, err)
-		pcm, d16, err16 := wav_decode_i16(data, 2, context.temp_allocator)
+		pcm, d16, err16 := decode_i16(data, 2, context.temp_allocator)
 		testing.expectf(t, err16 == nil, "%v: %v", spec, err16)
 		ch := min(spec.channels, 2)
 		testing.expect_value(t, len(pcm), frames * ch)

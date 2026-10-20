@@ -1,6 +1,5 @@
 package odawg_assets
 
-import "core:encoding/endian"
 import "core:fmt"
 import "core:math"
 import "core:mem/virtual"
@@ -13,32 +12,17 @@ import device "../device"
 import render "../render"
 import song "../song"
 import spec "../spec"
+import wav "deps:odecs/audio/wav"
 
 // A mono 16-bit WAV at `rate` of `frames` frames of a sine at `hz`.
 @(private = "file")
 sine_wav :: proc(rate, frames: int, hz: f64) -> []u8 {
-	b := make([dynamic]u8, context.temp_allocator)
-	put :: proc(b: ^[dynamic]u8, v: u32, n: int) {
-		x: [4]u8
-		endian.unchecked_put_u32le(x[:], v)
-		append(b, ..x[:n])
+	samples := make([]f32, frames, context.temp_allocator)
+	for &v, i in samples {
+		v = f32(16000 * math.sin(2 * math.PI * hz * f64(i) / f64(rate)) / 32767)
 	}
-	append(&b, ..transmute([]u8)string("RIFF"))
-	put(&b, u32(36 + 2 * frames), 4)
-	append(&b, ..transmute([]u8)string("WAVEfmt "))
-	put(&b, 16, 4)
-	put(&b, 1, 2)
-	put(&b, 1, 2)
-	put(&b, u32(rate), 4)
-	put(&b, u32(2 * rate), 4)
-	put(&b, 2, 2)
-	put(&b, 16, 2)
-	append(&b, ..transmute([]u8)string("data"))
-	put(&b, u32(2 * frames), 4)
-	for i in 0 ..< frames {
-		put(&b, u32(cast(u16)i16(16000 * math.sin(2 * math.PI * hz * f64(i) / f64(rate)))), 2)
-	}
-	return b[:]
+	data, _ := wav.encode(samples, rate, 1, .S16, context.temp_allocator)
+	return data
 }
 
 @(private = "file")
