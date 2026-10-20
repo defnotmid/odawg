@@ -921,6 +921,7 @@ read_sets_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
 			base.report(r.findings, "bad_value", .Error, sp, "%s: a set needs pads or zones", sp)
 			continue
 		}
+		set.key = set_key(r.spec, set)
 		append(&r.spec.sets, set)
 	}
 }

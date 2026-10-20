@@ -134,6 +134,7 @@ Part_Spec :: struct {
 // the host resolves them (the CLI: from the spec's folder).
 Set_Spec :: struct {
 	name:    string,
+	key:     string, // its name in the bank (set_key's), found as it is read
 	zones:   Span, // into set_zones
 	gain_db: f64,
 	credit:  string, // what to credit, for odawg credits and a host's
@@ -453,15 +454,20 @@ set_from_name :: proc(s: ^Spec, name: string) -> (set: ^Set_Spec, owner: ^Spec) 
 	return nil, nil
 }
 
-// What a Sampler's `set = name` is in the bank: a set of the song's own is
-// its name and a hash of what it is ("my_kit#5f1c09a2": two songs' sets of
-// one name, or a set edited, are different sets); the register's and an
-// SFZ file's, the name as written.
+// What a Sampler's `set = name` is in the bank: a set of the song's own,
+// its key; the register's and an SFZ file's, the name as written (an SFZ
+// file's path, from the spec's folder).
 asset_key :: proc(s: ^Spec, name: string, allocator := context.temp_allocator) -> string {
-	set, owner := set_from_name(s, name)
-	if set == nil {
-		return path_from(s, name, allocator) // an SFZ file's path, in the spec's folder
+	if set, _ := set_from_name(s, name); set != nil {
+		return set.key
 	}
+	return path_from(s, name, allocator)
+}
+
+// A set of the song's own in the bank: its name and a hash of what it is
+// ("my_kit#5f1c09a2": two songs' sets of one name, or a set edited, are
+// different sets), its zones `owner`'s.
+set_key :: proc(owner: ^Spec, set: Set_Spec, allocator := context.allocator) -> string {
 	h := base.hash_string(set.name)
 	h = base.hash_combine(h, transmute(u64)set.gain_db)
 	h = base.hash_combine(h, base.hash_string(set.credit))
@@ -474,7 +480,7 @@ asset_key :: proc(s: ^Spec, name: string, allocator := context.temp_allocator) -
 			h = base.hash_combine(h, transmute(u64)x)
 		}
 	}
-	return fmt.aprintf("%s#%08x", name, u32(h ~ (h >> 32)), allocator = allocator)
+	return fmt.aprintf("%s#%08x", set.name, u32(h ~ (h >> 32)), allocator = allocator)
 }
 
 // The styles the song names that are files ("styles/footwork.json": a name
