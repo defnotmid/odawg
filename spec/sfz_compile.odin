@@ -306,16 +306,6 @@ sfz_region_desc :: proc(c: ^Sfz_Compile, r: int, set: i32, zone: int, sample: st
 			n.values[slot] = f32(v)
 		}
 	}
-	mod :: proc(n: ^device.Node_Desc, field, source: string, kind: device.Mod_Kind, amount: f64) {
-		_, slot, ok := device.node_field_from_name(n.kind, field)
-		if !ok {
-			return
-		}
-		mods := make([dynamic]device.Mod_Desc, context.temp_allocator)
-		append(&mods, ..n.mods)
-		append(&mods, device.Mod_Desc{slot = slot, source = source, kind = kind, amount = f32(amount), exponent = 1})
-		n.mods = mods[:]
-	}
 	inputs :: proc(n: ^device.Node_Desc, names: ..string) {
 		list := make([]string, len(names), context.temp_allocator)
 		copy(list, names)
@@ -592,23 +582,7 @@ sfz_region_desc :: proc(c: ^Sfz_Compile, r: int, set: i32, zone: int, sample: st
 				set_field(o, "wave", f64(i))
 			}
 		}
-		if v := param(c, r, strings.concatenate({pre, "pitch"}, context.temp_allocator), 0); v != 0 {
-			mod(find(&nodes, "src"), pitch_target, name, .Octaves, v / 1200)
-		}
-		if v := param(c, r, strings.concatenate({pre, "volume"}, context.temp_allocator), 0); v != 0 {
-			mod(find(&nodes, "out"), "amp", name, .Octaves, v / 6.0206)
-		}
-		if v := param(c, r, strings.concatenate({pre, "amplitude"}, context.temp_allocator), 0); v != 0 {
-			mod(find(&nodes, "out"), "amp", name, .Amount, v / 100)
-		}
-		if v := param(c, r, strings.concatenate({pre, "pan"}, context.temp_allocator), 0); v != 0 {
-			mod(find(&nodes, "out"), "pan", name, .Amount, v / 100)
-		}
-		if v := param(c, r, strings.concatenate({pre, "cutoff"}, context.temp_allocator), 0); v != 0 {
-			if fil := find(&nodes, "fil"); fil != nil {
-				mod(fil, "frequency", name, .Octaves, v / 1200)
-			}
-		}
+		mod_targets(c, r, &nodes, LFO_TARGETS, pre, name, pitch_target)
 	}
 	// SFZ v2's flex envelopes: points, a sustain, and what each moves
 	for k in 1 ..= 8 {
@@ -638,28 +612,69 @@ sfz_region_desc :: proc(c: ^Sfz_Compile, r: int, set: i32, zone: int, sample: st
 		}
 		e.values[device.SEGMENTS_POINTS] = f32(max(points, 1))
 		e.values[device.SEGMENTS_SUSTAIN] = f32(param(c, r, strings.concatenate({pre, "sustain"}, context.temp_allocator), -1))
-		if v := param(c, r, strings.concatenate({pre, "amplitude"}, context.temp_allocator), 0); v != 0 {
-			mod(find(&nodes, "out"), "amp", name, .Depth, v / 100)
-		}
-		if v := param(c, r, strings.concatenate({pre, "volume"}, context.temp_allocator), 0); v != 0 {
-			mod(find(&nodes, "out"), "amp", name, .Octaves, v / 6.0206)
-		}
-		if v := param(c, r, strings.concatenate({pre, "pitch"}, context.temp_allocator), 0); v != 0 {
-			mod(find(&nodes, "src"), pitch_target, name, .Octaves, v / 1200)
-		}
-		if v := param(c, r, strings.concatenate({pre, "cutoff"}, context.temp_allocator), 0); v != 0 {
-			if fil := find(&nodes, "fil"); fil != nil {
-				mod(fil, "frequency", name, .Octaves, v / 1200)
-			}
-		}
-		if v := param(c, r, strings.concatenate({pre, "pan"}, context.temp_allocator), 0); v != 0 {
-			mod(find(&nodes, "out"), "pan", name, .Amount, v / 100)
-		}
+		mod_targets(c, r, &nodes, EG_TARGETS, pre, name, pitch_target)
 	}
 	desc.nodes = nodes[:]
 	desc.tables = tables[:]
 	desc.velocity = false // the velocity's level is the region's own curve
 	return desc
+}
+
+// A modulator on a node's field (none where it has no such field).
+@(private = "file")
+mod :: proc(n: ^device.Node_Desc, field, source: string, kind: device.Mod_Kind, amount: f64) {
+	_, slot, ok := device.node_field_from_name(n.kind, field)
+	if !ok {
+		return
+	}
+	mods := make([dynamic]device.Mod_Desc, context.temp_allocator)
+	append(&mods, ..n.mods)
+	append(&mods, device.Mod_Desc{slot = slot, source = source, kind = kind, amount = f32(amount), exponent = 1})
+	n.mods = mods[:]
+}
+
+// What an LFO's or a flex EG's opcodes move: `<pre><suffix>` the field of
+// the region's node (its source's pitch where the field is ""), by the
+// value over `per`, each source's in its order (a modulator's order is its
+// program's).
+@(private = "file")
+Mod_Target :: struct {
+	suffix: string,
+	node:   string,
+	field:  string,
+	kind:   device.Mod_Kind,
+	per:    f64,
+}
+
+@(private = "file")
+LFO_TARGETS := []Mod_Target {
+	{"pitch", "src", "", .Octaves, 1200},
+	{"volume", "out", "amp", .Octaves, 6.0206},
+	{"amplitude", "out", "amp", .Amount, 100},
+	{"pan", "out", "pan", .Amount, 100},
+	{"cutoff", "fil", "frequency", .Octaves, 1200},
+}
+
+@(private = "file")
+EG_TARGETS := []Mod_Target {
+	{"amplitude", "out", "amp", .Depth, 100},
+	{"volume", "out", "amp", .Octaves, 6.0206},
+	{"pitch", "src", "", .Octaves, 1200},
+	{"cutoff", "fil", "frequency", .Octaves, 1200},
+	{"pan", "out", "pan", .Amount, 100},
+}
+
+@(private = "file")
+mod_targets :: proc(c: ^Sfz_Compile, r: int, nodes: ^[dynamic]device.Node_Desc, targets: []Mod_Target, pre, source, pitch_target: string) {
+	for t in targets {
+		v := param(c, r, strings.concatenate({pre, t.suffix}, context.temp_allocator), 0)
+		if v == 0 {
+			continue
+		}
+		if n := find(nodes, t.node); n != nil {
+			mod(n, t.field != "" ? t.field : pitch_target, source, t.kind, v / t.per)
+		}
+	}
 }
 
 @(private = "file")
