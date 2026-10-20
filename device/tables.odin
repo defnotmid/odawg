@@ -165,11 +165,6 @@ CHOKE_SAMPLES :: RATE * 5 / 1000
 
 // ---- devices -----------------------------------------------------------------------
 
-Device_Category :: enum u8 {
-	Instrument, // a Tone class
-	Effect,
-}
-
 // A playing note's state: a fixed slot (nothing is allocated while playing).
 // A kind keeps its own state struct in it (#assert size_of(X) <= size_of(Voice_State)).
 VOICE_STATE_SIZE :: 32 * 1024 // the most a voice keeps: a program's state is checked against it (voice_too_big)
@@ -185,15 +180,6 @@ Voice_Env :: struct {
 	programs: ^Programs,
 }
 
-// Plays a note's next len(l) samples, adding into l and r. `at` is how many
-// of the note's samples earlier calls played; at == 0 starts it (s is
-// zeroed: read the params and the seed into it). The gate closes at sample
-// round(n.duration * RATE). Returns false once the note is silent for good.
-// The samples never depend on how the note is split into calls.
-Voice_Proc :: #type proc(s: ^Voice_State, p: ^Params, n: Note, seed: u64, at: i64, env: ^Voice_Env, l, r: []f32) -> bool
-// Seconds the note sounds, when the row's rule (`length`, or the gate plus
-// `release`) is not enough.
-Tail_Proc :: #type proc(p: ^Params, n: Note, env: ^Voice_Env) -> f64
 // An effect instance's state is bytes the engine sizes once from the params
 // (its delay lines) and keeps. Reset clears its history and puts what moves
 // in time (an LFO, a reverb's drift) where it is at song sample `at`. The
@@ -213,22 +199,13 @@ Param_Value :: struct {
 	value: f32,
 }
 
+// A device kind's row: what it reads and Tone's defaults; an effect's procs
+// (the Voice, an instrument, plays a program of nodes: graph.odin's voice
+// procs, its Program param naming the program).
 Device_Row :: struct {
 	name:        string,
-	category:    Device_Category,
 	reads:       Param_Set,
 	defaults:    []Param_Value, // Tone's; params read but not listed are 0
-	voice:       Voice_Proc,
-	tail:        Tail_Proc,
-	length:      f32, // a fixed length (seconds) for one-shots
-	release:     Param, // the gate plus this param's seconds (None: the gate)
-	// Bytes a voice's state takes (0: VOICE_STATE_SIZE): a track's slots are
-	// this big, so hundreds of one-note clip tracks stay small.
-	state:       int,
-	// One voice for the whole track: a new note goes to the playing voice
-	// (its state kept, `at` 0 again), which reads from its state whether the
-	// last gate was still open (a slide, legato) or not (a new attack).
-	mono:        bool,
 	effect:      Effect_Proc,
 	effect_size: Effect_Size_Proc,
 	effect_reset: Effect_Reset_Proc,
@@ -259,21 +236,21 @@ Device_Kind :: enum u8 {
 FX :: Param_Set{.Wet}
 
 DEVICE_TABLE := [Device_Kind]Device_Row {
-	.Voice = {name = "", category = .Instrument, voice = voice_graph, tail = tail_graph},
+	.Voice = {name = ""},
 	// effects: Tone's defaults
-	.Filter = {name = "Filter", category = .Effect, reads = FX + {.Type, .Frequency, .Q, .Rolloff, .Gain}, defaults = {{.Wet, 1}, {.Type, f32(dsp.Filter_Type.Lowpass)}, {.Frequency, 350}, {.Q, 1}, {.Rolloff, -12}}, effect = effect_filter, effect_size = size_filter, effect_reset = reset_filter},
-	.EQ3 = {name = "EQ3", category = .Effect, reads = FX + {.Low, .Mid, .High, .Low_Frequency, .High_Frequency}, defaults = {{.Wet, 1}, {.Low_Frequency, 400}, {.High_Frequency, 2500}}, effect = effect_eq3, effect_size = size_eq3, effect_reset = reset_eq3},
-	.Compressor = {name = "Compressor", category = .Effect, reads = FX + {.Threshold, .Ratio, .Knee, .Attack, .Release}, defaults = {{.Wet, 1}, {.Threshold, -24}, {.Ratio, 12}, {.Knee, 30}, {.Attack, 0.003}, {.Release, 0.25}}, effect = effect_compressor, effect_size = size_compressor, effect_reset = reset_compressor},
-	.Limiter = {name = "Limiter", category = .Effect, reads = FX + {.Threshold, .Release}, defaults = {{.Wet, 1}, {.Threshold, -12}, {.Release, 0.1}}, effect = effect_limiter, effect_size = size_limiter, effect_reset = reset_limiter, effect_latency = latency_limiter, effect_tail = tail_limiter},
-	.Gate = {name = "Gate", category = .Effect, reads = FX + {.Threshold, .Attack, .Release}, defaults = {{.Wet, 1}, {.Threshold, -40}, {.Attack, 0.001}, {.Release, 0.1}}, effect = effect_gate, effect_size = size_gate, effect_reset = reset_gate},
-	.Reverb = {name = "Reverb", category = .Effect, reads = FX + {.Decay, .Pre_Delay}, defaults = {{.Wet, 1}, {.Decay, 1.5}, {.Pre_Delay, 0.01}}, effect = effect_reverb, effect_size = size_reverb, effect_reset = reset_reverb, effect_tail = tail_reverb},
-	.Feedback_Delay = {name = "FeedbackDelay", category = .Effect, reads = FX + {.Delay_Time, .Feedback}, defaults = {{.Wet, 1}, {.Delay_Time, 0.25}, {.Feedback, 0.125}}, effect = effect_feedback_delay, effect_size = size_feedback_delay, effect_reset = reset_feedback_delay, effect_tail = tail_delay},
-	.Ping_Pong_Delay = {name = "PingPongDelay", category = .Effect, reads = FX + {.Delay_Time, .Feedback}, defaults = {{.Wet, 1}, {.Delay_Time, 0.25}, {.Feedback, 0.125}}, effect = effect_ping_pong_delay, effect_size = size_ping_pong_delay, effect_reset = reset_ping_pong_delay, effect_tail = tail_delay},
-	.Chorus = {name = "Chorus", category = .Effect, reads = FX + {.Frequency, .Delay_Time, .Depth}, defaults = {{.Wet, 0.5}, {.Frequency, 1.5}, {.Delay_Time, 0.0035}, {.Depth, 0.7}}, effect = effect_chorus, effect_size = size_chorus, effect_reset = reset_chorus, effect_tail = tail_chorus},
-	.Distortion = {name = "Distortion", category = .Effect, reads = FX + {.Distortion}, defaults = {{.Wet, 1}, {.Distortion, 0.4}}, effect = effect_distortion, effect_size = size_distortion, effect_reset = reset_distortion, effect_latency = latency_distortion},
-	.Bit_Crusher = {name = "BitCrusher", category = .Effect, reads = FX + {.Bits}, defaults = {{.Wet, 1}, {.Bits, 4}}, effect = effect_bit_crusher, effect_size = size_bit_crusher, effect_reset = reset_bit_crusher},
-	.Stereo_Widener = {name = "StereoWidener", category = .Effect, reads = FX + {.Width}, defaults = {{.Wet, 1}, {.Width, 0.5}}, effect = effect_stereo_widener, effect_size = size_stereo_widener, effect_reset = reset_stereo_widener},
-	.Auto_Filter = {name = "AutoFilter", category = .Effect, reads = FX + {.Frequency, .Depth, .Base_Frequency, .Octaves, .Filter_Type, .Filter_Q, .Filter_Rolloff}, defaults = {{.Wet, 1}, {.Frequency, 1}, {.Depth, 1}, {.Base_Frequency, 200}, {.Octaves, 2.6}, {.Filter_Type, f32(dsp.Filter_Type.Lowpass)}, {.Filter_Q, 1}, {.Filter_Rolloff, -12}}, effect = effect_auto_filter, effect_size = size_auto_filter, effect_reset = reset_auto_filter},
+	.Filter = {name = "Filter", reads = FX + {.Type, .Frequency, .Q, .Rolloff, .Gain}, defaults = {{.Wet, 1}, {.Type, f32(dsp.Filter_Type.Lowpass)}, {.Frequency, 350}, {.Q, 1}, {.Rolloff, -12}}, effect = effect_filter, effect_size = size_filter, effect_reset = reset_filter},
+	.EQ3 = {name = "EQ3", reads = FX + {.Low, .Mid, .High, .Low_Frequency, .High_Frequency}, defaults = {{.Wet, 1}, {.Low_Frequency, 400}, {.High_Frequency, 2500}}, effect = effect_eq3, effect_size = size_eq3, effect_reset = reset_eq3},
+	.Compressor = {name = "Compressor", reads = FX + {.Threshold, .Ratio, .Knee, .Attack, .Release}, defaults = {{.Wet, 1}, {.Threshold, -24}, {.Ratio, 12}, {.Knee, 30}, {.Attack, 0.003}, {.Release, 0.25}}, effect = effect_compressor, effect_size = size_compressor, effect_reset = reset_compressor},
+	.Limiter = {name = "Limiter", reads = FX + {.Threshold, .Release}, defaults = {{.Wet, 1}, {.Threshold, -12}, {.Release, 0.1}}, effect = effect_limiter, effect_size = size_limiter, effect_reset = reset_limiter, effect_latency = latency_limiter, effect_tail = tail_limiter},
+	.Gate = {name = "Gate", reads = FX + {.Threshold, .Attack, .Release}, defaults = {{.Wet, 1}, {.Threshold, -40}, {.Attack, 0.001}, {.Release, 0.1}}, effect = effect_gate, effect_size = size_gate, effect_reset = reset_gate},
+	.Reverb = {name = "Reverb", reads = FX + {.Decay, .Pre_Delay}, defaults = {{.Wet, 1}, {.Decay, 1.5}, {.Pre_Delay, 0.01}}, effect = effect_reverb, effect_size = size_reverb, effect_reset = reset_reverb, effect_tail = tail_reverb},
+	.Feedback_Delay = {name = "FeedbackDelay", reads = FX + {.Delay_Time, .Feedback}, defaults = {{.Wet, 1}, {.Delay_Time, 0.25}, {.Feedback, 0.125}}, effect = effect_feedback_delay, effect_size = size_feedback_delay, effect_reset = reset_feedback_delay, effect_tail = tail_delay},
+	.Ping_Pong_Delay = {name = "PingPongDelay", reads = FX + {.Delay_Time, .Feedback}, defaults = {{.Wet, 1}, {.Delay_Time, 0.25}, {.Feedback, 0.125}}, effect = effect_ping_pong_delay, effect_size = size_ping_pong_delay, effect_reset = reset_ping_pong_delay, effect_tail = tail_delay},
+	.Chorus = {name = "Chorus", reads = FX + {.Frequency, .Delay_Time, .Depth}, defaults = {{.Wet, 0.5}, {.Frequency, 1.5}, {.Delay_Time, 0.0035}, {.Depth, 0.7}}, effect = effect_chorus, effect_size = size_chorus, effect_reset = reset_chorus, effect_tail = tail_chorus},
+	.Distortion = {name = "Distortion", reads = FX + {.Distortion}, defaults = {{.Wet, 1}, {.Distortion, 0.4}}, effect = effect_distortion, effect_size = size_distortion, effect_reset = reset_distortion, effect_latency = latency_distortion},
+	.Bit_Crusher = {name = "BitCrusher", reads = FX + {.Bits}, defaults = {{.Wet, 1}, {.Bits, 4}}, effect = effect_bit_crusher, effect_size = size_bit_crusher, effect_reset = reset_bit_crusher},
+	.Stereo_Widener = {name = "StereoWidener", reads = FX + {.Width}, defaults = {{.Wet, 1}, {.Width, 0.5}}, effect = effect_stereo_widener, effect_size = size_stereo_widener, effect_reset = reset_stereo_widener},
+	.Auto_Filter = {name = "AutoFilter", reads = FX + {.Frequency, .Depth, .Base_Frequency, .Octaves, .Filter_Type, .Filter_Q, .Filter_Rolloff}, defaults = {{.Wet, 1}, {.Frequency, 1}, {.Depth, 1}, {.Base_Frequency, 200}, {.Octaves, 2.6}, {.Filter_Type, f32(dsp.Filter_Type.Lowpass)}, {.Filter_Q, 1}, {.Filter_Rolloff, -12}}, effect = effect_auto_filter, effect_size = size_auto_filter, effect_reset = reset_auto_filter},
 }
 
 device_from_name :: proc(name: string) -> (Device_Kind, bool) {
@@ -293,27 +270,15 @@ params_from_kind :: proc(kind: Device_Kind) -> (p: Params) {
 	return
 }
 
-// Bytes a voice of the device needs, a multiple of 16.
-voice_bytes :: proc(kind: Device_Kind, p: ^Params, env: ^Voice_Env) -> int {
-	n := kind == .Voice ? voice_bytes_graph(p, env) : DEVICE_TABLE[kind].state
+// Bytes a voice of an instrument (its Program) needs, a multiple of 16.
+voice_bytes :: proc(p: ^Params, env: ^Voice_Env) -> int {
+	n := voice_bytes_graph(p, env)
 	return ((n > 0 ? n : VOICE_STATE_SIZE) + 15) &~ 15
 }
 
-// Seconds a note sounds: the row's proc, else its fixed length, else the
-// gate plus its release (at most 30).
-
-note_tail :: proc(kind: Device_Kind, p: ^Params, n: Note, env: ^Voice_Env = nil) -> f64 {
-	row := &DEVICE_TABLE[kind]
-	t: f64
-	switch {
-	case row.tail != nil:
-		t = row.tail(p, n, env)
-	case row.length > 0:
-		t = f64(row.length)
-	case:
-		t = n.duration + (row.release != .None ? f64(p[row.release]) : 0)
-	}
-	return clamp(t, 0, max(30, n.duration)) // a ring at most 30 s past what is held
+// Seconds a note of an instrument sounds (at most 30 past what is held).
+note_tail :: proc(p: ^Params, n: Note, env: ^Voice_Env = nil) -> f64 {
+	return clamp(tail_graph(p, n, env), 0, max(30, n.duration))
 }
 
 effect_tail :: proc(kind: Device_Kind, p: ^Params) -> f64 {

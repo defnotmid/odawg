@@ -85,7 +85,7 @@ fx_test_stream :: proc(kind: Device_Kind, p: ^Params, l, r: []f32, block := 0, a
 @(private = "file")
 fx_test_effect_kinds :: proc() -> (kinds: [dynamic]Device_Kind) {
 	for row, kind in DEVICE_TABLE {
-		if row.category == .Effect {
+		if row.effect != nil {
 			append(&kinds, kind)
 		}
 	}

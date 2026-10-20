@@ -12,9 +12,6 @@ import device "../device"
 // (a machine's: its pad's).
 sample_needs :: proc(s: ^Song, out: ^[dynamic]device.Sample_Need) {
 	for t in s.tracks {
-		if s.devices[t.instrument] != .Voice {
-			continue
-		}
 		program := i32(s.params[t.instrument][.Program])
 		for i in t.notes.first ..< base.span_end(t.notes) {
 			n := note_of(s, int(i))

@@ -750,10 +750,10 @@ voice_bytes_graph :: proc(p: ^Params, env: ^Voice_Env) -> int {
 	return index >= 0 ? int(env.programs.programs[index].state) : GRAPH_HEADER
 }
 
-voice_mono :: proc(kind: Device_Kind, p: ^Params, env: ^Voice_Env) -> bool {
-	if kind != .Voice {
-		return DEVICE_TABLE[kind].mono
-	}
+// One voice for the whole track (a mono program): a new note goes to the
+// playing voice (its state kept), which reads from it whether the last gate
+// was still open (a slide, legato) or not (a new attack).
+voice_mono :: proc(p: ^Params, env: ^Voice_Env) -> bool {
 	index := graph_program(p, env)
 	return index >= 0 && env.programs.programs[index].mono
 }
@@ -762,15 +762,12 @@ voice_mono :: proc(kind: Device_Kind, p: ^Params, env: ^Voice_Env) -> bool {
 // program's memory; 0: it forgets them).
 // Whether a seek starts a voice's notes where they are, nothing rendered
 // (a clip's program).
-voice_jump :: proc(kind: Device_Kind, p: ^Params, env: ^Voice_Env) -> bool {
+voice_jump :: proc(p: ^Params, env: ^Voice_Env) -> bool {
 	index := graph_program(p, env)
-	return kind == .Voice && index >= 0 && env.programs.programs[index].jump
+	return index >= 0 && env.programs.programs[index].jump
 }
 
-voice_memory :: proc(kind: Device_Kind, p: ^Params, env: ^Voice_Env) -> f64 {
-	if kind != .Voice {
-		return 0
-	}
+voice_memory :: proc(p: ^Params, env: ^Voice_Env) -> f64 {
 	index := graph_program(p, env)
 	return index >= 0 ? f64(env.programs.programs[index].memory) : 0
 }
@@ -1068,7 +1065,9 @@ slice_zero :: #force_inline proc "contextless" (x: []f32) {
 	}
 }
 
-// One voice as a Voice_Proc (a single note on its own): what tests and a
+// One voice (a single note on its own): plays its next len(l) samples, adding
+// into l and r, `at` how many earlier calls played (0 starts it); false once
+// it is silent for good. What tests and a
 // host's one-shots call.
 voice_graph :: proc(s: ^Voice_State, p: ^Params, n: Note, seed: u64, at: i64, env: ^Voice_Env, l, r: []f32) -> bool {
 	if at == 0 {

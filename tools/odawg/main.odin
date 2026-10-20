@@ -395,12 +395,10 @@ run_show :: proc(a: ^Args) -> bool {
 				}
 				fmt.printfln("track %s/%s  %s  %d notes  %+.1f dB  pan %.2f", p, song.style_name(s, tr.style), s.labels[tr.instrument], song.track_note_count(s, ti), tr.gain_db, tr.pan)
 				// its instrument's controls (a Param_Set command sets one by its path)
-				if s.devices[tr.instrument] == .Voice {
-					if program := i32(s.params[tr.instrument][.Program]); program >= 0 {
-						c := s.programs.programs[program].controls
-						for k in c.first ..< base.span_end(c) {
-							fmt.printfln("  control %s/%s = %g", p, s.programs.control_names[k], s.programs.controls[k].value)
-						}
+				if program := i32(s.params[tr.instrument][.Program]); program >= 0 {
+					c := s.programs.programs[program].controls
+					for k in c.first ..< base.span_end(c) {
+						fmt.printfln("  control %s/%s = %g", p, s.programs.control_names[k], s.programs.controls[k].value)
 					}
 				}
 				for i in tr.notes.first ..< base.span_end(tr.notes) {
@@ -445,12 +443,11 @@ run_at :: proc(a: ^Args) -> bool {
 	fmt.printfln("%.3fs  section %s bar %d beat %.2f (%.0f%% through)  %.1f bpm  chord %s", t, place.name, place.bar + 1, place.beat + 1, place.progress * 100, tempo.bpm_from_beat(&s.tempo, b), chord_name(song.chord_from_beat(s, b)))
 	env := song.voice_env(s)
 	for tr in s.tracks {
-		kind := s.devices[tr.instrument]
 		p := s.params[tr.instrument]
 		for i in tr.notes.first ..< base.span_end(tr.notes) {
 			n := s.notes[i]
 			note := song.note_of(s, int(i))
-			if n.time <= t && t < n.time + device.note_tail(kind, &p, note, &env) {
+			if n.time <= t && t < n.time + device.note_tail(&p, note, &env) {
 				what := n.pad != 0 ? song.pad_name(s, n.pad) : theory.string_from_pitch(n.pitch)
 				state := t < n.time + n.duration ? "held" : "ringing"
 				fmt.printfln("  %-10s %-8s from %.3fs  %s", s.parts[tr.part], what, n.time, state)

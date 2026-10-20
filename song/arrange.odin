@@ -252,9 +252,6 @@ arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 @(private = "file")
 check_pads :: proc(song: ^Song, s: ^spec.Spec, src: ^Sources, ti: int, work: ^Work) {
 	t := &song.tracks[ti]
-	if song.devices[t.instrument] != .Voice {
-		return
-	}
 	program := i32(song.params[t.instrument][.Program])
 	has := make([dynamic]u32, context.temp_allocator)
 	spec.program_pads(&song.programs, program, &has)
@@ -1072,7 +1069,7 @@ add_transitions :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 layered_notes :: proc(song: ^Song, work: ^Work) {
 	for &notes, ti in work.notes {
 		d := song.tracks[ti].instrument
-		if d < 0 || song.devices[d] != .Voice {
+		if d < 0 {
 			continue
 		}
 		program := i32(song.params[d][.Program])

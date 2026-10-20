@@ -84,12 +84,7 @@ COMMAND_KINDS := [Command_Kind]Command_Kind_Row {
 		done := false
 		for ti in tracks {
 			d := s.tracks[ti].instrument
-			if s.devices[d] == .Voice {
-				done ||= node_value_set(s, i32(s.params[d][.Program]), rest, f32(row.value))
-			} else if p := param_of(s.devices[d], rest); p != .None {
-				s.params[d][p] = f32(row.value)
-				done = true
-			}
+			done ||= node_value_set(s, i32(s.params[d][.Program]), rest, f32(row.value))
 		}
 		return done
 	}},
@@ -191,12 +186,10 @@ pad_gain :: proc(s: ^Song, row: Command_Row, tracks: []int, step: bool) -> bool 
 	for ti in tracks {
 		// only a pad the track's instrument has
 		d := s.tracks[ti].instrument
-		if s.devices[d] == .Voice {
-			has := make([dynamic]u32, context.temp_allocator)
-			spec.program_pads(&s.programs, i32(s.params[d][.Program]), &has)
-			if !slice.contains(has[:], pad) {
-				return false
-			}
+		has := make([dynamic]u32, context.temp_allocator)
+		spec.program_pads(&s.programs, i32(s.params[d][.Program]), &has)
+		if !slice.contains(has[:], pad) {
+			return false
 		}
 		g: ^Pad_Gain
 		for &x in s.pad_gains {
@@ -211,17 +204,6 @@ pad_gain :: proc(s: ^Song, row: Command_Row, tracks: []int, step: bool) -> bool 
 		g.db = step ? g.db + f32(row.value) : f32(row.value)
 	}
 	return len(tracks) > 0
-}
-
-@(private = "file")
-param_of :: proc(kind: device.Device_Kind, path: string) -> device.Param {
-	reads := device.DEVICE_TABLE[kind].reads
-	for row, p in device.PARAM_TABLE {
-		if p != .None && p in reads && row.path == path {
-			return p
-		}
-	}
-	return .None
 }
 
 // "filter/frequency": a control of a program (a knob its row names), else

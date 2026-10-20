@@ -52,11 +52,10 @@ tail_from_song :: proc(s: ^song.Song) -> f64 {
 		for snd in s.sends[t.sends.first:base.span_end(t.sends)] {
 			ret = max(ret, chain_tail(s, s.returns[snd.ret].chain))
 		}
-		kind := s.devices[t.instrument]
 		p := s.params[t.instrument]
 		for i in t.notes.first ..< base.span_end(t.notes) {
 			n := note_from_row(s, int(i))
-			end = max(end, n.time + device.note_tail(kind, &p, n, &env) + fx + ret)
+			end = max(end, n.time + device.note_tail(&p, n, &env) + fx + ret)
 		}
 	}
 	return clamp(end - s.duration, 0, 12)
