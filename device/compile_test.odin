@@ -1,6 +1,7 @@
 package odawg_device
 
 import "core:mem/virtual"
+import "core:slice"
 import "core:testing"
 import base "../base"
 
@@ -24,10 +25,12 @@ test_layer_tables :: proc(t: ^testing.T) {
 	shape :: proc(vel, key: []f32) -> ^Program_Desc {
 		d := new(Program_Desc, context.temp_allocator)
 		d.out = "out"
+		// the desc outlives this proc: its inputs are the allocator's, not literals here
+		inputs := slice.clone([]string{"velocity", "vel", "key_fade"}, context.temp_allocator)
 		nodes := make([]Node_Desc, 3, context.temp_allocator)
-		nodes[0] = {name = "vel", kind = NODE_CURVE, values = node_defaults(NODE_CURVE), inputs = {"velocity"}}
-		nodes[1] = {name = "key_fade", kind = NODE_CURVE, values = node_defaults(NODE_CURVE), inputs = {"velocity"}}
-		nodes[2] = {name = "out", kind = NODE_MIX, values = node_defaults(NODE_MIX), inputs = {"vel", "key_fade"}}
+		nodes[0] = {name = "vel", kind = NODE_CURVE, values = node_defaults(NODE_CURVE), inputs = inputs[:1]}
+		nodes[1] = {name = "key_fade", kind = NODE_CURVE, values = node_defaults(NODE_CURVE), inputs = inputs[:1]}
+		nodes[2] = {name = "out", kind = NODE_MIX, values = node_defaults(NODE_MIX), inputs = inputs[1:]}
 		d.nodes = nodes
 		tables := make([]Table_Desc, 2, context.temp_allocator)
 		tables[0], tables[1] = {"vel", vel}, {"key_fade", key}
