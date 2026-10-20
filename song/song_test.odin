@@ -3,6 +3,7 @@ package odawg_song
 import "core:fmt"
 import "core:math"
 import "core:mem/virtual"
+import "core:strings"
 import "core:testing"
 import base "../base"
 import spec "../spec"
@@ -208,6 +209,23 @@ test_fill_drum_machine :: proc(t: ^testing.T) {
 		}
 	}
 	testing.expect_value(t, roll, 4)
+}
+
+// What reading a style found is the song's once, however many places
+// read the style (its sections, the track a transition plays on).
+@(test)
+test_style_findings_once :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	s := compose(t, `{ styles: { mine: { bogus_key: 1, parts: { drums: { instrument: "machines/909.json", play: [ { steps: { kick: "x...x...x...x..." } } ] } } } },
+		sections: [
+		{ name: "a", duration: "2m", bpm: 120, style: "mine", chords: "Am" },
+		{ name: "b", duration: "2m", style: "mine", transition: "impact", transition_part: "drums/kick" } ] }`, &arena)
+	count := 0
+	for f in s.findings {
+		count += f.code == "unknown_key" && strings.contains(f.message, "bogus_key") ? 1 : 0
+	}
+	testing.expect_value(t, count, 1)
 }
 
 // Transitions are opt-in: a rise in energy adds nothing by itself. A riser

@@ -22,41 +22,36 @@ PART_OCTAVE :: 4 // where its chords and degrees sit
 PART_GAIN_DB :: 0 // its level in the mix
 PART_ROOM_DB :: 0 // what it dips by where the song makes room
 
-// The specs a song reads parts from: its own, then each style it uses.
+// The spec each style the song's sections name reads parts from (Work.styles,
+// by style): the song's own of that name, or a style file the host read;
+// nil, a finding: none. What reading one found is the song's now, once.
 @(private = "file")
-Sources :: struct {
-	own:    ^spec.Spec,
-	styles: [dynamic]^spec.Spec, // parallel to names
-	names:  [dynamic]string,
+styles_from_spec :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
+	work.styles = make([dynamic]^spec.Spec, len(song.styles), context.temp_allocator)
+	for name, i in song.styles {
+		for &own in s.styles {
+			if own.name == name {
+				append(&song.findings, ..own.findings[:])
+				work.styles[i] = own.spec
+				break
+			}
+		}
+		if work.styles[i] != nil {
+			continue
+		}
+		names := make([dynamic]string, context.temp_allocator)
+		for own in s.styles {
+			append(&names, own.name)
+		}
+		known := len(names) > 0 ? strings.concatenate({" (it has ", strings.join(names[:], ", ", context.temp_allocator), ")"}, context.temp_allocator) : ""
+		base.report(&song.findings, "unknown_style", .Error, "", "style %q is not one of the song's `styles`%s, or a style file (\"styles/house.json\")", name, known)
+	}
 }
 
+// The spec style `style` reads parts from (nil: none).
 @(private = "file")
-style_spec :: proc(src: ^Sources, name: string, findings: ^base.Findings) -> ^spec.Spec {
-	for n, i in src.names {
-		if n == name {
-			return src.styles[i]
-		}
-	}
-	append(&src.names, name)
-	// the song's own, by name, or a style file the host read
-	for own in src.own.styles {
-		if own.name == name {
-			// read when it was added: what that found is the song's now
-			if findings != nil {
-				append(findings, ..own.findings[:])
-			}
-			append(&src.styles, own.spec)
-			return own.spec
-		}
-	}
-	names := make([dynamic]string, context.temp_allocator)
-	for own in src.own.styles {
-		append(&names, own.name)
-	}
-	known := len(names) > 0 ? strings.concatenate({" (it has ", strings.join(names[:], ", ", context.temp_allocator), ")"}, context.temp_allocator) : ""
-	base.report(findings, "unknown_style", .Error, "", "style %q is not one of the song's `styles`%s, or a style file (\"styles/house.json\")", name, known)
-	append(&src.styles, nil)
-	return nil
+style_spec :: proc(work: ^Work, style: i32) -> ^spec.Spec {
+	return style >= 0 ? work.styles[style] : nil
 }
 
 @(private = "file")
@@ -73,16 +68,11 @@ part_in :: proc(s: ^spec.Spec, name: string) -> ^spec.Part_Spec {
 }
 
 arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
-	src := Sources{own = s}
-	for sec in song.sections {
-		if sec.style >= 0 {
-			style_spec(&src, style_name(song, sec.style), &song.findings)
-		}
-	}
+	styles_from_spec(s, song, work)
 	for p in s.parts {
 		append(&song.parts, p.name)
 	}
-	for st in src.styles {
+	for st in work.styles {
 		if st == nil {
 			continue
 		}
@@ -94,7 +84,7 @@ arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 	}
 	slice.sort(song.parts[:])
 	// the returns: the styles', then the spec's (the spec's win by name)
-	for st in src.styles {
+	for st in work.styles {
 		if st != nil {
 			for ret in st.returns {
 				add_return(song, st, ret)
@@ -159,7 +149,7 @@ arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 					under: ^spec.Spec
 					if len(song.sections) > 0 {
 						if st := song.sections[section_from_beat(song, b0)].style; st >= 0 {
-							under = style_spec(&src, style_name(song, st), &song.findings)
+							under = style_spec(work, st)
 						}
 					}
 					expand(song, s, name, own, nil, under, &pl, b0, b1, &pending)
@@ -172,7 +162,7 @@ arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 			if covered[i] || sec.style < 0 {
 				continue
 			}
-			st := style_spec(&src, style_name(song, sec.style), &song.findings)
+			st := style_spec(work, sec.style)
 			sp := part_in(st, name)
 			if sp == nil {
 				continue
@@ -226,7 +216,7 @@ arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 			k, found := slice.linear_search(styles[:], style)
 			if !found {
 				append(&styles, style)
-				append(&tracks, track_for(song, &src, work, i32(pi), name, style))
+				append(&tracks, track_for(song, s, work, i32(pi), name, style))
 				k = len(tracks) - 1
 			}
 			if tracks[k] < 0 {
@@ -237,11 +227,11 @@ arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 			append(&work.notes[tracks[k]], row)
 		}
 		if len(pending) == 0 && own != nil {
-			track_for(song, &src, work, i32(pi), name, len(song.sections) > 0 ? song.sections[0].style : -1)
+			track_for(song, s, work, i32(pi), name, len(song.sections) > 0 ? song.sections[0].style : -1)
 		}
 		for ti in tracks {
 			if ti >= 0 {
-				check_pads(song, s, &src, ti, work)
+				check_pads(song, s, ti, work)
 			}
 		}
 	}
@@ -250,7 +240,7 @@ arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 // A track's notes on pads its instrument has: one it hasn't is a finding
 // at the entry naming it (with the pads it has), and doesn't play.
 @(private = "file")
-check_pads :: proc(song: ^Song, s: ^spec.Spec, src: ^Sources, ti: int, work: ^Work) {
+check_pads :: proc(song: ^Song, s: ^spec.Spec, ti: int, work: ^Work) {
 	t := &song.tracks[ti]
 	program := i32(song.params[t.instrument][.Program])
 	has := make([dynamic]u32, context.temp_allocator)
@@ -272,7 +262,7 @@ check_pads :: proc(song: ^Song, s: ^spec.Spec, src: ^Sources, ti: int, work: ^Wo
 			append(&names, pad_name_or_id(song, id))
 		}
 		slice.sort(names[:])
-		path := pad_play_path(s, src, song.parts[t.part], style_name(song, t.style), name)
+		path := pad_play_path(s, style_spec(work, t.style), song.parts[t.part], style_name(song, t.style), name)
 		what := len(names) > 0 ? strings.concatenate({"it has ", strings.join(names[:], ", ", context.temp_allocator)}, context.temp_allocator) : "it plays pitches, not pads"
 		base.report(&song.findings, "unknown_pad", .Error, path, "%s: %q is not a pad of the part's instrument (%s)", path, name, what)
 	}
@@ -300,8 +290,8 @@ pad_name_or_id :: proc(song: ^Song, id: u32) -> string {
 
 // The play entry whose steps name a pad: the spec's, else the style's.
 @(private = "file")
-pad_play_path :: proc(s: ^spec.Spec, src: ^Sources, part, style, pad: string) -> string {
-	specs := [2]^spec.Spec{s, style != "" ? style_spec(src, style, nil) : nil}
+pad_play_path :: proc(s, under: ^spec.Spec, part, style, pad: string) -> string {
+	specs := [2]^spec.Spec{s, under}
 	for from, k in specs {
 		p := part_in(from, part)
 		if p == nil {
@@ -399,7 +389,7 @@ chain_into_song :: proc(song: ^Song, from: ^spec.Spec, c: Span, beat_seconds: f6
 // time: the spec's settings over the style's over the part defaults; -1 when
 // neither gives it an instrument.
 @(private = "file")
-track_for :: proc(song: ^Song, src: ^Sources, work: ^Work, pi: i32, name: string, style: i32) -> int {
+track_for :: proc(song: ^Song, s: ^spec.Spec, work: ^Work, pi: i32, name: string, style: i32) -> int {
 	for t, i in song.tracks {
 		if t.part == pi && t.style == style {
 			return i
@@ -414,8 +404,8 @@ track_for :: proc(song: ^Song, src: ^Sources, work: ^Work, pi: i32, name: string
 		}
 	}
 	t := Track{part = pi, style = style, gain_db = PART_GAIN_DB, room = PART_ROOM_DB, instrument = -1}
-	under := variant != "" ? style_spec(src, variant, &song.findings) : nil
-	layers := [2]^spec.Spec{under, src.own}
+	under := style_spec(work, style)
+	layers := [2]^spec.Spec{under, s}
 	instrument: struct {
 		from: ^spec.Spec,
 		d:    i32,
@@ -452,7 +442,7 @@ track_for :: proc(song: ^Song, src: ^Sources, work: ^Work, pi: i32, name: string
 		}
 	}
 	if instrument.from == nil {
-		path := part_in(src.own, name) != nil ? base.path_join("parts", name) : strings.concatenate({"style/", variant, "/parts/", name})
+		path := part_in(s, name) != nil ? base.path_join("parts", name) : strings.concatenate({"style/", variant, "/parts/", name})
 		base.report(&song.findings, "no_instrument", .Warning, path, "%s: no instrument, so it doesn't play: give it one (`instrument = {{ \"Synth\", ... }}`)", path)
 		return -1
 	}
@@ -1004,8 +994,7 @@ add_transitions :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 		// its octave: the song's part's, else the part's in the style its
 		// track plays (as the part's own entries)
 		octave := PART_OCTAVE
-		src := Sources{own = s}
-		under := ti >= 0 && song.tracks[ti].style >= 0 ? style_spec(&src, style_name(song, song.tracks[ti].style), &song.findings) : nil
+		under := ti >= 0 ? style_spec(work, song.tracks[ti].style) : nil
 		for p in ([]^spec.Part_Spec{part_in(under, part), part_in(s, part)}) {
 			if p != nil && !math.is_nan(p.octave) {
 				octave = int(p.octave)

@@ -259,6 +259,7 @@ Song :: struct {
 Work :: struct {
 	notes:  [dynamic][dynamic]Note_Row, // by track
 	drafts: spec.Drafts, // the instruments drafted, each row once (placed at each tempo)
+	styles: [dynamic]^spec.Spec, // by style (Song.styles): the spec its parts are read from (nil: none)
 }
 
 // Tempo the song may move by to meet a section's `start` (6 %) or its
