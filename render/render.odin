@@ -46,19 +46,41 @@ Sink :: struct {
 tail_from_song :: proc(s: ^song.Song) -> f64 {
 	end := s.duration
 	env := song.voice_env(s)
-	for t in s.tracks {
-		fx := chain_tail(s, t.chain)
-		ret := 0.0
-		for snd in s.sends[t.sends.first:base.span_end(t.sends)] {
-			ret = max(ret, chain_tail(s, s.returns[snd.ret].chain))
-		}
+	rings := rings_from_song(s, context.temp_allocator)
+	for t, ti in s.tracks {
 		p := s.params[t.instrument]
 		for i in t.notes.first ..< base.span_end(t.notes) {
 			n := note_from_row(s, int(i))
-			end = max(end, n.time + device.note_tail(&p, n, &env) + fx + ret)
+			end = max(end, n.time + device.note_tail(&p, n, &env) + rings[ti])
 		}
 	}
 	return clamp(end - s.duration, 0, 12)
+}
+
+// Seconds each node (song.nodes) rings on after its input stops: its
+// chain's tail and the longest of what it feeds' (sound, not keys; the
+// master's chain runs apart: none here). A track's: its effects, then its
+// part's or a bus's, a return it sends to, all the way down.
+rings_from_song :: proc(s: ^song.Song, allocator := context.allocator) -> []f64 {
+	ring := make([]f64, len(s.nodes), allocator)
+	if len(s.nodes) == 0 {
+		return ring
+	}
+	order, loops := song.graph_order(s, context.temp_allocator)
+	looped := make([]bool, len(s.edges), context.temp_allocator)
+	for i in loops {
+		looped[i] = true
+	}
+	#reverse for k in order {
+		after := 0.0
+		for x, i in s.edges {
+			if x.from == k && x.kind == .Audio && !looped[i] {
+				after = max(after, ring[x.to])
+			}
+		}
+		ring[k] = node_memory(s, int(k)) + after
+	}
+	return ring
 }
 
 // Seconds an exact seek renders before its target: what the node that needs

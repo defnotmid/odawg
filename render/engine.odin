@@ -81,10 +81,12 @@ Node_Run :: struct {
 	latency: i64,
 	pre:     i64,
 	started: bool, // during an exact seek: rendering yet
-	// A bus's or a return's chain sleeps once its input has been silent for
-	// its tail (an input sample: past it, the chain does no work and puts out
-	// silence) and wakes, reset, on the first sample of sound: both edges
-	// from the sound itself, never from where a block falls.
+	// Dormancy: past `awake_until` (an input sample) a node is silent and
+	// does no work: a bus's or a return's chain once its input has been
+	// silent for its tail, waking (reset) on the first sample of sound; a
+	// track's once every started note's tail and its chain's are over and no
+	// slot sounds, waking (its effects reset) where its next note starts. Both
+	// edges come from the sound or the notes, never from where a block falls.
 	awake_until: i64,
 	tail:    i64,
 	origin:  i64, // where its placement's clock starts (song samples): its effects run on its song's time
@@ -109,18 +111,10 @@ Master_Stats :: struct {
 }
 
 Track_Run :: struct {
-	cursor:    i64, // the song sample of its next output
-	latency:   i64, // its chain's lookahead: its input runs this far ahead
+	cursor:    i64, // the song sample of its next output (its node's latency, tail and awake_until are its chain's)
 	slots:     base.Span, // into voices
 	next_note: i32, // into song.notes: the next to start
 	stolen:    int, // notes that found no free slot (a finding)
-	// Dormancy: past `awake_until` (an input sample: every started note's
-	// tail and the effects' tails are over) with no slot sounding, the track
-	// is silent and does no work until its next note starts, where its
-	// effects reset. Both edges come from the notes, never from where a block
-	// falls, so the samples don't depend on block size.
-	awake_until: i64,
-	tail:      i64, // samples its chain rings after its input
 	placement: i32, // its song's (song.node_placement; -1: a clip's): where it makes room
 }
 
@@ -146,7 +140,6 @@ engine_init :: proc(e: ^Engine, s: ^song.Song) -> bool {
 		run := &e.tracks[ti]
 		run.slots = {i32(slots_total), i32(polyphony_from_track(s, t))}
 		slots_total += int(run.slots.count)
-		run.tail = i64(math.ceil(chain_tail(s, t.chain) * RATE)) + DORMANT_MARGIN
 	}
 	for nd, k in s.nodes {
 		if nd.kind != .Master { // the master's chain runs in its Master_Run
@@ -208,7 +201,6 @@ engine_init :: proc(e: ^Engine, s: ^song.Song) -> bool {
 	e.fx_scratch = new(device.Fx_Scratch)
 	master_run_init(&e.master, s, {})
 	for ti in 0 ..< len(s.tracks) {
-		e.tracks[ti].latency = e.nodes[ti].latency
 		e.tracks[ti].placement = song.node_placement(s, ti)
 	}
 	e.stem_gain = make([]f32, stem_count(s))
@@ -651,8 +643,9 @@ track_seek :: proc(e: ^Engine, ti: int, at: i64, exact: bool) {
 	t := s.tracks[ti]
 	run := &e.tracks[ti]
 	run.cursor = at
-	input := at + run.latency
-	run.awake_until = input // dormant unless a note is still sounding
+	nd := &e.nodes[ti]
+	input := at + nd.latency
+	nd.awake_until = input // dormant unless a note is still sounding
 	for k in run.slots.first ..< base.span_end(run.slots) {
 		e.slot_note[k] = -1
 		e.slot_choke[k] = 0
@@ -848,7 +841,8 @@ start_note :: proc(e: ^Engine, ti: int, ni: i32, mono: bool, start: i64) -> []in
 		return nil // it switches the regions later notes play; it doesn't sound
 	}
 	tail := i64(math.ceil(device.note_tail(&p, n, &e.env) * RATE))
-	run.awake_until = max(run.awake_until, start + tail + run.tail)
+	nd := &e.nodes[ti]
+	nd.awake_until = max(nd.awake_until, start + tail + nd.tail)
 	// a layered program's note: a voice per layer it starts (its regions)
 	program := i32(p[.Program])
 	layers: [device.MAX_LAYERS]i32
@@ -1123,7 +1117,8 @@ track_block :: proc(e: ^Engine, ti: int, l, r: []f32) -> (wrote: bool) {
 	t := s.tracks[ti]
 	run := &e.tracks[ti]
 	n := len(l)
-	input := run.cursor + run.latency
+	nd := &e.nodes[ti]
+	input := run.cursor + nd.latency
 	slice.zero(l)
 	slice.zero(r)
 	p := s.params[t.instrument]
@@ -1143,7 +1138,7 @@ track_block :: proc(e: ^Engine, ti: int, l, r: []f32) -> (wrote: bool) {
 	pos := 0
 	for pos < n {
 		at := input + i64(pos)
-		if at >= run.awake_until && !sounding(e, run) {
+		if at >= nd.awake_until && !sounding(e, run) {
 			// dormant to the next note; it wakes there, its effects fresh
 			wake := next_start(s, run, end)
 			if wake >= input + i64(n) {
@@ -1155,7 +1150,7 @@ track_block :: proc(e: ^Engine, ti: int, l, r: []f32) -> (wrote: bool) {
 		// awake: voices to where it may sleep again (notes extend that)
 		from := pos
 		for pos < n {
-			limit := sounding(e, run) ? i64(n) : clamp(run.awake_until - input, i64(pos), i64(n))
+			limit := sounding(e, run) ? i64(n) : clamp(nd.awake_until - input, i64(pos), i64(n))
 			next := clamp(next_start(s, run, end) - input, i64(pos), limit)
 			if int(next) > pos {
 				play_graphs(e, ti, l[pos:next], r[pos:next])
