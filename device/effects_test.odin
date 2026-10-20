@@ -68,9 +68,9 @@ fx_test_same :: proc(a, b: []f32) -> bool {
 @(private = "file")
 fx_test_stream :: proc(kind: Device_Kind, p: ^Params, l, r: []f32, block := 0, at: i64 = 0, key_l: []f32 = nil, key_r: []f32 = nil) {
 	row := &DEVICE_TABLE[kind]
-	state := make([]u8, row.effect_size(p))
+	state := make([]u8, effect_size(kind, p))
 	defer delete(state)
-	row.effect_reset(state, p, at)
+	effect_reset(kind, state, p, at)
 	scratch := new(Fx_Scratch)
 	defer free(scratch)
 	step := block > 0 ? block : max(len(l), 1)
@@ -109,7 +109,7 @@ test_effects_block_split :: proc(t: ^testing.T) {
 	defer delete(kr)
 	for kind in kinds {
 		row := &DEVICE_TABLE[kind]
-		testing.expectf(t, row.effect != nil && row.effect_size != nil && row.effect_reset != nil, "%v lacks a proc", kind)
+		testing.expectf(t, row.effect != nil, "%v lacks a proc", kind)
 		p := params_from_kind(kind)
 		p[.Wet] = 0.6
 		keyed := kind == .Compressor || kind == .Gate

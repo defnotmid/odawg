@@ -18,13 +18,11 @@ fx_level_db :: proc(key_l, key_r: []f32, out: []f32) {
 
 // ---- Compressor --------------------------------------------------------------------
 
-@(private = "file")
+@(private)
 Fx_Compressor :: struct {
 	held, reduction: f64, // dB taken off, >= 0
 }
 
-size_compressor :: proc(p: ^Params) -> int {return size_of(Fx_Compressor)}
-reset_compressor :: proc(state: []u8, p: ^Params, at: i64) {fx_clear(state)}
 
 // A soft-knee compressor after Giannoulis, Massberg and Reiss: the key's
 // level (stereo-linked) through the static curve (.Threshold, .Ratio, .Knee
@@ -75,14 +73,12 @@ effect_compressor :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []
 
 // ---- Gate --------------------------------------------------------------------------
 
-@(private = "file")
+@(private)
 Fx_Gate :: struct {
 	env:     f32,
 	gain:    f64,
 }
 
-size_gate :: proc(p: ^Params) -> int {return size_of(Fx_Gate)}
-reset_gate :: proc(state: []u8, p: ^Params, at: i64) {fx_clear(state)}
 
 // A gate: a peak follower on the louder key channel (instant rise, 20 ms
 // fall) opens it above .Threshold (dB); its gain opens over .Attack and
@@ -153,7 +149,7 @@ fx_peak_kernel :: proc() -> (kernel: [3][2 * FX_TAPS]f32) {
 	return
 }
 
-@(private = "file")
+@(private)
 Fx_Limiter :: struct {
 	pos:        i64, // the song sample the next input is
 	released:   f64,
@@ -166,12 +162,12 @@ Fx_Limiter :: struct {
 	hold:       [FX_LIMITER_WINDOW]f64, // the last window minima, for the average
 }
 
-size_limiter :: proc(p: ^Params) -> int {return size_of(Fx_Limiter)}
 
-reset_limiter :: proc(state: []u8, p: ^Params, at: i64) {
-	fx_clear(state)
+
+// What a reset sets past zero: nothing released, the window's minima at 1.
+@(private)
+init_limiter :: proc(state: []u8) {
 	f := fx_header(state, Fx_Limiter)
-	f.pos = at
 	f.released = 1
 	f.sum = FX_LIMITER_WINDOW
 	for &h in f.hold {

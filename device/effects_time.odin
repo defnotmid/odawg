@@ -65,7 +65,7 @@ FX_REVERB_GRID :: 256
 
 #assert(FX_CHUNK + FX_REVERB_MOD_DEPTH + 2 < 1153) // a chunk reads its lines before writing them
 
-@(private = "file")
+@(private)
 Fx_Reverb :: struct {
 	pos:          i64, // the song sample the next input is
 	diffuser_pos: [4]int,
@@ -86,16 +86,17 @@ fx_wobble_at :: proc "contextless" (i: int, t: i64) -> f32 {
 	return f32(math.sin(f64(i) * 2.1 + math.TAU * fx_wobble_rate(i) * f64(t) / RATE))
 }
 
-size_reverb :: proc(p: ^Params) -> int {
+// Its pre-delay ring's bytes.
+@(private)
+rings_reverb :: proc(p: ^Params) -> int {
 	pre := int(math.round(f64(clamp(p[.Pre_Delay], 0, 1)) * RATE))
-	return size_of(Fx_Reverb) + fx_pow2(pre + 1) * size_of(f32)
+	return fx_pow2(pre + 1) * size_of(f32)
 }
 
-reset_reverb :: proc(state: []u8, p: ^Params, at: i64) {
-	fx_clear(state)
-	v := fx_header(state, Fx_Reverb)
-	v.pos = at
-	v.wobble_at = -1
+// No wobble computed yet.
+@(private)
+init_reverb :: proc(state: []u8) {
+	fx_header(state, Fx_Reverb).wobble_at = -1
 }
 
 // The reverb's decay (to -60 dB) after its pre-delay.
@@ -275,7 +276,7 @@ effect_reverb :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32,
 
 // ---- delays --------------------------------------------------------------------------
 
-@(private = "file")
+@(private)
 Fx_Delay :: struct {
 	pos:     i64, // the song sample the next input is
 	// then two rings: left and right (FeedbackDelay), the two sends (PingPongDelay)
@@ -286,13 +287,9 @@ fx_delay_samples :: proc(p: ^Params) -> f64 {
 	return clamp(f64(p[.Delay_Time]), 0, 10) * RATE
 }
 
-size_feedback_delay :: proc(p: ^Params) -> int {
-	return size_of(Fx_Delay) + 2 * fx_pow2(int(fx_delay_samples(p)) + 3) * size_of(f32)
-}
-
-reset_feedback_delay :: proc(state: []u8, p: ^Params, at: i64) {
-	fx_clear(state)
-	fx_header(state, Fx_Delay).pos = at
+@(private)
+rings_feedback_delay :: proc(p: ^Params) -> int {
+	return 2 * fx_pow2(int(fx_delay_samples(p)) + 3) * size_of(f32)
 }
 
 // Tone's FeedbackDelay, per channel: the wet signal is the delay line's
@@ -317,13 +314,9 @@ effect_feedback_delay :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r
 	})
 }
 
-size_ping_pong_delay :: proc(p: ^Params) -> int {
-	return size_of(Fx_Delay) + 2 * fx_pow2(int(2 * fx_delay_samples(p)) + 3) * size_of(f32)
-}
-
-reset_ping_pong_delay :: proc(state: []u8, p: ^Params, at: i64) {
-	fx_clear(state)
-	fx_header(state, Fx_Delay).pos = at
+@(private)
+rings_ping_pong_delay :: proc(p: ^Params) -> int {
+	return 2 * fx_pow2(int(2 * fx_delay_samples(p)) + 3) * size_of(f32)
 }
 
 // Tone's PingPongDelay: the left input delayed once by .Delay_Time, the
@@ -362,14 +355,10 @@ tail_delay :: proc(p: ^Params) -> f64 {
 
 // ---- Chorus ------------------------------------------------------------------------
 
-size_chorus :: proc(p: ^Params) -> int {
+@(private)
+rings_chorus :: proc(p: ^Params) -> int {
 	longest := clamp(f64(p[.Delay_Time]), 0, 0.1) * RATE * (1 + f64(clamp(p[.Depth], 0, 1)))
-	return size_of(Fx_Delay) + 2 * fx_pow2(int(longest) + 6) * size_of(f32)
-}
-
-reset_chorus :: proc(state: []u8, p: ^Params, at: i64) {
-	fx_clear(state)
-	fx_header(state, Fx_Delay).pos = at
+	return 2 * fx_pow2(int(longest) + 6) * size_of(f32)
 }
 
 // Tone's Chorus: each channel through its own delay, swept by a sine LFO at

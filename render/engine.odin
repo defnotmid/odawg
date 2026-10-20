@@ -194,7 +194,7 @@ engine_init :: proc(e: ^Engine, s: ^song.Song) -> bool {
 		c := s.nodes[k].kind == .Master ? base.Span{} : song.node_chain(s, k)
 		for d in s.chain[c.first:base.span_end(c)] {
 			p := s.params[d]
-			size := (device.DEVICE_TABLE[s.devices[d]].effect_size(&p) + 15) &~ 15
+			size := (device.effect_size(s.devices[d], &p) + 15) &~ 15
 			e.fx[fi] = {d, {i32(bytes), i32(size)}}
 			bytes += size
 			fi += 1
@@ -769,7 +769,7 @@ chase_to :: proc(e: ^Engine, ti: int, at: i64, jump: bool) {
 reset_fx :: proc(e: ^Engine, k: int, f: Fx_Run, at: i64) {
 	p := e.song.params[f.device]
 	state := e.fx_bytes[f.state.first:base.span_end(f.state)]
-	device.DEVICE_TABLE[e.song.devices[f.device]].effect_reset(state, &p, at - e.nodes[k].origin)
+	device.effect_reset(e.song.devices[f.device], state, &p, at - e.nodes[k].origin)
 }
 
 // Streams the next len(l) samples of the mix into l and r (and into stems,

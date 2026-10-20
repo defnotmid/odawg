@@ -46,6 +46,25 @@ fx_header :: #force_inline proc(state: []u8, $T: typeid) -> ^T {
 	return (^T)(raw_data(state))
 }
 
+// An effect instance's bytes: its row's state and rings.
+effect_size :: proc(kind: Device_Kind, p: ^Params) -> int {
+	row := &DEVICE_TABLE[kind]
+	return row.state + (row.rings != nil ? row.rings(p) : 0)
+}
+
+// Puts an instance at song sample `at`: its history cleared, its clock (a
+// clocked state's first field) at `at`, what its row's init sets.
+effect_reset :: proc(kind: Device_Kind, state: []u8, p: ^Params, at: i64) {
+	row := &DEVICE_TABLE[kind]
+	mem.zero_slice(state)
+	if row.clock {
+		(^i64)(raw_data(state))^ = at
+	}
+	if row.init != nil {
+		row.init(state)
+	}
+}
+
 // The smallest power of two holding `n`.
 @(private)
 fx_pow2 :: proc "contextless" (n: int) -> int {
@@ -73,12 +92,6 @@ fx_ring_len :: proc(state: []u8, $T: typeid, arrays: int) -> int {
 @(private)
 fx_ring :: proc(state: []u8, $T: typeid, ring_len, index: int) -> []f32 {
 	return ([^]f32)(raw_data(state[size_of(T):]))[index * ring_len:][:ring_len]
-}
-
-// Clears an instance's bytes.
-@(private)
-fx_clear :: proc(state: []u8) {
-	mem.zero_slice(state)
 }
 
 // Runs an effect's body over a block in chunks: both channels cut to one
@@ -144,9 +157,6 @@ fx_filter_type :: proc "contextless" (v: f32) -> dsp.Filter_Type {
 	return dsp.Filter_Type(clamp(int(v), 0, len(dsp.Filter_Type) - 1))
 }
 
-// Sizes and resets for the effects whose state is only their struct.
-@(private = "file")
-fx_size_of :: proc($T: typeid) -> int {return size_of(T)}
 
 // ---- the state-variable filter ---------------------------------------------------
 
@@ -270,13 +280,11 @@ fx_svf_pass_moving :: proc(s: Fx_Svf_Shape, g: []f64, st: ^Fx_Svf_State, x: []f3
 
 // ---- Filter, AutoFilter, EQ3 -------------------------------------------------------
 
-@(private = "file")
+@(private)
 Fx_Filter :: struct {
 	svf:     [2][4]Fx_Svf_State,
 }
 
-size_filter :: proc(p: ^Params) -> int {return fx_size_of(Fx_Filter)}
-reset_filter :: proc(state: []u8, p: ^Params, at: i64) {fx_clear(state)}
 
 // Tone's Filter: .Type at .Frequency with .Q, .Gain for shelves and peaks,
 // cascaded by .Rolloff.
@@ -291,18 +299,13 @@ effect_filter :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32,
 	})
 }
 
-@(private = "file")
+@(private)
 Fx_Auto_Filter :: struct {
 	pos:     i64, // the song sample the next input is
 	svf:     [2][4]Fx_Svf_State,
 }
 
-size_auto_filter :: proc(p: ^Params) -> int {return fx_size_of(Fx_Auto_Filter)}
 
-reset_auto_filter :: proc(state: []u8, p: ^Params, at: i64) {
-	fx_clear(state)
-	fx_header(state, Fx_Auto_Filter).pos = at
-}
 
 // Tone's AutoFilter: a sine LFO at .Frequency (phase 0 at song sample 0)
 // sweeps the filter's cutoff linearly between .Base_Frequency and
@@ -328,13 +331,11 @@ effect_auto_filter :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: [
 	})
 }
 
-@(private = "file")
+@(private)
 Fx_EQ3 :: struct {
 	svf:     [2][9]Fx_Svf_State,
 }
 
-size_eq3 :: proc(p: ^Params) -> int {return fx_size_of(Fx_EQ3)}
-reset_eq3 :: proc(state: []u8, p: ^Params, at: i64) {fx_clear(state)}
 
 // Three bands, .Low, .Mid and .High (dB), split at .Low_Frequency and
 // .High_Frequency by Linkwitz-Riley crossovers (two Butterworth stages),
@@ -413,15 +414,13 @@ fx_curve :: #force_inline proc "contextless" (x, k: f64) -> f64 {
 	return (3 + k) * v * 20 * DEG / (math.PI + k * abs(v))
 }
 
-@(private = "file")
+@(private)
 Fx_Distortion :: struct {
 	count:   i64, // samples in since the reset
 	input:   [2][FX_DISTORTION_RING]f32,
 	half:    [2][FX_DISTORTION_RING]f32, // the shaped values at t + 0.5
 }
 
-size_distortion :: proc(p: ^Params) -> int {return fx_size_of(Fx_Distortion)}
-reset_distortion :: proc(state: []u8, p: ^Params, at: i64) {fx_clear(state)}
 
 // The oversampler's two half-band filters: 31 samples (0.65 ms).
 latency_distortion :: proc(p: ^Params) -> int {return FX_DISTORTION_LATENCY}
@@ -469,13 +468,6 @@ effect_distortion :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []
 
 // ---- BitCrusher, StereoWidener -----------------------------------------------------
 
-@(private = "file")
-Fx_Stateless :: struct {
-}
-
-size_bit_crusher :: proc(p: ^Params) -> int {return fx_size_of(Fx_Stateless)}
-reset_bit_crusher :: proc(state: []u8, p: ^Params, at: i64) {fx_clear(state)}
-
 // Tone's BitCrusher: each sample rounded to a step of 2^(1 - .Bits).
 effect_bit_crusher :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32, scratch: ^Fx_Scratch) {
 	fx_run(state, p, l, r, key_l, key_r, scratch, proc(state: []u8, p: ^Params, l, r, _, _: []f32, scratch: ^Fx_Scratch) {
@@ -488,8 +480,6 @@ effect_bit_crusher :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: [
 	})
 }
 
-size_stereo_widener :: proc(p: ^Params) -> int {return fx_size_of(Fx_Stateless)}
-reset_stereo_widener :: proc(state: []u8, p: ^Params, at: i64) {fx_clear(state)}
 
 // Tone's StereoWidener: mid scaled by 2 (1 - .Width), side by 2 .Width, so
 // 0.5 leaves the signal as it is, 0 is mono and 1 only the sides.
