@@ -1,6 +1,7 @@
 package odawg_device
 
 import "core:math"
+import base "../base"
 
 // The effects that follow a level: Compressor, Gate and the Limiter (also
 // the master limiter). Each chunk runs in stages: the key's level, the gain
@@ -61,7 +62,7 @@ effect_compressor :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []
 			want := f64(v)
 			held = fx_flush(max(want, rel * held + (1 - rel) * want))
 			reduction = fx_flush(att * reduction + (1 - att) * held)
-			v = f32(math.pow(10, -reduction / 20))
+			v = f32(base.db_to_gain(-reduction))
 		}
 		c.held, c.reduction = held, reduction
 		for g, i in work {
@@ -89,7 +90,7 @@ effect_gate :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32, s
 		work := scratch.a[:len(l)]
 		// The follower, then whether the gate wants to be open.
 		fall := f32(fx_time_coef(0.02))
-		open_level := f32(math.pow(10, f64(p[.Threshold]) / 20))
+		open_level := f32(base.db_to_gain(f64(p[.Threshold])))
 		env := g.env
 		for &v, i in work {
 			k := max(abs(key_l[i]), abs(key_r[i]))
@@ -196,7 +197,7 @@ effect_limiter :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32
 		CAP :: W + 1
 		f := fx_header(state, Fx_Limiter)
 		n := len(l)
-		ceiling := f32(math.pow(10, f64(p[.Threshold]) / 20))
+		ceiling := f32(base.db_to_gain(f64(p[.Threshold])))
 		kernel := fx_peak_kernel()
 		gain := scratch.d[:n]
 

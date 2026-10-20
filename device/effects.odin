@@ -1,5 +1,6 @@
 package odawg_device
 
+import base "../base"
 import dsp "../dsp"
 import "core:math"
 import "core:mem"
@@ -283,9 +284,9 @@ effect_eq3 :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32, sc
 		lp1, hp1 := dsp.svf64(FX_BUTTERWORTH_LOW, f1), dsp.svf64(FX_BUTTERWORTH_HIGH, f1)
 		lp2, hp2 := dsp.svf64(FX_BUTTERWORTH_LOW, f2), dsp.svf64(FX_BUTTERWORTH_HIGH, f2)
 		ap2 := dsp.svf64(FX_BUTTERWORTH_ALL, f2)
-		gl := f32(math.pow(10, f64(p[.Low]) / 20))
-		gm := f32(math.pow(10, f64(p[.Mid]) / 20))
-		gh := f32(math.pow(10, f64(p[.High]) / 20))
+		gl := f32(base.db_to_gain(f64(p[.Low])))
+		gm := f32(base.db_to_gain(f64(p[.Mid])))
+		gh := f32(base.db_to_gain(f64(p[.High])))
 		low := scratch.a[:len(l)]
 		mid := scratch.b[:len(l)]
 		for x, c in ([2][]f32{l, r}) {

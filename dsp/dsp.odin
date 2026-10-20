@@ -90,13 +90,7 @@ exp_decay :: #force_inline proc "contextless" (x: f32) -> f32 {
 		k -= 1
 	}
 	f := y - f32(k) // [0, 1)
-	p := f32(1.8775767e-3)
-	p = p * f + 8.9893397e-3
-	p = p * f + 5.5826318e-2
-	p = p * f + 2.4015361e-1
-	p = p * f + 6.9315308e-1
-	p = p * f + 1
-	return p * transmute(f32)(u32(k + 127) << 23)
+	return exp2_split(k, f)
 }
 
 // 2^y for any y (clamped to f32's exponents): its whole part as the
@@ -109,6 +103,14 @@ exp2_fast :: #force_inline proc "contextless" (y: f32) -> f32 {
 		k -= 1
 	}
 	f := y - f32(k) // [0, 1)
+	return exp2_split(k, f)
+}
+
+// 2^(k + f) for a whole k (an f32 exponent) and f in [0, 1): the
+// fraction's polynomial (relative error under 2e-7) times 2^k; exp_decay's
+// and exp2_fast's.
+@(private = "file")
+exp2_split :: #force_inline proc "contextless" (k: i32, f: f32) -> f32 {
 	p := f32(1.8775767e-3)
 	p = p * f + 8.9893397e-3
 	p = p * f + 5.5826318e-2

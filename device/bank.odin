@@ -143,19 +143,15 @@ bank_destroy :: proc(b: ^Bank) {
 // by the host, not copied: its frames must outlive the bank's use. Float
 // frames, or 16-bit ones as they are (a host's render of a song, full scale
 // 32768). Returns the set's index.
-bank_borrow :: proc {
-	bank_borrow_f32,
-	bank_borrow_i16,
-}
-
-bank_borrow_f32 :: proc(b: ^Bank, name: string, frames: []f32) -> i32 {
-	append(&b.f32s, frames)
-	return borrowed_set(b, name, Sample{chunk = i32(len(b.f32s) - 1), frames = i64(len(frames) / 2), channels = 2, format = .F32})
-}
-
-bank_borrow_i16 :: proc(b: ^Bank, name: string, frames: []i16) -> i32 {
-	append(&b.i16s, frames)
-	return borrowed_set(b, name, Sample{chunk = i32(len(b.i16s) - 1), frames = i64(len(frames) / 2), channels = 2, format = .I16})
+bank_borrow :: proc(b: ^Bank, name: string, frames: []$T) -> i32 where T == f32 || T == i16 {
+	when T == f32 {
+		append(&b.f32s, frames)
+		chunk, format := len(b.f32s) - 1, Sample_Format.F32
+	} else {
+		append(&b.i16s, frames)
+		chunk, format := len(b.i16s) - 1, Sample_Format.I16
+	}
+	return borrowed_set(b, name, Sample{chunk = i32(chunk), frames = i64(len(frames) / 2), channels = 2, format = format})
 }
 
 // A lent sample's rows: the sample, one zone over every key, its set.
