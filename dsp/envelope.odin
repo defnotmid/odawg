@@ -80,69 +80,180 @@ approach :: #force_inline proc "contextless" (from, target: f32, ramp, t: f64) -
 
 // Fills `out` with the envelope's levels; the gate closes (the release
 // starts) at sample `release_at` of this slice (negative or past the end: not
-// in it).
+// in it). Each stage runs as a span up to the sample it changes on (its
+// samples a function of their count alone: adsr_span), that sample as
+// adsr_step: the same samples as stepping every one.
 adsr_run :: proc "contextless" (e: ^Adsr, out: []f32, release_at: int) {
+	adsr_begin(e)
+	n := len(out)
+	for i := 0; i < n; {
+		if i == release_at {
+			adsr_release(e)
+		}
+		end := release_at > i && release_at < n ? release_at : n
+		m := adsr_span(e, out[i:end])
+		i += m
+		if m == 0 {
+			out[i] = adsr_step(e)
+			i += 1
+		}
+	}
+}
+
+// What adsr_run does before its first sample, and as the gate closes.
+adsr_begin :: proc "contextless" (e: ^Adsr) {
 	if e.samples == 0 && e.stage == .Attack && e.exponential_attack && e.length == 0 {
 		stage_set(e, e.attack, 1)
 	}
-	for i in 0 ..< len(out) {
-		if i == release_at && e.stage != .Idle {
-			e.stage, e.samples, e.from = .Release, 0, e.value
-			stage_set(e, e.release, 0)
+}
+
+adsr_release :: proc "contextless" (e: ^Adsr) {
+	if e.stage != .Idle {
+		e.stage, e.samples, e.from = .Release, 0, e.value
+		stage_set(e, e.release, 0)
+	}
+}
+
+// The first count k (samples into a stage) with f64(k) >= x: k against a
+// fixed f64 compares as against its ceiling.
+@(private = "file")
+first_reaching :: #force_inline proc "contextless" (x: f64) -> int {
+	return int(math.ceil(clamp(x, 0, 1e15)))
+}
+
+// The leading samples of `out` before the stage changes, each from its
+// count alone as adsr_step gives it (a loop with no branch); how many.
+@(private = "file")
+adsr_span :: proc "contextless" (e: ^Adsr, out: []f32) -> int #no_bounds_check {
+	k0, n := e.samples, len(out)
+	span :: #force_inline proc "contextless" (k0, n, end: int) -> int {return clamp(end - k0, 0, n)}
+	fill :: #force_inline proc "contextless" (out: []f32, v: f32) {
+		for i in 0 ..< len(out) {
+			out[i] = v
 		}
-		done: bool
-		switch e.stage {
-		case .Idle:
-			e.value = 0
-		case .Delay:
-			e.value = 0
-			if f64(e.samples) >= f64(e.delay) * RATE {
-				e.stage, e.samples, e.from, e.length = .Attack, 0, e.start, 0
-				if e.exponential_attack {
-					stage_set(e, e.attack, 1)
-				}
-				e.value = e.start
-			}
-		case .Attack:
-			a := f64(e.attack)
-			t := f64(e.samples) / RATE
+	}
+	m: int
+	switch e.stage {
+	case .Idle:
+		m = n
+		fill(out, 0)
+	case .Sustain:
+		m = n
+		fill(out, e.sustain)
+	case .Delay:
+		m = span(k0, n, first_reaching(f64(e.delay) * RATE))
+		fill(out[:m], 0)
+	case .Hold:
+		m = span(k0, n, first_reaching(f64(e.hold) * RATE))
+		fill(out[:m], 1)
+	case .Attack:
+		if e.exponential_attack {
+			m = approach_span(e, 1, out)
+			break
+		}
+		// f64(k) / RATE rises with k: the first k it reaches the attack at,
+		// from its estimate
+		a := f64(e.attack)
+		end := first_reaching(a * RATE)
+		for guard := 0; guard < 4 && end > 0 && f64(end - 1) / RATE >= a; guard += 1 {
+			end -= 1
+		}
+		for guard := 0; guard < 4 && f64(end) / RATE < a; guard += 1 {
+			end += 1
+		}
+		if f64(end) / RATE < a {
+			break // a whole span can't be told: step it
+		}
+		m = span(k0, n, end)
+		from := e.from
+		for i in 0 ..< m {
+			out[i] = from + (1 - from) * f32(f64(k0 + i) / RATE / a)
+		}
+	case .Decay:
+		m = approach_span(e, e.sustain, out)
+	case .Release:
+		m = approach_span(e, 0, out)
+	}
+	if m > 0 {
+		e.value = out[m - 1]
+		e.samples += m
+	}
+	return m
+}
+
+// stage_value's samples up to its end: the approach to 90% of its time,
+// then the line.
+@(private = "file")
+approach_span :: #force_inline proc "contextless" (e: ^Adsr, target: f32, out: []f32) -> int #no_bounds_check {
+	k0 := e.samples
+	m := clamp(first_reaching(e.length) - k0, 0, len(out))
+	curve := clamp(first_reaching(0.9 * e.length) - k0, 0, m)
+	from, inv_tc := e.from, e.inv_tc
+	for i in 0 ..< curve {
+		out[i] = target + (from - target) * exp_decay(-f32(k0 + i) * inv_tc)
+	}
+	v90, length := f64(e.v90), e.length
+	for i in curve ..< m {
+		out[i] = f32(v90 + (f64(target) - v90) * (f64(k0 + i) - 0.9 * length) / (0.1 * length))
+	}
+	return m
+}
+
+// One sample of the envelope (the gate aside): its stage's level at its
+// count, the next stage where it ends there.
+adsr_step :: proc "contextless" (e: ^Adsr) -> f32 {
+	done: bool
+	switch e.stage {
+	case .Idle:
+		e.value = 0
+	case .Delay:
+		e.value = 0
+		if f64(e.samples) >= f64(e.delay) * RATE {
+			e.stage, e.samples, e.from, e.length = .Attack, 0, e.start, 0
 			if e.exponential_attack {
-				e.value, done = stage_value(e, 1, e.samples)
-			} else if t >= a {
-				e.value, done = 1, true
+				stage_set(e, e.attack, 1)
+			}
+			e.value = e.start
+		}
+	case .Attack:
+		a := f64(e.attack)
+		t := f64(e.samples) / RATE
+		if e.exponential_attack {
+			e.value, done = stage_value(e, 1, e.samples)
+		} else if t >= a {
+			e.value, done = 1, true
+		} else {
+			e.value = e.from + (1 - e.from) * f32(t / a)
+		}
+		if done {
+			if e.hold > 0 {
+				e.stage, e.samples = .Hold, 0
 			} else {
-				e.value = e.from + (1 - e.from) * f32(t / a)
-			}
-			if done {
-				if e.hold > 0 {
-					e.stage, e.samples = .Hold, 0
-				} else {
-					e.stage, e.samples, e.from = .Decay, 0, 1
-					stage_set(e, e.decay, e.sustain)
-				}
-			}
-		case .Hold:
-			e.value = 1
-			if f64(e.samples) >= f64(e.hold) * RATE {
 				e.stage, e.samples, e.from = .Decay, 0, 1
 				stage_set(e, e.decay, e.sustain)
 			}
-		case .Decay:
-			e.value, done = stage_value(e, e.sustain, e.samples)
-			if done {
-				e.stage = .Sustain
-			}
-		case .Sustain:
-			e.value = e.sustain
-		case .Release:
-			e.value, done = stage_value(e, 0, e.samples)
-			if done {
-				e.stage, e.value = .Idle, 0
-			}
 		}
-		e.samples += 1
-		out[i] = e.value
+	case .Hold:
+		e.value = 1
+		if f64(e.samples) >= f64(e.hold) * RATE {
+			e.stage, e.samples, e.from = .Decay, 0, 1
+			stage_set(e, e.decay, e.sustain)
+		}
+	case .Decay:
+		e.value, done = stage_value(e, e.sustain, e.samples)
+		if done {
+			e.stage = .Sustain
+		}
+	case .Sustain:
+		e.value = e.sustain
+	case .Release:
+		e.value, done = stage_value(e, 0, e.samples)
+		if done {
+			e.stage, e.value = .Idle, 0
+		}
 	}
+	e.samples += 1
+	return e.value
 }
 
 // A value gliding to its target with a one-pole lag (`time` the time

@@ -35,3 +35,55 @@ test_envelope_curves :: proc(t: ^testing.T) {
 		testing.expectf(t, same, "cut into runs of %d it differs", step)
 	}
 }
+
+// adsr_run's spans give the samples of stepping every one (adsr_step), bit
+// for bit: every stage, each kind of attack, the gate closing in each stage,
+// however the run is cut.
+@(test)
+test_envelope_spans :: proc(t: ^testing.T) {
+	shapes := []Adsr {
+		{attack = 0.01, decay = 0.2, sustain = 0.5, release = 0.3},
+		{attack = 0.3, decay = 0, sustain = 1, release = 0.05},
+		{attack = 1.8, decay = 1, sustain = 0.8, release = 3.5},
+		{attack = 0.02, decay = 0.1, sustain = 0.3, release = 0.2, exponential_attack = true},
+		{attack = 0.01, decay = 0.05, sustain = 0.2, release = 0.1, delay = 0.03, hold = 0.02, start = 0.25},
+		{attack = 0, decay = 0, sustain = 0.7, release = 0},
+		{attack = 1 / f32(RATE), decay = 3 / f32(RATE), sustain = 0.4, release = 2 / f32(RATE), hold = 1 / f32(RATE)},
+	}
+	length := int(1.2 * RATE)
+	for shape, k in shapes {
+		for gate in ([]int{0, 100, 500, int(0.02 * RATE), int(0.15 * RATE), int(0.6 * RATE), length + 10}) {
+			start :: proc(shape: Adsr) -> Adsr {
+				e := shape
+				e.stage, e.from = e.delay > 0 ? .Delay : .Attack, e.start
+				return e
+			}
+			want := make([]f32, length, context.temp_allocator)
+			x := start(shape)
+			adsr_begin(&x)
+			for i in 0 ..< length {
+				if i == gate {
+					adsr_release(&x)
+				}
+				want[i] = adsr_step(&x)
+			}
+			for step in ([]int{1, 7, 256, 300, length}) {
+				got := make([]f32, length, context.temp_allocator)
+				e := start(shape)
+				for at := 0; at < length; at += step {
+					end := min(at + step, length)
+					rel := gate - at
+					adsr_run(&e, got[at:end], rel >= 0 && rel < end - at ? rel : -1)
+				}
+				first := -1
+				for v, i in want {
+					if transmute(u32)v != transmute(u32)got[i] {
+						first = i
+						break
+					}
+				}
+				testing.expectf(t, first < 0, "shape %d, gate at %d, runs of %d: differs from sample %d", k, gate, step, first)
+			}
+		}
+	}
+}

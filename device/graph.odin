@@ -826,8 +826,8 @@ graph_scratch :: proc(prog: ^Program, lanes: int) -> int {
 graph_run :: proc(progs: ^Programs, env: ^Voice_Env, play: i32, voices: []Graph_Voice, frames: int, scratch: []f32) {
 	prog := &progs.programs[play]
 	nodes := progs.nodes[prog.nodes.first:base.span_end(prog.nodes)]
-	lanes_buf: [MAX_LANES]Lane
-	which: [MAX_LANES]i32 // the voice of each lane
+	lanes_buf: [MAX_LANES]Lane = --- // each set whole as its voice is taken
+	which: [MAX_LANES]i32 = --- // the voice of each lane
 	glide: [NODE_CHUNK]f64 = --- // a mono program's one voice's
 	per_lane := int(prog.bufs) * 2 * NODE_CHUNK
 	for off := 0; off < frames; off += NODE_CHUNK {
@@ -998,7 +998,7 @@ node_level :: proc(c: ^Node_Call, lane: ^Lane, l, r: []f32) {
 	node := c.node
 	values := node_values(c, lane)
 	gain_db, pan_base := values[FIELD_GAIN], values[FIELD_PAN]
-	gain: [NODE_CHUNK]f32
+	gain: [NODE_CHUNK]f32 = --- // node_curve's, read where it varies
 	if varies, g := node_curve(c, lane, FIELD_AMP, 1, gain[:n]); varies {
 		g = gain_db
 		for i in 0 ..< n {
@@ -1019,7 +1019,7 @@ node_level :: proc(c: ^Node_Call, lane: ^Lane, l, r: []f32) {
 			}
 		}
 	}
-	pan: [NODE_CHUNK]f32
+	pan: [NODE_CHUNK]f32 = ---
 	if varies, p := node_curve(c, lane, FIELD_PAN, pan_base, pan[:n]); varies {
 		for i in 0 ..< n {
 			q := clamp(pan[i], -1, 1)

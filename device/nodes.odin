@@ -240,8 +240,8 @@ process_osc :: proc(c: ^Node_Call) {
 			s.hz = f64(v[OSC_FREQUENCY]) // its base: what moves it moves it per sample
 			s.mult = f64(node_value(c, &lane, OSC_RATIO)) * math.pow(2, f64(node_value(c, &lane, OSC_TUNE)) / 12)
 		}
-		hz, inc: [NODE_CHUNK]f64
-		tmp, moved: [NODE_CHUNK]f32
+		hz, inc: [NODE_CHUNK]f64 = ---, ---
+		tmp, moved: [NODE_CHUNK]f32 = ---, ---
 		// what moves the frequency, as a ratio of its base (or, unmoved, the base)
 		ratio :: proc(c: ^Node_Call, lane: ^Lane, hz: []f64, moved: []f32) {
 			varies, v := node_curve(c, lane, OSC_FREQUENCY, 1, moved)
@@ -512,8 +512,8 @@ process_lfo :: proc(c: ^Node_Call) {
 			s^ = {wave = dsp.Wave(u8(vals[3])), width = 0.5, phase = f64(vals[7]) - math.floor(f64(vals[7]))}
 		}
 		vals := node_values(c, &lane)
-		rate: [NODE_CHUNK]f32
-		inc: [NODE_CHUNK]f64
+		rate: [NODE_CHUNK]f32 = ---
+		inc: [NODE_CHUNK]f64 = ---
 		varies, v := node_curve(c, &lane, 4, vals[4], rate[:n])
 		// it starts after its delay and grows to its depth over its fade
 		delay := i64(f64(vals[5]) * RATE)
@@ -591,7 +591,7 @@ process_filter :: proc(c: ^Node_Call) {
 			copy(r, ir)
 		}
 		sides := c.node.stereo ? 2 : 1
-		hz, q: [NODE_CHUNK]f32
+		hz, q: [NODE_CHUNK]f32 = ---, ---
 		swept, cutoff := node_curve(c, &lane, FILTER_FREQUENCY, v[FILTER_FREQUENCY], hz[:n])
 		resonant, res := node_curve(c, &lane, FILTER_Q, v[FILTER_Q], q[:n])
 		if !swept {
@@ -625,7 +625,7 @@ process_filter :: proc(c: ^Node_Call) {
 			}
 			continue
 		}
-		coefficients: [NODE_CHUNK]dsp.Svf
+		coefficients: [NODE_CHUNK]dsp.Svf = ---
 		if resonant || res != s.chain.q {
 			for i in 0 ..< n {
 				coefficients[i] = dsp.svf_coefficients(s.chain.type, hz[i], q[i], s.chain.gain)
@@ -663,10 +663,10 @@ plain_filter :: proc(c: ^Node_Call, lane: ^Lane, s: ^Filter_State, type: int) {
 		}
 		return
 	}
-	hz: [NODE_CHUNK]f32
+	hz: [NODE_CHUNK]f32 = ---
 	base_hz := node_values(c, lane)[FILTER_FREQUENCY]
 	swept, cutoff := node_curve(c, lane, FILTER_FREQUENCY, base_hz, hz[:n])
-	ks: [NODE_CHUNK]f32
+	ks: [NODE_CHUNK]f32 = ---
 	if swept {
 		for i in 0 ..< n {
 			ks[i] = 1 - dsp.exp_decay(-math.TAU * min(hz[i], 0.49 * RATE) / RATE)
@@ -925,7 +925,7 @@ process_comb :: proc(c: ^Node_Call) {
 		}
 		fb := node_value(c, &lane, COMB_FEEDBACK)
 		release := f64(node_value(c, &lane, COMB_RELEASE)) * RATE
-		delays: [NODE_CHUNK]f32
+		delays: [NODE_CHUNK]f32 = ---
 		moved, d := node_curve(c, &lane, COMB_DELAY, f32(s.delay / RATE), delays[:n])
 		if !moved {
 			for i in 0 ..< n {

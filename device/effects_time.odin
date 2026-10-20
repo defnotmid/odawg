@@ -142,17 +142,24 @@ effect_reverb :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32)
 			ring[t & ring_mask] = 0.5 * (l[i] + r[i])
 			s = ring[(t - pre) & ring_mask]
 		}
-		// The diffusers.
+		// The diffusers, in stretches up to each one's end: a stretch reads
+		// each slot once before writing it and none twice (the delay is longer
+		// than any stretch), so its samples don't depend on each other.
 		for length, d in FX_REVERB_DIFFUSERS {
 			buf := v.diffusers[d][:length]
 			g := f32(FX_REVERB_DIFFUSION[d])
 			at := v.diffuser_pos[d]
-			for &s in x {
-				delayed := buf[at]
-				w := s + g * delayed
-				s = delayed - g * w
-				buf[at] = fx_flush32(w)
-				at = at + 1 == length ? 0 : at + 1
+			for i := 0; i < n; {
+				m := min(n - i, length - at)
+				slots, xs := buf[at:][:m], x[i:][:m]
+				#no_bounds_check for j in 0 ..< m {
+					delayed := slots[j]
+					w := xs[j] + g * delayed
+					xs[j] = delayed - g * w
+					slots[j] = fx_flush32(w)
+				}
+				i += m
+				at = at + m == length ? 0 : at + m
 			}
 			v.diffuser_pos[d] = at
 		}
@@ -170,7 +177,7 @@ effect_reverb :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32)
 		in_gain := f32(math.sqrt(FX_REVERB_ENERGY * (decay + pre_delay) * (1 - loop_energy) / loop_energy))
 		norm := f32(1 / math.sqrt(f64(8)))
 		// Each line's read offset (its wobble), by grid cell.
-		offset: [8][FX_CHUNK]f32
+		offset: [8][FX_CHUNK]f32 = ---
 		for i := 0; i < n; {
 			t := v.pos + i64(i)
 			g := t - (((t % FX_REVERB_GRID) + FX_REVERB_GRID) % FX_REVERB_GRID)
@@ -191,32 +198,54 @@ effect_reverb :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32)
 			}
 			i += m
 		}
-		// Every line read (4-point cubic at its wobbling length), then damped.
-		z: [8][FX_CHUNK]f32
+		// Every line read (4-point cubic at its wobbling length). The offset is
+		// within ±3: shifted positive, truncation floors it. Its whole part
+		// changes seldom (the wobble is a few samples over seconds), so the
+		// reads go in stretches of one whole offset whose taps stay inside the
+		// ring: from one slice, in a loop that vectorizes.
+		z: [8][FX_CHUNK]f32 = ---
+		cubic :: #force_inline proc "contextless" (xm1, x0, x1, x2, t: f32) -> f32 {
+			c1 := 0.5 * (x1 - xm1)
+			c2 := xm1 - 2.5 * x0 + 2 * x1 - 0.5 * x2
+			c3 := 0.5 * (x2 - xm1) + 1.5 * (x0 - x1)
+			return ((c3 * t + c2) * t + c1) * t + x0
+		}
 		for d, k in FX_REVERB_LINES {
 			line := v.lines[k][:]
 			first := v.pos - i64(d)
-			out := z[k][:n]
-			for i in 0 ..< n {
-				// the offset is within ±3: shifted positive, truncation floors it
-				o := offset[k][i] + 8
+			out, off := z[k][:n], offset[k][:n]
+			for i := 0; i < n; {
+				o := off[i] + 8
 				whole := i32(o)
-				t := o - f32(whole)
 				at := first + i64(i) + i64(whole) - 8
-				xm1, x0 := line[(at - 1) & LINE], line[at & LINE]
-				x1, x2 := line[(at + 1) & LINE], line[(at + 2) & LINE]
-				c1 := 0.5 * (x1 - xm1)
-				c2 := xm1 - 2.5 * x0 + 2 * x1 - 0.5 * x2
-				c3 := 0.5 * (x2 - xm1) + 1.5 * (x0 - x1)
-				out[i] = ((c3 * t + c2) * t + c1) * t + x0
+				lo := int((at - 1) & LINE) // sample i's first tap
+				if lo + 3 > LINE {
+					// its taps wrap around the ring
+					out[i] = cubic(line[(at - 1) & LINE], line[at & LINE], line[(at + 1) & LINE], line[(at + 2) & LINE], o - f32(whole))
+					i += 1
+					continue
+				}
+				m := 1
+				for i + m < n && lo + m + 3 <= LINE && i32(off[i + m] + 8) == whole {
+					m += 1
+				}
+				taps, outs, offs := line[lo:][:m + 3], out[i:][:m], off[i:][:m]
+				#no_bounds_check for j in 0 ..< m {
+					outs[j] = cubic(taps[j], taps[j + 1], taps[j + 2], taps[j + 3], (offs[j] + 8) - f32(whole))
+				}
+				i += m
 			}
-			a, b, zk := damp_a[k], damp_b[k], v.z[k]
-			for &y in out {
-				zk = fx_flush32(b * y + a * zk)
-				y = zk
-			}
-			v.z[k] = zk
 		}
+		// Then damped: the eight one-poles side by side, their recurrences
+		// independent.
+		zs := v.z
+		for i in 0 ..< n {
+			for k in 0 ..< 8 {
+				zs[k] = fx_flush32(damp_b[k] * z[k][i] + damp_a[k] * zs[k])
+				z[k][i] = zs[k]
+			}
+		}
+		v.z = zs
 		// The Hadamard matrix over the chunk, sample-parallel: rows 1 and 2
 		// are the output taps, every row a line's feedback.
 		for h := 1; h < 8; h *= 2 {

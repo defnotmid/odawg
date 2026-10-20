@@ -68,7 +68,7 @@ wave_plain :: proc "contextless" (w: Wave) -> (plain: Wave, fat: bool) {
 // Fills `out` with the oscillator at the increments `inc` (cycles per
 // sample; they may be negative, as in deep FM, the phase wrapping either
 // way). The pulse has its DC offset removed.
-osc_run :: proc "contextless" (o: ^Osc, inc: []f64, out: []f32) {
+osc_run :: proc "contextless" (o: ^Osc, inc: []f64, out: []f32) #no_bounds_check {
 	plain, _ := wave_plain(o.wave)
 	t := o.phase
 	n := min(len(inc), len(out))
@@ -167,8 +167,8 @@ unison_init :: proc(u: ^Unison, wave: Wave, count: int, spread, width: f32, ster
 
 // Writes the copies' sum at `hz` (per sample) into l and r. `inc` and `tmp`
 // are scratch as long as l.
-unison_run :: proc(u: ^Unison, hz: []f64, l, r: []f32, inc: []f64, tmp: []f32) {
-	n := len(l)
+unison_run :: proc(u: ^Unison, hz: []f64, l, r: []f32, inc: []f64, tmp: []f32) #no_bounds_check {
+	n := min(len(l), len(r), len(hz), len(inc), len(tmp))
 	for i in 0 ..< n {
 		l[i], r[i] = 0, 0
 	}
