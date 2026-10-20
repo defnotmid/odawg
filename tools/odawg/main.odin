@@ -300,11 +300,11 @@ timeline_from_song :: proc(l: ^Loaded) -> Timeline {
 		for c, i in s.chords[sec.chords.first:base.span_end(sec.chords)] {
 			fmt.sbprintf(&b, "%s%s", i > 0 ? " " : "", chord_name(c))
 		}
-		append(&sections, Timeline_Section{sec.name, sec.start, sec.stop, sec.bars, {sec.bpm0, sec.bpm1}, sec.beats_per_bar, sec.style, sec.energy, strings.to_string(b), song.TRANSITION_NAMES[sec.transition]})
+		append(&sections, Timeline_Section{sec.name, sec.start, sec.stop, sec.bars, {sec.bpm0, sec.bpm1}, sec.beats_per_bar, song.style_name(s, sec.style), sec.energy, strings.to_string(b), song.TRANSITION_NAMES[sec.transition]})
 	}
 	tracks := make([dynamic]Timeline_Track)
 	for tr, ti in s.tracks {
-		append(&tracks, Timeline_Track{s.parts[tr.part], tr.variant, s.labels[tr.instrument], song.track_note_count(s, ti), tr.gain_db})
+		append(&tracks, Timeline_Track{s.parts[tr.part], song.style_name(s, tr.style), s.labels[tr.instrument], song.track_note_count(s, ti), tr.gain_db})
 	}
 	t.sections, t.tracks = sections[:], tracks[:]
 	return t
@@ -393,7 +393,7 @@ run_show :: proc(a: ^Args) -> bool {
 				if int(tr.part) != pi {
 					continue
 				}
-				fmt.printfln("track %s/%s  %s  %d notes  %+.1f dB  pan %.2f", p, tr.variant, s.labels[tr.instrument], song.track_note_count(s, ti), tr.gain_db, tr.pan)
+				fmt.printfln("track %s/%s  %s  %d notes  %+.1f dB  pan %.2f", p, song.style_name(s, tr.style), s.labels[tr.instrument], song.track_note_count(s, ti), tr.gain_db, tr.pan)
 				// its instrument's controls (a Param_Set command sets one by its path)
 				if s.devices[tr.instrument] == .Voice {
 					if program := i32(s.params[tr.instrument][.Program]); program >= 0 {

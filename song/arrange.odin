@@ -75,8 +75,8 @@ part_in :: proc(s: ^spec.Spec, name: string) -> ^spec.Part_Spec {
 arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 	src := Sources{own = s}
 	for sec in song.sections {
-		if sec.style != "" {
-			style_spec(&src, sec.style, &song.findings)
+		if sec.style >= 0 {
+			style_spec(&src, style_name(song, sec.style), &song.findings)
 		}
 	}
 	for p in s.parts {
@@ -107,19 +107,21 @@ arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 	// the spec's buses and where they go, its parts' routes
 	for b in s.buses {
 		append(&song.buses, Bus{b.name, chain_into_song(song, s, b.chain, 60 / song.sections[0].bpm0)})
+	}
+	for b in s.buses {
 		if b.to != "" {
-			append(&song.routes, Route{from = b.name, to = b.to, gain = 1, moves = true})
+			route_add(song, b.name, b.to, .Audio, 1, true)
 		}
 		if b.key != "" {
-			append(&song.routes, Route{from = b.key, to = b.name, kind = .Key, gain = 1})
+			route_add(song, b.key, b.name, .Key, 1, false)
 		}
 	}
 	for p in s.parts {
 		if p.to != "" {
-			append(&song.routes, Route{from = p.name, to = p.to, gain = 1, moves = true})
+			route_add(song, p.name, p.to, .Audio, 1, true)
 		}
 		if p.key != "" {
-			append(&song.routes, Route{from = p.key, to = p.name, kind = .Key, gain = 1})
+			route_add(song, p.key, p.name, .Key, 1, false)
 		}
 	}
 
@@ -156,8 +158,8 @@ arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 					// over the style of the section it starts in (what it inherits)
 					under: ^spec.Spec
 					if len(song.sections) > 0 {
-						if st := song.sections[section_from_beat(song, b0)].style; st != "" {
-							under = style_spec(&src, st, &song.findings)
+						if st := song.sections[section_from_beat(song, b0)].style; st >= 0 {
+							under = style_spec(&src, style_name(song, st), &song.findings)
 						}
 					}
 					expand(song, s, name, own, nil, under, &pl, b0, b1, &pending)
@@ -167,10 +169,10 @@ arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 		}
 		// the styles' entries where the spec leaves the part to them
 		for sec, i in song.sections {
-			if covered[i] || sec.style == "" {
+			if covered[i] || sec.style < 0 {
 				continue
 			}
-			st := style_spec(&src, sec.style, &song.findings)
+			st := style_spec(&src, style_name(song, sec.style), &song.findings)
 			sp := part_in(st, name)
 			if sp == nil {
 				continue
@@ -178,7 +180,7 @@ arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 			for &pl in st.plays[sp.plays.first:base.span_end(sp.plays)] {
 				if in_band(sec.energy, pl.energy) {
 					expand(song, st, name, own, st, st, &pl, sec.beat, sec.beat + sec.beats, &pending)
-					append(&triggers, Trigger{sec.beat, sec.beat + sec.beats, strings.concatenate({"style/", sec.style, "/", strings.trim_prefix(pl.path, "song/")})})
+					append(&triggers, Trigger{sec.beat, sec.beat + sec.beats, strings.concatenate({"style/", style_name(song, sec.style), "/", strings.trim_prefix(pl.path, "song/")})})
 				}
 			}
 		}
@@ -217,7 +219,7 @@ arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 			append(&song.regions, Region{i32(pi), start, stop, tr.source})
 		}
 		// a track per style the notes fall in (none: no instrument, no notes)
-		styles := make([dynamic]string, context.temp_allocator)
+		styles := make([dynamic]i32, context.temp_allocator)
 		tracks := make([dynamic]int, context.temp_allocator)
 		for p in pending {
 			style := song.sections[section_from_beat(song, p.beat)].style
@@ -235,7 +237,7 @@ arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 			append(&work.notes[tracks[k]], row)
 		}
 		if len(pending) == 0 && own != nil {
-			track_for(song, &src, work, i32(pi), name, len(song.sections) > 0 ? song.sections[0].style : "")
+			track_for(song, &src, work, i32(pi), name, len(song.sections) > 0 ? song.sections[0].style : -1)
 		}
 		for ti in tracks {
 			if ti >= 0 {
@@ -273,7 +275,7 @@ check_pads :: proc(song: ^Song, s: ^spec.Spec, src: ^Sources, ti: int, work: ^Wo
 			append(&names, pad_name_or_id(song, id))
 		}
 		slice.sort(names[:])
-		path := pad_play_path(s, src, song.parts[t.part], t.variant, name)
+		path := pad_play_path(s, src, song.parts[t.part], style_name(song, t.style), name)
 		what := len(names) > 0 ? strings.concatenate({"it has ", strings.join(names[:], ", ", context.temp_allocator)}, context.temp_allocator) : "it plays pitches, not pads"
 		base.report(&song.findings, "unknown_pad", .Error, path, "%s: %q is not a pad of the part's instrument (%s)", path, name, what)
 	}
@@ -396,26 +398,27 @@ chain_into_song :: proc(song: ^Song, from: ^spec.Spec, c: Span, beat_seconds: f6
 	return sp
 }
 
-// The track part `pi` plays style `variant` on, made the first time: the
-// spec's settings over the style's over the part defaults; -1 when neither
-// gives it an instrument.
+// The track part `pi` plays `style` on (-1: the song's own), made the first
+// time: the spec's settings over the style's over the part defaults; -1 when
+// neither gives it an instrument.
 @(private = "file")
-track_for :: proc(song: ^Song, src: ^Sources, work: ^Work, pi: i32, name, variant: string) -> int {
+track_for :: proc(song: ^Song, src: ^Sources, work: ^Work, pi: i32, name: string, style: i32) -> int {
 	for t, i in song.tracks {
-		if t.part == pi && t.variant == variant {
+		if t.part == pi && t.style == style {
 			return i
 		}
 	}
+	variant := style_name(song, style)
 	beat_seconds := 60 / song.sections[0].bpm0
 	for sec in song.sections {
-		if sec.style == variant {
+		if sec.style == style {
 			beat_seconds = 60 / sec.bpm0
 			break
 		}
 	}
-	t := Track{part = pi, variant = variant, gain_db = PART_GAIN_DB, room = PART_ROOM_DB, instrument = -1}
-	style := variant != "" ? style_spec(src, variant, &song.findings) : nil
-	layers := [2]^spec.Spec{style, src.own}
+	t := Track{part = pi, style = style, gain_db = PART_GAIN_DB, room = PART_ROOM_DB, instrument = -1}
+	under := variant != "" ? style_spec(src, variant, &song.findings) : nil
+	layers := [2]^spec.Spec{under, src.own}
 	instrument: struct {
 		from: ^spec.Spec,
 		d:    i32,
@@ -441,7 +444,7 @@ track_for :: proc(song: ^Song, src: ^Sources, work: ^Work, pi: i32, name, varian
 			t.chain = chain_into_song(song, from, p.effects, beat_seconds)
 		}
 		if p.sends.count > 0 {
-			t.sends = sends_into_song(song, from, p.sends, t.sends, base.path_join("parts", name))
+			t.sends = sends_into_song(song, from, p.sends, t.sends, pi, base.path_join("parts", name))
 		}
 		if p.sidechain.source != "" {
 			sc := sidechain_from_spec(song, p.sidechain, base.path_join("parts", name))
@@ -467,7 +470,7 @@ track_for :: proc(song: ^Song, src: ^Sources, work: ^Work, pi: i32, name, varian
 
 // A track's sends: earlier ones (the style's) replaced by name.
 @(private = "file")
-sends_into_song :: proc(song: ^Song, from: ^spec.Spec, sends: Span, before: Span, path: string) -> Span {
+sends_into_song :: proc(song: ^Song, from: ^spec.Spec, sends: Span, before: Span, part: i32, path: string) -> Span {
 	rows := make([dynamic]Send, context.temp_allocator)
 	append(&rows, ..song.sends[before.first:base.span_end(before)])
 	for s in from.sends[sends.first:base.span_end(sends)] {
@@ -479,13 +482,11 @@ sends_into_song :: proc(song: ^Song, from: ^spec.Spec, sends: Span, before: Span
 		}
 		if ri < 0 {
 			// a send to a bus: a route from the part (its tracks summed)
-			for b in song.buses {
-				if b.name == s.to {
-					ri = -2
+			if bus, ok := node_ref_from_name(song, s.to); ok && bus.kind == .Bus {
+				rt := Route{{.Part, part}, bus, .Audio, f32(base.db_to_gain(s.gain_db)), false}
+				if !slice.contains(song.routes[:], rt) {
+					append(&song.routes, rt)
 				}
-			}
-			if ri == -2 {
-				append(&song.routes, Route{from = strings.trim_prefix(path, "parts/"), to = s.to, gain = f32(base.db_to_gain(s.gain_db))})
 				continue
 			}
 			base.report(&song.findings, "bad_value", .Error, base.path_join(path, "sends"), "%s/sends: there is no return or bus %q", path, s.to)
@@ -1001,7 +1002,7 @@ add_transitions :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 				if song.parts[t.part] != part {
 					continue
 				}
-				if ti < 0 || (t.variant == prev.style && song.tracks[ti].variant != prev.style) {
+				if ti < 0 || (t.style == prev.style && song.tracks[ti].style != prev.style) {
 					ti = k
 				}
 			}
@@ -1014,7 +1015,7 @@ add_transitions :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 		// track plays (as the part's own entries)
 		octave := PART_OCTAVE
 		src := Sources{own = s}
-		under := ti >= 0 && song.tracks[ti].variant != "" ? style_spec(&src, song.tracks[ti].variant, &song.findings) : nil
+		under := ti >= 0 && song.tracks[ti].style >= 0 ? style_spec(&src, style_name(song, song.tracks[ti].style), &song.findings) : nil
 		for p in ([]^spec.Part_Spec{part_in(under, part), part_in(s, part)}) {
 			if p != nil && !math.is_nan(p.octave) {
 				octave = int(p.octave)

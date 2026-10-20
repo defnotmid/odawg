@@ -62,6 +62,7 @@ append_song :: proc(m: ^Song, s: ^Song, at: f64, prefix: string, gain_db: f64 = 
 	}
 	for t in s.tracks {
 		x := t
+		x.style = style_intern(m, style_name(s, t.style))
 		x.part += part0
 		x.instrument += dev0
 		x.chain = shift(t.chain, chain0)
@@ -87,17 +88,26 @@ append_song :: proc(m: ^Song, s: ^Song, at: f64, prefix: string, gain_db: f64 = 
 	for r in s.regions {
 		append(&m.regions, Region{r.part + part0, r.start + at, r.stop + at, r.source})
 	}
-	// its buses and routes, named under the prefix ("score/glue"); what went
-	// to its master goes to its placement's node (graph_build)
+	// its buses, named under the prefix ("score/glue"), and its routes moved
+	// past what is there; what went to its master goes to its placement's
+	// node (graph_build)
 	for b in s.buses {
 		append(&m.buses, Bus{strings.concatenate({prefix, "/", b.name}), shift(b.chain, chain0)})
 	}
+	moved :: proc(n: Node, part0, ret0, bus0: i32) -> Node {
+		#partial switch n.kind {
+		case .Part:
+			return {n.kind, n.ref + part0}
+		case .Return:
+			return {n.kind, n.ref + ret0}
+		case .Bus:
+			return {n.kind, n.ref + bus0}
+		}
+		return n
+	}
 	for rt in s.routes {
 		x := rt
-		x.from = strings.concatenate({prefix, "/", rt.from})
-		if rt.to != "master" {
-			x.to = strings.concatenate({prefix, "/", rt.to})
-		}
+		x.from, x.to = moved(rt.from, part0, ret0, bus0), moved(rt.to, part0, ret0, bus0)
 		append(&m.routes, x)
 	}
 	// its placements (a composed song's one) moved here; this placing's
@@ -171,7 +181,7 @@ append_clip :: proc(m: ^Song, c: Clip) -> i32 {
 	append(&m.devices, device.Device_Kind.Voice)
 	append(&m.labels, "Player")
 	append(&m.params, p)
-	t := Track{part = part, variant = "", instrument = i32(len(m.devices) - 1), gain_db = c.gain_db, pan = c.pan, pan_law = .Balance, voice = c.voice, notes = {i32(len(m.notes)), 1}}
+	t := Track{part = part, style = -1, instrument = i32(len(m.devices) - 1), gain_db = c.gain_db, pan = c.pan, pan_law = .Balance, voice = c.voice, notes = {i32(len(m.notes)), 1}}
 	if c.effects != nil {
 		fx := new(spec.Spec)
 		spec.spec_init(fx)

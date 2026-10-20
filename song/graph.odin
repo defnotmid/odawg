@@ -98,15 +98,76 @@ Bus :: struct {
 	chain: Span,
 }
 
-// What the spec routes, by name (a part, a return, a bus, "master"): a
-// node's output moved off the master to another (`moves`: a part's or a
-// bus's `to`), sent on as well at a gain (a send to a bus), or heard as a
-// key (a part's `key`: by each of its tracks' effects).
+// What the spec routes (resolved from its names as it is composed:
+// route_add): a node's output moved off its placement's node to another
+// (`moves`: a part's or a bus's `to`; to the master: its placement's node),
+// sent on as well at a gain (a send to a bus), or heard as a key (a part's
+// `key`: by each of its tracks' effects).
 Route :: struct {
-	from, to: string,
+	from, to: Node, // a part, a return, a bus; or the master
 	kind:     Edge_Kind,
 	gain:     f32,
 	moves:    bool,
+}
+
+// Adds the route `from` into `to` (names as the spec writes them), once: a
+// finding where either names nothing.
+route_add :: proc(s: ^Song, from, to: string, kind: Edge_Kind, gain: f32, moves: bool) {
+	a, a_ok := node_ref_from_name(s, from)
+	b, b_ok := node_ref_from_name(s, to)
+	if !a_ok || !b_ok {
+		base.report(&s.findings, "bad_value", .Error, "routing", "routing: %q into %q: there is no part, return or bus %q", from, to, a_ok ? to : from)
+		return
+	}
+	rt := Route{a, b, kind, gain, moves}
+	for x in s.routes {
+		if x == rt {
+			return
+		}
+	}
+	append(&s.routes, rt)
+}
+
+// The node a name stands for: a bus, a return or a part (in that order), or
+// "master".
+node_ref_from_name :: proc(s: ^Song, name: string) -> (Node, bool) {
+	if name == "master" {
+		return {.Master, 0}, true
+	}
+	for b, i in s.buses {
+		if b.name == name {
+			return {.Bus, i32(i)}, true
+		}
+	}
+	for r, i in s.returns {
+		if r.name == name {
+			return {.Return, i32(i)}, true
+		}
+	}
+	for p, i in s.parts {
+		if p == name {
+			return {.Part, i32(i)}, true
+		}
+	}
+	return {}, false
+}
+
+// The graph's node for a reference.
+node_index :: proc(s: ^Song, n: Node) -> i32 {
+	switch n.kind {
+	case .Track:
+		return n.ref
+	case .Part:
+		return part_node(s, int(n.ref))
+	case .Return:
+		return return_node(s, int(n.ref))
+	case .Bus:
+		return bus_node(s, int(n.ref))
+	case .Song:
+		return song_node(s, int(n.ref))
+	case .Master:
+	}
+	return master_node(s)
 }
 
 // Builds the default routing from the tracks, their sends and the returns
@@ -144,11 +205,7 @@ graph_build :: proc(s: ^Song) {
 		append(&s.edges, Edge{i32(k), s.nodes[k].kind == .Song ? master : node_out(s, k), 1, .Audio})
 	}
 	for rt in s.routes {
-		from, to := node_from_name(s, rt.from), node_from_name(s, rt.to)
-		if from < 0 || to < 0 {
-			base.report(&s.findings, "bad_value", .Error, "routing", "routing: %q into %q: there is no part, return or bus %q", rt.from, rt.to, from < 0 ? rt.from : rt.to)
-			continue
-		}
+		from, to := node_index(s, rt.from), node_index(s, rt.to)
 		out := node_out(s, int(from))
 		if to == master {
 			to = out
@@ -181,28 +238,10 @@ graph_build :: proc(s: ^Song) {
 	}
 }
 
-// The node a route names: a bus, a return or a part by name (in that
-// order), or "master"; -1: none.
+// The node a name stands for (node_ref_from_name); -1: none.
 node_from_name :: proc(s: ^Song, name: string) -> i32 {
-	if name == "master" {
-		return master_node(s)
-	}
-	for b, i in s.buses {
-		if b.name == name {
-			return bus_node(s, i)
-		}
-	}
-	for r, i in s.returns {
-		if r.name == name {
-			return return_node(s, i)
-		}
-	}
-	for p, i in s.parts {
-		if p == name {
-			return part_node(s, i)
-		}
-	}
-	return -1
+	ref, ok := node_ref_from_name(s, name)
+	return ok ? node_index(s, ref) : -1
 }
 
 part_node :: proc(s: ^Song, part: int) -> i32 {return i32(len(s.tracks) + part)}
@@ -322,10 +361,10 @@ node_name :: proc(s: ^Song, k: i32, allocator := context.temp_allocator) -> stri
 	switch nd.kind {
 	case .Track:
 		t := s.tracks[nd.ref]
-		if t.variant == "" {
+		if t.style < 0 {
 			return strings.concatenate({"track ", s.parts[t.part]}, allocator)
 		}
-		return strings.concatenate({"track ", s.parts[t.part], "/", t.variant}, allocator)
+		return strings.concatenate({"track ", s.parts[t.part], "/", style_name(s, t.style)}, allocator)
 	case .Part:
 		return strings.concatenate({"part ", s.parts[nd.ref]}, allocator)
 	case .Return:

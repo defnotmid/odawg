@@ -7,6 +7,7 @@
 package odawg_song
 
 import "core:math"
+import "core:strings"
 import base "../base"
 import device "../device"
 import spec "../spec"
@@ -42,7 +43,7 @@ Section :: struct {
 	bpm0, bpm1:    f64,
 	beats_per_bar: int,
 	bars:          int,
-	style:         string,
+	style:         i32, // into styles (-1: none)
 	energy:        f64,
 	chords:        Span, // into chords: one per bar, cycled
 	transition:    Transition, // into this section
@@ -85,7 +86,7 @@ PAN_LAW_TABLE := [Pan_Law]proc(pan: f64) -> (l, r: f64) {
 // sound; its stem is the sum of its tracks.
 Track :: struct {
 	part:       i32, // into parts
-	variant:    string, // the style (or transition sound) it plays for
+	style:      i32, // into styles: the style it plays for (-1: the song's own)
 	instrument: i32, // into devices
 	gain_db:    f64,
 	pan:        f64,
@@ -194,7 +195,7 @@ Note_Row :: struct {
 	keyswitch:      u8, // 1 + the last keyswitch key before it (0: none)
 	legato:         bool, // another note of its track is held when it starts
 	level:          f32, // a gain on it (0: 1)
-	// its draws, from its song's seed, its part and variant, its time,
+	// its draws, from its song's seed, its part and style, its time,
 	// pitch and pad as the song composed them (note_seed): the same in a
 	// mix, where the song is moved, renamed and seeded otherwise
 	seed:           u64,
@@ -206,10 +207,11 @@ note_of :: proc(s: ^Song, i: int) -> device.Note {
 	return {n.time, n.duration, n.pitch, n.velocity, n.pad, n.accent, n.kind, n.round, n.keyswitch, n.legato, n.level}
 }
 
-// A composed note's seed: its track's (the song's seed, its part and
-// variant), then its time, pitch and pad (the same from a seek).
+// A composed note's seed: its track's (the song's seed, its part's and its
+// style's names, their durable ids), then its time, pitch and pad (the same
+// from a seek).
 note_seed :: proc(s: ^Song, t: Track, n: Note_Row) -> u64 {
-	track := base.hash_combine(s.seed, base.hash_combine(base.hash_string(s.parts[t.part]), base.hash_string(t.variant)))
+	track := base.hash_combine(s.seed, base.hash_combine(base.hash_string(s.parts[t.part]), base.hash_string(style_name(s, t.style))))
 	return base.hash_combine(track, base.hash_combine(u64(n.time * base.RATE + 0.5), u64(n.pitch * 100) ~ u64(n.pad) << 32))
 }
 
@@ -225,6 +227,7 @@ Song :: struct {
 	chords:   [dynamic]theory.Chord,
 	markers:  [dynamic]Marker,
 	parts:    [dynamic]string, // names: the spec's and its styles', sorted
+	styles:   [dynamic]string, // the styles its sections play, by name ("styles/house.json")
 	tracks:   [dynamic]Track,
 	devices:  [dynamic]device.Device_Kind,
 	params:   [dynamic]device.Params, // parallel to devices: the resolved values
@@ -319,6 +322,26 @@ song_from_spec :: proc(s: ^spec.Spec, out: ^Song, bank: ^device.Bank = nil) -> b
 	})
 	graph_build(out)
 	return true
+}
+
+// A style's index, by name ("": none, -1), added (its name copied) the first
+// time.
+style_intern :: proc(s: ^Song, name: string) -> i32 {
+	if name == "" {
+		return -1
+	}
+	for x, i in s.styles {
+		if x == name {
+			return i32(i)
+		}
+	}
+	append(&s.styles, strings.clone(name))
+	return i32(len(s.styles) - 1)
+}
+
+// A style's name ("": none).
+style_name :: proc(s: ^Song, style: i32) -> string {
+	return style >= 0 ? s.styles[style] : ""
 }
 
 // What the song's voices read beyond their notes.

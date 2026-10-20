@@ -131,7 +131,7 @@ lay_out :: proc(s: ^spec.Spec, song: ^Song) -> bool {
 		}
 		sec := Section {
 			name = ss.name, beat = g.beat, beats = g.beats, start = g.seconds, stop = g.seconds + seconds_of(l),
-			bpm0 = l.bpm0, bpm1 = l.bpm1, beats_per_bar = l.bpb, bars = l.bars, style = style, energy = energy,
+			bpm0 = l.bpm0, bpm1 = l.bpm1, beats_per_bar = l.bpb, bars = l.bars, style = style_intern(song, style), energy = energy,
 			transition_part = ss.transition_part,
 		}
 		sec.chords.first = i32(len(song.chords))
