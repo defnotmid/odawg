@@ -396,7 +396,7 @@ draft_init :: proc(d: ^Draft) {
 	d.velocity = true
 }
 
-@(private = "file")
+@(private)
 sorted_keys :: proc(o: json.Object, allocator := context.temp_allocator) -> []string {
 	keys := make([dynamic]string, allocator)
 	for k in o {

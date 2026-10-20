@@ -256,12 +256,7 @@ read_record :: proc(r: ^Reader, v: json.Value, path: string, fields: []Field_Row
 		base.report(r.findings, "bad_value", .Error, path, "%s: expected a table", path)
 		return false
 	}
-	keys := make([dynamic]string, 0, len(o), context.temp_allocator)
-	for k in o {
-		append(&keys, k)
-	}
-	slice.sort(keys[:]) // findings in a stable order
-	outer: for k in keys {
+	outer: for k in sorted_keys(o) { // findings in a stable order
 		for f in fields {
 			if f.key == k {
 				FIELD_READERS[f.kind](r, o[k], base.path_join(path, k), rawptr(uintptr(dst) + f.offset))
@@ -514,17 +509,11 @@ chain_from_value :: proc(r: ^Reader, v: json.Value, path: string) -> Span {
 
 @(private = "file")
 read_sends_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
-	o, ok := v.(json.Object)
+	o, keys, ok := named_records(r, v, path, "{ hall = -12 }: a level in dB per return")
 	if !ok {
-		bad(r, path, "{ hall = -12 }: a level in dB per return")
 		return
 	}
 	sp := Span{i32(len(r.spec.sends)), 0}
-	keys := make([dynamic]string, context.temp_allocator)
-	for k in o {
-		append(&keys, k)
-	}
-	slice.sort(keys[:])
 	for k in keys {
 		db, is_number := number_from_value(o[k])
 		if !is_number {
@@ -593,11 +582,7 @@ read_steps_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
 	}
 	p.rows = {i32(len(r.spec.lanes)), 0}
 	if o, is_pads := v.(json.Object); is_pads {
-		keys := make([dynamic]string, context.temp_allocator)
-		for k in o {
-			append(&keys, k)
-		}
-		slice.sort(keys[:])
+		keys := sorted_keys(o)
 		for k in keys {
 			lane(r, k, o[k], base.path_join(path, k))
 		}
@@ -736,18 +721,25 @@ read_sections_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr
 	}
 }
 
+// A table of named records ({ name = { ... }, ... }): the object and its
+// names in order (the same however it was written); false, a bad_value
+// saying what it should be, when it is not one.
 @(private = "file")
-read_parts_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
-	o, ok := v.(json.Object)
+named_records :: proc(r: ^Reader, v: json.Value, path, expect: string) -> (o: json.Object, names: []string, ok: bool) {
+	o, ok = v.(json.Object)
 	if !ok {
-		bad(r, path, "{ name = { ... } } per part")
+		bad(r, path, expect)
 		return
 	}
-	names := make([dynamic]string, context.temp_allocator)
-	for k in o {
-		append(&names, k)
+	return o, sorted_keys(o), true
+}
+
+@(private = "file")
+read_parts_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
+	o, names, ok := named_records(r, v, path, "{ name = { ... } } per part")
+	if !ok {
+		return
 	}
-	slice.sort(names[:])
 	for name in names {
 		pp := base.path_join(path, name, context.allocator)
 		p := Part_Spec{name = strings.clone(name), instrument = -1, gain_db = UNSET, pan = UNSET, octave = UNSET, room_db = UNSET, effects = {0, -1}, sidechain = {depth = 0.8, release = 0.07}}
@@ -800,16 +792,10 @@ HUMANIZE_LIKELY :: 0.03
 
 @(private = "file")
 read_returns_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
-	o, ok := v.(json.Object)
+	o, names, ok := named_records(r, v, path, "{ name = { effects } } per return")
 	if !ok {
-		bad(r, path, "{ name = { effects } } per return")
 		return
 	}
-	names := make([dynamic]string, context.temp_allocator)
-	for k in o {
-		append(&names, k)
-	}
-	slice.sort(names[:])
 	for name in names {
 		append(&r.spec.returns, Return_Spec{strings.clone(name), chain_from_value(r, o[name], base.path_join(path, name))})
 	}
@@ -837,16 +823,10 @@ read_markers_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr)
 // zones = { { "C3.wav", root = "C3" }, ... }, gain_db, credit, loop } }
 @(private = "file")
 read_sets_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
-	o, ok := v.(json.Object)
+	o, names, ok := named_records(r, v, path, "{ name = { pads or zones } } per set")
 	if !ok {
-		bad(r, path, "{ name = { pads or zones } } per set")
 		return
 	}
-	names := make([dynamic]string, context.temp_allocator)
-	for k in o {
-		append(&names, k)
-	}
-	slice.sort(names[:])
 	zone :: proc() -> Set_Zone_Spec {
 		return {root = UNSET, lo = UNSET, hi = UNSET, lo_velocity = 0, hi_velocity = 127, one_shot = UNSET, key = UNSET}
 	}
@@ -864,11 +844,7 @@ read_sets_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
 			if !is_object {
 				bad(r, base.path_join(sp, "pads"), "{ kick = \"kick.wav\", ... }")
 			}
-			keys := make([dynamic]string, context.temp_allocator)
-			for k in po {
-				append(&keys, k)
-			}
-			slice.sort(keys[:])
+			keys := sorted_keys(po)
 			for k in keys {
 				zp := base.path_join(base.path_join(sp, "pads"), k)
 				// a file or a zone's record, or a list of them: a round robin
@@ -975,16 +951,10 @@ read_note_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
 
 @(private = "file")
 read_sources_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
-	o, ok := v.(json.Object)
+	o, names, ok := named_records(r, v, path, "{ name = { url, licence, credit, pins } } per source")
 	if !ok {
-		bad(r, path, "{ name = { url, licence, credit, pins } } per source")
 		return
 	}
-	names := make([dynamic]string, context.temp_allocator)
-	for k in o {
-		append(&names, k)
-	}
-	slice.sort(names[:])
 	for name in names {
 		sp := base.path_join(path, name)
 		x := Source_Spec{name = strings.clone(name)}
@@ -1021,16 +991,10 @@ read_sources_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr)
 }
 
 read_buses_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
-	o, ok := v.(json.Object)
+	o, names, ok := named_records(r, v, path, "{ name = { effects, to } } per bus")
 	if !ok {
-		bad(r, path, "{ name = { effects, to } } per bus")
 		return
 	}
-	names := make([dynamic]string, context.temp_allocator)
-	for k in o {
-		append(&names, k)
-	}
-	slice.sort(names[:])
 	for name in names {
 		b := Bus_Spec{name = strings.clone(name)}
 		if read_record(r, o[name], base.path_join(path, name), BUS_FIELDS, &b) {
@@ -1041,16 +1005,10 @@ read_buses_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
 
 @(private = "file")
 read_styles_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
-	o, ok := v.(json.Object)
+	o, names, ok := named_records(r, v, path, "{ name = { parts, returns, swing } } per style")
 	if !ok {
-		bad(r, path, "{ name = { parts, returns, swing } } per style")
 		return
 	}
-	names := make([dynamic]string, context.temp_allocator)
-	for k in o {
-		append(&names, k)
-	}
-	slice.sort(names[:])
 	for name in names {
 		if _, is_object := o[name].(json.Object); !is_object {
 			bad(r, base.path_join(path, name), "a style: a table of parts, returns, swing")
@@ -1073,16 +1031,10 @@ read_instruments_field :: proc(r: ^Reader, v: json.Value, path: string, dst: raw
 		}
 		return
 	}
-	o, ok := v.(json.Object)
+	o, names, ok := named_records(r, v, path, "{ name = { nodes = { ... } } } per instrument, a file of them, or a list of those")
 	if !ok {
-		bad(r, path, "{ name = { nodes = { ... } } } per instrument, a file of them, or a list of those")
 		return
 	}
-	names := make([dynamic]string, context.temp_allocator)
-	for k in o {
-		append(&names, k)
-	}
-	slice.sort(names[:])
 	for name in names {
 		append(&r.spec.instruments, Instrument_Spec{strings.clone(name), json.clone_value(o[name])})
 	}
@@ -1147,11 +1099,7 @@ device_from_value :: proc(r: ^Reader, v: json.Value, path: string) -> i32 {
 
 @(private = "file")
 read_options :: proc(r: ^Reader, o: json.Object, prefix, path: string, d: ^Device_Spec) {
-	keys := make([dynamic]string, context.temp_allocator)
-	for k in o {
-		append(&keys, k)
-	}
-	slice.sort(keys[:])
+	keys := sorted_keys(o)
 	reads := device.DEVICE_TABLE[d.kind].reads
 	for k in keys {
 		if prefix == "" && (k == "name" || k == "class") {
