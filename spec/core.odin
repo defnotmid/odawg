@@ -397,13 +397,19 @@ Asset_Ref :: struct {
 // The sample sets the song's Samplers name, its own styles' included, each
 // once: what a host declares in its bank (assets.bank_declare_spec).
 // Styles' specs are read into temp memory.
-asset_refs :: proc(s: ^Spec, out: ^[dynamic]Asset_Ref) {
+asset_refs :: proc(s: ^Spec, out: ^[dynamic]Asset_Ref, drafts: ^Drafts = nil) {
+	drafts := drafts
+	kept: Drafts
+	if drafts == nil {
+		drafts_init(&kept)
+		drafts = &kept
+	}
 	for st in s.styles {
-		asset_refs(st.spec, out)
+		asset_refs(st.spec, out, drafts)
 	}
 	for d, i in s.devices {
 		if d.kind == .Voice {
-			instrument_sets(s, i32(i), out)
+			instrument_sets(s, i32(i), out, drafts)
 			continue
 		}
 		for v in s.values[d.values.first:base.span_end(d.values)] {

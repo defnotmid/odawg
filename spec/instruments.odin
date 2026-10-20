@@ -342,7 +342,7 @@ Draft_Pad :: struct {
 	path:    string,
 }
 
-@(private = "file")
+@(private)
 Draft :: struct {
 	nodes:        [dynamic]Draft_Node,
 	pads:         [dynamic]Draft_Pad,
@@ -382,6 +382,46 @@ Ctx :: struct {
 	bank:         ^device.Bank,
 	beat_seconds: f64,
 	findings:     ^base.Findings,
+	drafts:       ^Drafts, // rows already drafted (nil: none kept)
+}
+
+// Instruments as drafted (a row's bases, files, built-ins and overrides
+// resolved), each row once: by the spec it is read in and where it was
+// written (its durable id). A compose's, or a pass over a song's sets';
+// drafting needs no tempo, so a row drafted once is placed at every tempo.
+Drafts :: struct {
+	rows: [dynamic]Drafted,
+}
+
+@(private)
+Drafted :: struct {
+	owner: ^Spec,
+	path:  string,
+	draft: ^Draft,
+	ok:    bool,
+}
+
+drafts_init :: proc(d: ^Drafts, allocator := context.temp_allocator) {
+	d.rows = make([dynamic]Drafted, allocator)
+}
+
+// The row written at `path` in `owner` (v), drafted: once per Drafts.
+@(private = "file")
+drafted :: proc(c: ^Ctx, v: json.Value, path: string, owner: ^Spec) -> (^Draft, bool) {
+	if c.drafts != nil {
+		for x in c.drafts.rows {
+			if x.owner == owner && x.path == path {
+				return x.draft, x.ok
+			}
+		}
+	}
+	d := new(Draft, context.temp_allocator)
+	draft_init(d)
+	ok := draft_read(c, d, v, path, owner, 0)
+	if c.drafts != nil {
+		append(&c.drafts.rows, Drafted{owner, path, d, ok})
+	}
+	return d, ok
 }
 
 @(private = "file")
@@ -1216,20 +1256,16 @@ draft_desc :: proc(c: ^Ctx, d: ^Draft, written: string) -> ^device.Program_Desc 
 	pads := make([]device.Pad_Desc, len(d.pads), context.temp_allocator)
 	for &p, i in d.pads {
 		pads[i] = {name = p.name, key = f32(p.key), gain_db = f32(p.gain_db), chokes = p.chokes[:], path = p.path}
-		sub: Draft
-		draft_init(&sub)
-		if draft_read(c, &sub, p.row, p.path, p.owner, 0) {
-			pads[i].program = draft_desc(c, &sub, p.path)
+		if sub, ok := drafted(c, p.row, p.path, p.owner); ok {
+			pads[i].program = draft_desc(c, sub, p.path)
 		}
 	}
 	desc.pads = pads
 	layers := make([]device.Layer_Desc, len(d.layers), context.temp_allocator)
 	for &l, i in d.layers {
 		layers[i] = {region = l.region, gain = l.gain, path = l.path}
-		sub: Draft
-		draft_init(&sub)
-		if draft_read(c, &sub, l.value, l.path, l.owner, 0) {
-			layers[i].program = draft_desc(c, &sub, l.path)
+		if sub, ok := drafted(c, l.value, l.path, l.owner); ok {
+			layers[i].program = draft_desc(c, sub, l.path)
 		}
 	}
 	desc.layers = layers
@@ -1378,16 +1414,15 @@ sampler_keys :: proc(n: ^Draft_Node, out: ^[dynamic]device.Key_Desc) {
 // The program device d of s plays (a Voice's row, read and placed into
 // progs at `beat_seconds` a beat, its Samplers' sets the bank's). -1: none
 // (findings say why).
-instrument_program :: proc(s: ^Spec, d: i32, beat_seconds: f64, bank: ^device.Bank, progs: ^device.Programs, findings: ^base.Findings) -> i32 {
+instrument_program :: proc(s: ^Spec, d: i32, beat_seconds: f64, bank: ^device.Bank, progs: ^device.Programs, findings: ^base.Findings, drafts: ^Drafts = nil) -> i32 {
 	dev := &s.devices[d]
-	c := Ctx{progs = progs, bank = bank, beat_seconds = beat_seconds, findings = findings}
-	draft: Draft
-	draft_init(&draft)
+	c := Ctx{progs = progs, bank = bank, beat_seconds = beat_seconds, findings = findings, drafts = drafts}
 	path := strings.trim_prefix(dev.path, "song/")
-	if !draft_read(&c, &draft, dev.row, path, s, 0) {
+	draft, ok := drafted(&c, dev.row, path, s)
+	if !ok {
 		return -1
 	}
-	desc := draft_desc(&c, &draft, path)
+	desc := draft_desc(&c, draft, path)
 	if desc == nil {
 		return -1
 	}
@@ -1396,14 +1431,11 @@ instrument_program :: proc(s: ^Spec, d: i32, beat_seconds: f64, bank: ^device.Ba
 
 // The sample sets a Voice's row plays (its Samplers', its pads' too), each
 // with the spec its name is read in.
-instrument_sets :: proc(s: ^Spec, d: i32, out: ^[dynamic]Asset_Ref) {
-	c := Ctx{}
-	draft: Draft
-	draft_init(&draft)
-	if !draft_read(&c, &draft, s.devices[d].row, s.devices[d].path, s, 0) {
-		return
+instrument_sets :: proc(s: ^Spec, d: i32, out: ^[dynamic]Asset_Ref, drafts: ^Drafts = nil) {
+	c := Ctx{drafts = drafts}
+	if draft, ok := drafted(&c, s.devices[d].row, s.devices[d].path, s); ok {
+		draft_sets(&c, draft, s, out)
 	}
-	draft_sets(&c, &draft, s, out)
 }
 
 @(private = "file")
@@ -1434,17 +1466,13 @@ draft_sets :: proc(c: ^Ctx, d: ^Draft, from: ^Spec, out: ^[dynamic]Asset_Ref) {
 		}
 	}
 	for p in d.pads {
-		sub: Draft
-		draft_init(&sub)
-		if draft_read(c, &sub, p.row, p.path, p.owner, 0) {
-			draft_sets(c, &sub, from, out)
+		if sub, ok := drafted(c, p.row, p.path, p.owner); ok {
+			draft_sets(c, sub, from, out)
 		}
 	}
 	for l in d.layers {
-		sub: Draft
-		draft_init(&sub)
-		if draft_read(c, &sub, l.value, l.path, l.owner, 0) {
-			draft_sets(c, &sub, from, out)
+		if sub, ok := drafted(c, l.value, l.path, l.owner); ok {
+			draft_sets(c, sub, from, out)
 		}
 	}
 }

@@ -257,7 +257,8 @@ Song :: struct {
 
 // What composing keeps until the note table is built: each track's notes.
 Work :: struct {
-	notes: [dynamic][dynamic]Note_Row, // by track
+	notes:  [dynamic][dynamic]Note_Row, // by track
+	drafts: spec.Drafts, // the instruments drafted, each row once (placed at each tempo)
 }
 
 // Tempo the song may move by to meet a section's `start` (6 %) or its
@@ -301,6 +302,7 @@ song_from_spec :: proc(s: ^spec.Spec, out: ^Song, bank: ^device.Bank = nil) -> b
 	}
 	work: Work
 	work.notes = make([dynamic][dynamic]Note_Row, context.temp_allocator)
+	spec.drafts_init(&work.drafts)
 	arrange(s, out, &work)
 	add_transitions(s, out, &work)
 	layered_notes(out, &work)

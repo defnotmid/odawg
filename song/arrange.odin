@@ -344,14 +344,14 @@ add_return :: proc(song: ^Song, from: ^spec.Spec, ret: spec.Return_Spec) {
 // Copies a spec's device into the song with its values resolved (lengths in
 // beats at `beat_seconds`).
 @(private = "file")
-device_into_song :: proc(song: ^Song, from: ^spec.Spec, d: i32, beat_seconds: f64) -> i32 {
+device_into_song :: proc(song: ^Song, from: ^spec.Spec, d: i32, beat_seconds: f64, drafts: ^spec.Drafts = nil) -> i32 {
 	p, ok := spec.params_from_device(from, d, beat_seconds, song.bank)
 	if !ok && from.devices[d].kind != .Voice {
 		base.report(&song.findings, "asset_unavailable", .Error, from.devices[d].path, "%s: a sample set it plays is not loaded (offline, or not in the register)", from.devices[d].path)
 	}
 	if from.devices[d].kind == .Voice {
 		// its row, read into a program at this tempo
-		program := spec.instrument_program(from, d, beat_seconds, song.bank, &song.programs, &song.findings)
+		program := spec.instrument_program(from, d, beat_seconds, song.bank, &song.programs, &song.findings, drafts)
 		if program < 0 {
 			return -1
 		}
@@ -456,7 +456,7 @@ track_for :: proc(song: ^Song, src: ^Sources, work: ^Work, pi: i32, name: string
 		base.report(&song.findings, "no_instrument", .Warning, path, "%s: no instrument, so it doesn't play: give it one (`instrument = {{ \"Synth\", ... }}`)", path)
 		return -1
 	}
-	t.instrument = device_into_song(song, instrument.from, instrument.d, beat_seconds)
+	t.instrument = device_into_song(song, instrument.from, instrument.d, beat_seconds, &work.drafts)
 	if t.instrument < 0 {
 		return -1
 	}
