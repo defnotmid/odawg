@@ -1,6 +1,7 @@
 package odawg_spec
 
 import "core:encoding/json"
+import "core:fmt"
 import "core:math"
 import "core:slice"
 import "core:strings"
@@ -721,6 +722,32 @@ read_sections_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr
 	}
 }
 
+// A value written as text, read by its field's unit: a choice's index, a
+// Tone length's value (`beats`: in beats, which the composer turns into
+// seconds at the tempo it plays at), a length as a rate (cycles a beat); or
+// what it should have been (`expect`). An asset's name is its caller's.
+unit_from_text :: proc(unit: device.Unit, choices: []string, s: string) -> (value: f32, beats: bool, expect: string, ok: bool) {
+	#partial switch unit {
+	case .Choice:
+		if i, found := slice.linear_search(choices, s); found {
+			return f32(i), false, "", true
+		}
+		return 0, false, fmt.tprintf("%q is not one of %s", s, strings.join(choices, ", ", context.temp_allocator)), false
+	case .Seconds:
+		if l, parsed := tempo.length_from_string(s, 4); parsed {
+			return f32(l.value), !l.in_seconds, "", true
+		}
+		return 0, false, "seconds or a Tone length (\"8n.\")", false
+	case .Hz:
+		// a rate as a length: one cycle per that long
+		if l, parsed := tempo.length_from_string(s, 4); parsed && !l.in_seconds && l.value > 0 {
+			return f32(1 / l.value), true, "", true
+		}
+		return 0, false, "Hz, or a Tone length for a rate", false
+	}
+	return 0, false, "a number", false
+}
+
 // A table of named records ({ name = { ... }, ... }): the object and its
 // names in order (the same however it was written); false, a bad_value
 // saying what it should be, when it is not one.
@@ -1150,39 +1177,20 @@ set_option :: proc(r: ^Reader, d: ^Device_Spec, p: device.Param, v: json.Value, 
 		}
 		value = f32(n)
 	} else if s, is_string := v.(json.String); is_string {
-		switch row.unit {
-		case .Choice:
-			i, found := slice.linear_search(row.choices, s)
-			if !found {
-				base.report(r.findings, "bad_value", .Error, path, "%s: %q is not one of %s", path, s, strings.join(row.choices, ", ", context.temp_allocator))
-				return
-			}
-			value = f32(i)
-		case .Seconds:
-			l, parsed := tempo.length_from_string(s, 4)
-			if !parsed {
-				bad(r, path, "seconds or a Tone length (\"8n.\")")
-				return
-			}
-			value = f32(l.value)
-			if !l.in_seconds {
-				d.beats += {p}
-			}
-		case .Hz:
-			// an LFO's rate as a length: one cycle per that long
-			l, parsed := tempo.length_from_string(s, 4)
-			if !parsed || l.in_seconds || l.value <= 0 {
-				bad(r, path, "Hz, or a Tone length for a rate")
-				return
-			}
-			value = f32(1 / l.value)
-			d.beats += {p} // cycles per beat: the composer divides by a beat's seconds
-		case .Asset:
+		if row.unit == .Asset {
 			value = f32(len(r.spec.strings))
 			append(&r.spec.strings, strings.clone(s))
-		case .Number, .Db, .Cents, .Table, .Gain:
-			bad(r, path, "a number")
-			return
+		} else {
+			beats, ok: bool
+			expect: string
+			value, beats, expect, ok = unit_from_text(row.unit, row.choices, s)
+			if !ok {
+				bad(r, path, expect)
+				return
+			}
+			if beats {
+				d.beats += {p} // the composer turns beats (cycles a beat) into seconds (Hz)
+			}
 		}
 	} else {
 		bad(r, path, "a number or a string")

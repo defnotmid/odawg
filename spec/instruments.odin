@@ -7,7 +7,6 @@ import "core:strconv"
 import "core:strings"
 import base "../base"
 import device "../device"
-import tempo "../tempo"
 import theory "../theory"
 
 // Instruments are rows of data over the node kinds of device's registry,
@@ -615,8 +614,8 @@ seconds_value :: proc(c: ^Ctx, v: json.Value, path: string) -> (f64, bool) {
 		return n, false
 	}
 	if s, is_string := v.(json.String); is_string {
-		if l, parsed := tempo.length_from_string(s, 4); parsed {
-			return l.value, !l.in_seconds
+		if value, beats, _, ok := unit_from_text(.Seconds, nil, s); ok {
+			return f64(value), beats
 		}
 	}
 	report(c, "bad_value", .Error, path, "%s: seconds or a Tone length (\"4n\")", path)
@@ -893,36 +892,17 @@ draft_field :: proc(c: ^Ctx, node: ^Draft_Node, field: ^device.Node_Field, slot:
 		report(c, "bad_value", .Error, path, "%s: a number or a string", path)
 		return
 	}
-	switch field.unit {
-	case .Choice:
-		i, found := slice.linear_search(field.choices, s)
-		if !found {
-			report(c, "bad_value", .Error, path, "%s: %q is not one of %s", path, s, strings.join(field.choices, ", ", context.temp_allocator))
-			return
-		}
-		node.values[slot] = f32(i)
-	case .Seconds:
-		l, parsed := tempo.length_from_string(s, 4)
-		if !parsed {
-			report(c, "bad_value", .Error, path, "%s: seconds or a Tone length (\"8n.\")", path)
-			return
-		}
-		node.values[slot] = f32(l.value)
-		node.beats = l.in_seconds ? node.beats - {slot} : node.beats + {slot}
-	case .Hz:
-		// a rate as a length: one cycle per that long
-		l, parsed := tempo.length_from_string(s, 4)
-		if !parsed || l.in_seconds || l.value <= 0 {
-			report(c, "bad_value", .Error, path, "%s: Hz, or a Tone length for a rate", path)
-			return
-		}
-		node.values[slot] = f32(1 / l.value)
-		node.beats += {slot}
-	case .Asset:
+	if field.unit == .Asset {
 		node.set_name, node.set_path, node.set_from = s, path, c.writer
-	case .Number, .Db, .Cents, .Table, .Gain:
-		report(c, "bad_value", .Error, path, "%s: a number", path)
+		return
 	}
+	value, beats, expect, ok := unit_from_text(field.unit, field.choices, s)
+	if !ok {
+		report(c, "bad_value", .Error, path, "%s: %s", path, expect)
+		return
+	}
+	node.values[slot] = value
+	node.beats = beats ? node.beats + {slot} : node.beats - {slot}
 }
 
 // What moves a field: a source's name (amp), a modulator, or a list.
@@ -1281,22 +1261,16 @@ control_value :: proc(c: ^Ctx, d: ^Draft, x: ^Draft_Control) -> (f32, bool) {
 		report(c, "bad_value", .Error, x.value_path, "%s: a number", x.value_path)
 		return 0, false
 	}
-	#partial switch field.unit {
-	case .Choice:
-		if i, found := slice.linear_search(field.choices, s); found {
-			return f32(i), true
-		}
-		report(c, "bad_value", .Error, x.value_path, "%s: %q is not one of %s", x.value_path, s, strings.join(field.choices, ", ", context.temp_allocator))
+	value, beats, expect, ok := unit_from_text(field.unit, field.choices, s)
+	if !ok {
+		report(c, "bad_value", .Error, x.value_path, "%s: %s", x.value_path, expect)
 		return 0, false
-	case .Seconds, .Hz:
-		l, parsed := tempo.length_from_string(s, 4)
-		if parsed && (field.unit == .Seconds || (!l.in_seconds && l.value > 0)) {
-			secs := l.in_seconds ? l.value : l.value * c.beat_seconds
-			return f32(field.unit == .Hz ? 1 / secs : secs), true
-		}
 	}
-	report(c, "bad_value", .Error, x.value_path, "%s: a number, or a Tone length", x.value_path)
-	return 0, false
+	if beats {
+		// a length's beats, or a rate's cycles a beat, at the instrument's tempo
+		value = field.unit == .Hz ? f32(f64(value) / c.beat_seconds) : f32(f64(value) * c.beat_seconds)
+	}
+	return value, true
 }
 
 // The field a target's path names in the draft (its first node's).
