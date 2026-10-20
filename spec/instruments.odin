@@ -7,7 +7,6 @@ import "core:strconv"
 import "core:strings"
 import base "../base"
 import device "../device"
-import theory "../theory"
 
 // Instruments are rows of data over the node kinds of device's registry,
 // read into a program where a part plays them (their times at that part's
@@ -1173,13 +1172,8 @@ draft_layer :: proc(c: ^Ctx, d: ^Draft, v: json.Value, path: string, owner: ^Spe
 
 @(private = "file")
 note_value :: proc(c: ^Ctx, v: json.Value, path: string) -> f32 {
-	if n, ok := number_from_value(v); ok {
+	if n, ok := note_from_value(v); ok {
 		return f32(n)
-	}
-	if s, ok := v.(json.String); ok {
-		if p, is_pitch := theory.pitch_from_string(s); is_pitch {
-			return p
-		}
 	}
 	report(c, "bad_value", .Error, path, "%s: a note (\"C2\") or a MIDI number", path)
 	return 0

@@ -963,17 +963,24 @@ pad_keys :: proc(zones: []Set_Zone_Spec) {
 	}
 }
 
-@(private = "file")
-read_note_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
+// A note as written: a MIDI number or a name ("C3", "F#2"). False: neither.
+note_from_value :: proc(v: json.Value) -> (f64, bool) {
 	if n, ok := number_from_value(v); ok {
-		(^f64)(dst)^ = n
-		return
+		return n, true
 	}
 	if s, ok := v.(json.String); ok {
 		if p, is_pitch := theory.pitch_from_string(s); is_pitch {
-			(^f64)(dst)^ = f64(p)
-			return
+			return f64(p), true
 		}
+	}
+	return 0, false
+}
+
+@(private = "file")
+read_note_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
+	if n, ok := note_from_value(v); ok {
+		(^f64)(dst)^ = n
+		return
 	}
 	bad(r, path, "a note (\"C3\", \"F#2\") or a MIDI number")
 }
