@@ -884,7 +884,7 @@ draft_field :: proc(c: ^Ctx, node: ^Draft_Node, field: ^device.Node_Field, slot:
 			report(c, "bad_value", .Error, path, "%s: one of %s", path, strings.join(field.choices, ", ", context.temp_allocator))
 			return
 		}
-		node.values[slot] = slot == device.FIELD_GAIN ? f32(base.db_to_gain(n)) : f32(n)
+		node.values[slot] = field.unit == .Gain ? f32(base.db_to_gain(n)) : f32(n)
 		node.beats -= {slot}
 		return
 	}
@@ -920,7 +920,7 @@ draft_field :: proc(c: ^Ctx, node: ^Draft_Node, field: ^device.Node_Field, slot:
 		node.beats += {slot}
 	case .Asset:
 		node.set_name, node.set_path, node.set_from = s, path, c.writer
-	case .Number, .Db, .Cents, .Table:
+	case .Number, .Db, .Cents, .Table, .Gain:
 		report(c, "bad_value", .Error, path, "%s: a number", path)
 	}
 }

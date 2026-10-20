@@ -377,37 +377,30 @@ sfz_region_desc :: proc(c: ^Sfz_Compile, r: int, set: i32, zone: int, sample: st
 		set_field(src, "end", param(c, r, "end", 0))
 		set_field(src, "delay", param(c, r, "delay", 0))
 		set_field(src, "width", param(c, r, "width", 100))
-		mode := 0
+		mode := device.Loop_Mode.Default
 		m, has_mode := text_of(c, r, "loop_mode")
-		switch m {
-		case "no_loop":
-			mode = 1
-		case "one_shot":
-			mode = 2
-		case "loop_continuous":
-			mode = 3
-		case "loop_sustain":
-			mode = 4
+		if has_mode {
+			mode, _ = device.loop_mode_from_name(m)
 		}
 		if !has_mode && release {
-			mode = 2 // a release region plays its sample out
+			mode = .One_Shot // a release region plays its sample out
 		}
 		set_field(src, "loop_mode", f64(mode))
 		if v, found := text_of(c, r, "loop_start"); found {
 			n, _ := strconv.parse_f64(v)
 			set_field(src, "loop_start", n)
-			if mode == 0 {
-				set_field(src, "loop_mode", 3)
+			if mode == .Default {
+				set_field(src, "loop_mode", f64(device.Loop_Mode.Continuous))
 			}
 		}
 		if v, found := text_of(c, r, "loop_end"); found {
 			n, _ := strconv.parse_f64(v)
 			set_field(src, "loop_end", n)
-			if mode == 0 {
-				set_field(src, "loop_mode", 3)
+			if mode == .Default {
+				set_field(src, "loop_mode", f64(device.Loop_Mode.Continuous))
 			}
 		}
-		desc.one_shot = mode == 2
+		desc.one_shot = mode == .One_Shot
 		if random := param(c, r, "delay_random", 0); random > 0 {
 			rnd := add(&nodes, "delay_random", device.NODE_RANDOM)
 			_ = rnd

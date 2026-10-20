@@ -865,7 +865,7 @@ control_read :: proc(progs: ^Programs, c: ^Control_Row) -> f32 {
 	}
 	t := progs.control_targets[c.targets.first]
 	v := control_target_value(progs, t)
-	gain := t.mod < 0 && t.slot == FIELD_GAIN
+	gain := target_is_gain(progs, t)
 	x: f32
 	switch t.op {
 	case .Set:
@@ -884,13 +884,24 @@ control_read :: proc(progs: ^Programs, c: ^Control_Row) -> f32 {
 	return (x - t.offset) / t.scale
 }
 
+// Whether a control's target is a field kept linear and written in dB (a
+// Gain unit's): a control sets and reads it in dB.
+@(private = "file")
+target_is_gain :: proc(progs: ^Programs, t: Control_Target) -> bool {
+	if t.mod >= 0 {
+		return false
+	}
+	f := field_of_slot(progs.nodes[t.node].kind, int(t.slot))
+	return f != nil && f.unit == .Gain
+}
+
 // Sets every target of c from value (the program's values; what follows
 // from them is program_derive's).
 control_apply :: proc(progs: ^Programs, c: ^Control_Row, value: f32) {
 	c.value = value
 	for t in progs.control_targets[c.targets.first:base.span_end(c.targets)] {
 		x := value * t.scale + t.offset
-		gain := t.mod < 0 && t.slot == FIELD_GAIN
+		gain := target_is_gain(progs, t)
 		v: f32
 		switch t.op {
 		case .Set:
@@ -965,7 +976,7 @@ node_field_set :: proc(progs: ^Programs, program: i32, node: u32, field: string,
 			}
 			if f, slot, known := node_field_from_name(n.kind, field); known && f.list == 0 {
 				append(olds, Old{&n, slot, n.values[slot]})
-				n.values[slot] = slot == FIELD_GAIN ? f32(base.db_to_gain(f64(value))) : value
+				n.values[slot] = f.unit == .Gain ? f32(base.db_to_gain(f64(value))) : value
 			}
 		}
 		for pr in progs.layers[p.layers.first:base.span_end(p.layers)] {

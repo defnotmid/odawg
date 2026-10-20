@@ -28,15 +28,6 @@ Transition :: enum u8 {
 	Pause,
 }
 
-TRANSITION_NAMES := [Transition]string {
-	.None   = "none",
-	.Cut    = "cut",
-	.Riser  = "riser",
-	.Fill   = "fill",
-	.Impact = "impact",
-	.Pause  = "pause",
-}
-
 Section :: struct {
 	name:          string,
 	beat, beats:   f64,

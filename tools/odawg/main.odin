@@ -300,7 +300,7 @@ timeline_from_song :: proc(l: ^Loaded) -> Timeline {
 		for c, i in s.chords[sec.chords.first:base.span_end(sec.chords)] {
 			fmt.sbprintf(&b, "%s%s", i > 0 ? " " : "", chord_name(c))
 		}
-		append(&sections, Timeline_Section{sec.name, sec.start, sec.stop, sec.bars, {sec.bpm0, sec.bpm1}, sec.beats_per_bar, song.style_name(s, sec.style), sec.energy, strings.to_string(b), song.TRANSITION_NAMES[sec.transition]})
+		append(&sections, Timeline_Section{sec.name, sec.start, sec.stop, sec.bars, {sec.bpm0, sec.bpm1}, sec.beats_per_bar, song.style_name(s, sec.style), sec.energy, strings.to_string(b), song.TRANSITIONS[sec.transition].name})
 	}
 	tracks := make([dynamic]Timeline_Track)
 	for tr, ti in s.tracks {

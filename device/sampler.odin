@@ -418,7 +418,43 @@ REGION_LOOP_END :: 14
 REGION_DELAY :: 15
 REGION_WIDTH :: 16
 
-REGION_LOOP_MODES := []string{"default", "no_loop", "one_shot", "loop_continuous", "loop_sustain"}
+// SFZ's loop modes as rows: whether a region takes its zone's loop (the
+// file's), whether its own loop_start and loop_end apply, whether it loops
+// only while the note is held.
+Loop_Mode :: enum u8 {
+	Default,
+	No_Loop,
+	One_Shot,
+	Continuous,
+	Sustain,
+}
+
+Loop_Mode_Row :: struct {
+	name:      string,
+	zone_loop: bool,
+	points:    bool,
+	sustain:   bool,
+}
+
+LOOP_MODES := [Loop_Mode]Loop_Mode_Row {
+	.Default    = {"default", true, false, false},
+	.No_Loop    = {"no_loop", false, false, false},
+	.One_Shot   = {"one_shot", false, false, false},
+	.Continuous = {"loop_continuous", true, true, false},
+	.Sustain    = {"loop_sustain", true, true, true},
+}
+
+REGION_LOOP_MODES := []string{LOOP_MODES[.Default].name, LOOP_MODES[.No_Loop].name, LOOP_MODES[.One_Shot].name, LOOP_MODES[.Continuous].name, LOOP_MODES[.Sustain].name}
+
+// A loop mode by its SFZ name.
+loop_mode_from_name :: proc(name: string) -> (Loop_Mode, bool) {
+	for row, m in LOOP_MODES {
+		if row.name == name {
+			return m, true
+		}
+	}
+	return .Default, false
+}
 
 Region_State :: struct {
 	zone:      i32, // into the bank's zones (-1: nothing to play)
@@ -466,17 +502,15 @@ region_start :: proc(c: ^Node_Call, lane: ^Lane, st: ^Region_State) {
 	if end := i64(v[REGION_END]); end > 0 {
 		st.length = min(st.length, end + 1)
 	}
-	switch int(v[REGION_LOOP_MODE]) {
-	case 0: // the zone's own loop (the file's), unless it is a one-shot
+	mode := LOOP_MODES[Loop_Mode(clamp(int(v[REGION_LOOP_MODE]), 0, len(Loop_Mode) - 1))]
+	if mode.zone_loop {
 		st.loop_from, st.loop_to = i64(z.loop_from), i64(z.loop_to)
-	case 3, 4:
-		st.loop_from, st.loop_to = i64(z.loop_from), i64(z.loop_to)
-		st.sustain = int(v[REGION_LOOP_MODE]) == 4
 	}
-	if v[REGION_LOOP_START] >= 0 && int(v[REGION_LOOP_MODE]) >= 3 {
+	st.sustain = mode.sustain
+	if mode.points && v[REGION_LOOP_START] >= 0 {
 		st.loop_from = i64(v[REGION_LOOP_START])
 	}
-	if v[REGION_LOOP_END] > 0 && int(v[REGION_LOOP_MODE]) >= 3 {
+	if mode.points && v[REGION_LOOP_END] > 0 {
 		st.loop_to = i64(v[REGION_LOOP_END]) + 1
 	}
 	if st.loop_to > st.length || st.loop_to - st.loop_from < 2 {

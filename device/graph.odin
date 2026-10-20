@@ -74,7 +74,7 @@ Node_Field :: struct {
 
 // Every node's, before its kind's own: its level (linear in Programs; dB in
 // a row), its pan, and its gain's modulators.
-COMMON_FIELDS := []Node_Field{{name = "gain_db", unit = .Db, default = 1, per_sample = true}, {name = "pan", unit = .Number, per_sample = true}, {name = "amp", unit = .Number, default = 1, per_sample = true}}
+COMMON_FIELDS := []Node_Field{{name = "gain_db", unit = .Gain, default = 1, per_sample = true}, {name = "pan", unit = .Number, per_sample = true}, {name = "amp", unit = .Number, default = 1, per_sample = true}}
 FIELD_GAIN :: 0
 FIELD_PAN :: 1
 FIELD_AMP :: 2

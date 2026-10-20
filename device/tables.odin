@@ -24,6 +24,7 @@ Unit :: enum u8 {
 	Choice, // one of the row's choices, stored as its index
 	Asset, // a sample set by name ("vcsl/upright_piano"), stored as its index in the Bank
 	Table, // a table of CURVE_POINTS (a Curve's), stored as its index in Programs.tables
+	Gain, // a level written in dB, kept linear (a node's gain_db)
 }
 
 Param :: enum u8 {

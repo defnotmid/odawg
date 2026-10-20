@@ -1232,7 +1232,7 @@ set_option :: proc(r: ^Reader, d: ^Device_Spec, p: device.Param, v: json.Value, 
 		case .Asset:
 			value = f32(len(r.spec.strings))
 			append(&r.spec.strings, strings.clone(s))
-		case .Number, .Db, .Cents, .Table:
+		case .Number, .Db, .Cents, .Table, .Gain:
 			bad(r, path, "a number")
 			return
 		}

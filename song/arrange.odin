@@ -969,16 +969,10 @@ expand_chords :: proc(x: ^Expand) {
 // needs the pad): its track for the style the outgoing section plays, else
 // its first.
 add_transitions :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
-	// the levels v0.0.7's fx played them at (synth.lua's riser and impact)
-	RISER_VELOCITY :: 0.35
-	IMPACT_VELOCITY :: 0.8
-	note :: proc(song: ^Song, t0, duration: f64, pitch, velocity: f32, pad: u32 = 0) -> Note_Row {
-		return {time = t0, duration = duration, beat = tempo.beat_from_seconds(&song.tempo, t0), pitch = pitch, velocity = velocity, pad = pad}
-	}
 	for i in 1 ..< len(song.sections) {
 		prev, next := song.sections[i - 1], song.sections[i]
-		kind := next.transition
-		if kind == .None || kind == .Cut {
+		row := TRANSITIONS[next.transition]
+		if row.play == nil {
 			continue
 		}
 		at := next.start
@@ -989,10 +983,9 @@ add_transitions :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 			part, pad_name = part[:slash], part[slash + 1:]
 		}
 		pad := pad_name != "" ? pad_intern(song, pad_name) : 0
-		if kind != .Pause {
-			if part == "" || (kind == .Fill && pad == 0) {
-				want := kind == .Fill ? "a part and the pad it rolls (\"drums/snare\")" : "a part (\"fx\")"
-				base.report(&song.findings, "transition_needs_part", .Warning, path, "section %s: a %s plays on %s: give `transition_part`", next.name, TRANSITION_NAMES[kind], want)
+		if row.part {
+			if part == "" || (row.pad && pad == 0) {
+				base.report(&song.findings, "transition_needs_part", .Warning, path, "section %s: a %s plays on %s: give `transition_part`", next.name, row.name, row.wants)
 				continue
 			}
 			for t, k in song.tracks {
@@ -1020,41 +1013,97 @@ add_transitions :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 		}
 		root := pad != 0 ? 0 : theory.pitch_from_degree(song.key, chord_from_beat(song, next.beat), 1, octave)
 		source := strings.concatenate({"sections/", next.name, "/transition"})
-		switch kind {
-		case .Riser:
-			from_beat := max(prev.beat, next.beat - 2 * f64(prev.beats_per_bar))
-			t0 := tempo.seconds_from_beat(&song.tempo, from_beat)
-			append(&work.notes[ti], note(song, t0, at - t0, root, RISER_VELOCITY, pad))
-			append(&song.regions, Region{song.tracks[ti].part, t0, at, source})
-		case .Impact:
-			bar := tempo.seconds_from_beat(&song.tempo, next.beat + f64(next.beats_per_bar)) - at
-			append(&work.notes[ti], note(song, at, bar, root, IMPACT_VELOCITY, pad))
-			append(&song.regions, Region{song.tracks[ti].part, at, at + bar, source})
-		case .Fill:
-			last := next.beat - 1
-			notes := &work.notes[ti]
-			#reverse for n, k in notes {
-				if n.beat >= last - 1e-9 && n.beat < next.beat - 1e-9 && n.pad == pad {
-					ordered_remove(notes, k)
-				}
+		row.play({song, work, prev, next, at, ti, root, pad, source, row.velocity})
+	}
+}
+
+// What a transition writes, into which section, on which track (-1: none:
+// a pause), its note (a root or a pad), what made it, its level.
+@(private = "file")
+Transition_Call :: struct {
+	song:       ^Song,
+	work:       ^Work,
+	prev, next: Section,
+	at:         f64, // the section's start
+	ti:         int,
+	root:       f32,
+	pad:        u32,
+	source:     string,
+	velocity:   f32,
+}
+
+// The transitions as rows: their names, whether they play on a part (and
+// a pad of it), what to name for it, their level (v0.0.7's fx's: synth.lua's
+// riser and impact), what they write (nil: nothing, as a cut's).
+Transition_Row :: struct {
+	name:     string,
+	part:     bool,
+	pad:      bool,
+	wants:    string,
+	velocity: f32,
+	play:     proc(t: Transition_Call),
+}
+
+TRANSITIONS := [Transition]Transition_Row {
+	.None   = {name = "none"},
+	.Cut    = {name = "cut"},
+	.Riser  = {"riser", true, false, "a part (\"fx\")", 0.35, transition_riser},
+	.Fill   = {"fill", true, true, "a part and the pad it rolls (\"drums/snare\")", 0, transition_fill},
+	.Impact = {"impact", true, false, "a part (\"fx\")", 0.8, transition_impact},
+	.Pause  = {name = "pause", play = transition_pause},
+}
+
+@(private = "file")
+transition_note :: proc(song: ^Song, t0, duration: f64, pitch, velocity: f32, pad: u32 = 0) -> Note_Row {
+	return {time = t0, duration = duration, beat = tempo.beat_from_seconds(&song.tempo, t0), pitch = pitch, velocity = velocity, pad = pad}
+}
+
+// A riser over the last two bars before the section.
+@(private = "file")
+transition_riser :: proc(t: Transition_Call) {
+	from_beat := max(t.prev.beat, t.next.beat - 2 * f64(t.prev.beats_per_bar))
+	t0 := tempo.seconds_from_beat(&t.song.tempo, from_beat)
+	append(&t.work.notes[t.ti], transition_note(t.song, t0, t.at - t0, t.root, t.velocity, t.pad))
+	append(&t.song.regions, Region{t.song.tracks[t.ti].part, t0, t.at, t.source})
+}
+
+// An impact on its downbeat, a bar long.
+@(private = "file")
+transition_impact :: proc(t: Transition_Call) {
+	bar := tempo.seconds_from_beat(&t.song.tempo, t.next.beat + f64(t.next.beats_per_bar)) - t.at
+	append(&t.work.notes[t.ti], transition_note(t.song, t.at, bar, t.root, t.velocity, t.pad))
+	append(&t.song.regions, Region{t.song.tracks[t.ti].part, t.at, t.at + bar, t.source})
+}
+
+// A roll of the pad over the beat before it, in place of the pad's hits
+// there.
+@(private = "file")
+transition_fill :: proc(t: Transition_Call) {
+	last := t.next.beat - 1
+	notes := &t.work.notes[t.ti]
+	#reverse for n, k in notes {
+		if n.beat >= last - 1e-9 && n.beat < t.next.beat - 1e-9 && n.pad == t.pad {
+			ordered_remove(notes, k)
+		}
+	}
+	for st in 0 ..< 4 {
+		b := last + f64(st) * 0.25
+		t0 := tempo.seconds_from_beat(&t.song.tempo, b)
+		append(notes, transition_note(t.song, t0, tempo.seconds_from_beat(&t.song.tempo, b + 0.25) - t0, 0, f32(0.35 + 0.15 * f64(st)), t.pad))
+	}
+	t0 := tempo.seconds_from_beat(&t.song.tempo, last)
+	append(&t.song.regions, Region{t.song.tracks[t.ti].part, t0, t.at, t.source})
+}
+
+// A beat of silence before it: every note starting there taken out.
+@(private = "file")
+transition_pause :: proc(t: Transition_Call) {
+	last := tempo.seconds_from_beat(&t.song.tempo, t.next.beat - 1)
+	for &notes in t.work.notes {
+		#reverse for n, k in notes {
+			if n.time >= last - 1e-9 && n.time < t.at - 1e-9 {
+				ordered_remove(&notes, k)
 			}
-			for st in 0 ..< 4 {
-				b := last + f64(st) * 0.25
-				t0 := tempo.seconds_from_beat(&song.tempo, b)
-				append(notes, note(song, t0, tempo.seconds_from_beat(&song.tempo, b + 0.25) - t0, 0, f32(0.35 + 0.15 * f64(st)), pad))
-			}
-			t0 := tempo.seconds_from_beat(&song.tempo, last)
-			append(&song.regions, Region{song.tracks[ti].part, t0, at, source})
-		case .Pause:
-			last := tempo.seconds_from_beat(&song.tempo, next.beat - 1)
-			for &notes in work.notes {
-				#reverse for n, k in notes {
-					if n.time >= last - 1e-9 && n.time < at - 1e-9 {
-						ordered_remove(&notes, k)
-					}
-				}
-			}
-		case .None, .Cut:
 		}
 	}
 }

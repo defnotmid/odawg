@@ -145,8 +145,8 @@ lay_out :: proc(s: ^spec.Spec, song: ^Song) -> bool {
 		sec.chords.count = i32(len(song.chords)) - sec.chords.first
 		if ss.transition != "" {
 			found := false
-			for n, t in TRANSITION_NAMES {
-				if n == ss.transition {
+			for row, t in TRANSITIONS {
+				if row.name == ss.transition {
 					sec.transition, found = t, true
 				}
 			}
