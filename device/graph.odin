@@ -70,6 +70,7 @@ Node_Field :: struct {
 	default:    f32,
 	per_sample: bool, // a modulator moves it every sample (else: at the note's start)
 	list:       int, // a list of up to this many values, in consecutive slots (0: one)
+	shapes:     bool, // its value decides how the node is placed (a filter's type): programs differing in it are not one shape
 }
 
 // Every node's, before its kind's own: its level (linear in Programs; dB in
@@ -93,6 +94,7 @@ Node_Kind_Row :: struct {
 	steady:   bool, // its output holds for a whole note (a draw from the seed): what it moves moves once a chunk
 	stateless: bool, // its output is a function of what it reads now (a map, a product): steady when they are
 	stereo:   bool, // it writes two sides whatever it reads (else one, or as its inputs)
+	sides:    proc(values: ^[MAX_FIELDS]f32) -> bool, // it writes two sides with these values (a fat oscillator's copies); nil: as stereo says
 	keeps:    bool, // its state carries across a mono program's notes
 	jump:     bool, // its output is a function of where the note is (a recording's position): a seek starts it there, nothing rendered
 	state:    int, // bytes a voice keeps for it

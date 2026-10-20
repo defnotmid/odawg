@@ -639,12 +639,15 @@ desc_shape :: proc(d: ^Program_Desc) -> string {
 		strings.write_byte(&b, desc_table(d, n.name) != nil ? 't' : '-')
 		strings.write_byte(&b, n.values[FIELD_GAIN] != 1 ? 'g' : '-')
 		strings.write_byte(&b, n.values[FIELD_PAN] != 0 ? 'p' : '-')
-		if n.kind == NODE_FILTER {
-			strings.write_f64(&b, f64(n.values[len(COMMON_FIELDS)]), 'g') // its type
+		row := node_row(n.kind)
+		for f, i in row.fields {
+			if f.shapes {
+				strings.write_f64(&b, f64(n.values[row.slots[i]]), 'g')
+			}
 		}
-		if n.kind == NODE_OSC {
+		if sides := node_row(n.kind).sides; sides != nil {
 			v := n.values
-			strings.write_byte(&b, osc_stereo(&v) ? 's' : '-')
+			strings.write_byte(&b, sides(&v) ? 's' : '-')
 		}
 	}
 	return strings.to_string(b)
@@ -1078,7 +1081,7 @@ program_derive :: proc(progs: ^Programs, program: i32) -> (reshaped: bool) {
 		g.steady = row.steady || steady
 		// what writes both sides itself: a stereo kind, a fat oscillator, what
 		// reads two sides (a filter, a mix of them)
-		g.sides = row.stereo || (g.kind == NODE_OSC && osc_stereo(&g.values)) || (row.inputs != 0 && stereo)
+		g.sides = row.stereo || (row.sides != nil && row.sides(&g.values)) || (row.inputs != 0 && stereo)
 		g.stereo = stereo || g.sides || g.values[FIELD_PAN] != 0
 		g.level = g.values[FIELD_GAIN] != 1 || g.values[FIELD_PAN] != 0 || g.mod_slots & (u64(1) << FIELD_AMP | u64(1) << FIELD_PAN) != 0
 		g.fill = false

@@ -31,7 +31,7 @@ nodes_init :: proc "contextless" () {
 	context = runtime.default_context()
 	r := &NODES
 	NODE_OSC = register_node(r, {
-		name = "Osc", stereo = false, state = size_of(Osc_State), start = start_osc, process = process_osc,
+		name = "Osc", stereo = false, state = size_of(Osc_State), sides = osc_stereo, start = start_osc, process = process_osc,
 		fields = {
 			{name = "wave", unit = .Choice, choices = WAVE_CHOICES, default = f32(dsp.Wave.Sine)},
 			{name = "count", unit = .Number, default = 3},
@@ -90,7 +90,7 @@ nodes_init :: proc "contextless" () {
 	NODE_FILTER = register_node(r, {
 		name = "Filter", inputs = 1, state = size_of(Filter_State), start = start_filter, process = process_filter,
 		fields = {
-			{name = "type", unit = .Choice, choices = NODE_FILTER_CHOICES},
+			{name = "type", unit = .Choice, choices = NODE_FILTER_CHOICES, shapes = true},
 			{name = "frequency", unit = .Hz, default = 1000, per_sample = true},
 			{name = "q", unit = .Number, default = 1, per_sample = true},
 			{name = "rolloff", unit = .Number, default = -12},
