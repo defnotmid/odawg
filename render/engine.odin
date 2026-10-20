@@ -48,6 +48,7 @@ Engine :: struct {
 	graph:     []f32, // the lanes' buffers of the largest call of device.graph_run
 	fx:        []Fx_Run,
 	fx_bytes:  []u8,
+	fx_scratch: ^device.Fx_Scratch, // the one its effects share, a call at a time
 	scratch:   []f32, // shared by the tracks: a discard (2 x BLOCK) at 4 x BLOCK, a choked note's at 6 x BLOCK
 	// The routing: a run per node (song.nodes), the order they render in,
 	// their blocks (2 x BLOCK each) and whether each holds sound, and per
@@ -206,6 +207,7 @@ engine_init :: proc(e: ^Engine, s: ^song.Song) -> bool {
 		run.chain = {i32(first), i32(fi - first)}
 	}
 	e.fx_bytes = make([]u8, bytes)
+	e.fx_scratch = new(device.Fx_Scratch)
 	master_run_init(&e.master, s, {})
 	for ti in 0 ..< len(s.tracks) {
 		e.tracks[ti].latency = e.nodes[ti].latency
@@ -893,7 +895,7 @@ slot_cut :: proc(e: ^Engine, k: int, samples: i32) {
 @(private = "file")
 layer_cuts :: proc(e: ^Engine, run: ^Track_Run, ni: i32, layer: i32, n: device.Note) {
 	progs := &e.song.programs
-	l := progs.layers[layer]
+	l := progs.regions[progs.layers[layer].row]
 	group_count, key_count := 0, 0
 	oldest_group, oldest_key := -1, -1
 	key := math.round(n.pitch)
@@ -905,7 +907,7 @@ layer_cuts :: proc(e: ^Engine, run: ^Track_Run, ni: i32, layer: i32, n: device.N
 		if other < 0 {
 			continue
 		}
-		o := progs.layers[other]
+		o := progs.regions[progs.layers[other].row]
 		if o.off_by != 0 && o.off_by == l.group {
 			switch o.off_mode {
 			case .Fast:
@@ -943,16 +945,15 @@ layer_cuts :: proc(e: ^Engine, run: ^Track_Run, ni: i32, layer: i32, n: device.N
 // once it is done.
 @(private = "file")
 play_slot :: proc(e: ^Engine, ti: int, slot: int, l, r: []f32) -> bool {
-	t := e.song.tracks[ti]
-	return play_graph(e, slot, pad_level(&t, e.song.notes.pad[e.slot_note[slot]]), l, r)
+	return play_graph(e, slot, pad_level(e.song, ti, e.song.notes.pad[e.slot_note[slot]]), l, r)
 }
 
-// A pad's level on a track (Pad_Gain_Set; 1: its own).
+// A pad's level on track `ti` (Pad_Gain_Set; 1: its own).
 @(private = "file")
-pad_level :: proc(t: ^song.Track, pad: u32) -> f32 {
+pad_level :: proc(s: ^song.Song, ti: int, pad: u32) -> f32 {
 	if pad != 0 {
-		for g in t.pad_gains {
-			if g.pad == pad && g.db != 0 {
+		for g in s.pad_gains {
+			if g.track == i32(ti) && g.pad == pad && g.db != 0 {
 				return f32(base.db_to_gain(f64(g.db)))
 			}
 		}
@@ -1011,7 +1012,6 @@ play_graph :: proc(e: ^Engine, slot: int, level: f32, l, r: []f32) -> bool {
 @(private = "file")
 play_graphs :: proc(e: ^Engine, ti: int, l, r: []f32) {
 	s := e.song
-	t := s.tracks[ti]
 	run := &e.tracks[ti]
 	// the sounding voices in the order they are summed: by program, then by
 	// note; never by slot (which slots are free depends on where blocks fell,
@@ -1039,12 +1039,12 @@ play_graphs :: proc(e: ^Engine, ti: int, l, r: []f32) {
 	for x in sounding[:n_sounding] {
 		k := x.slot
 		if e.slot_choke[k] != 0 {
-			play_graph(e, k, pad_level(&t, s.notes.pad[e.slot_note[k]]), l, r)
+			play_graph(e, k, pad_level(s, ti, s.notes.pad[e.slot_note[k]]), l, r)
 			continue
 		}
 		n := note_from_row(s, int(e.slot_note[k]))
 		state := slot_state(e, k)
-		voices[count] = {state = state, note = n, seed = s.notes.seed[e.slot_note[k]], at = e.slot_at[k], out_l = l, out_r = r, gain = pad_level(&t, n.pad)}
+		voices[count] = {state = state, note = n, seed = s.notes.seed[e.slot_note[k]], at = e.slot_at[k], out_l = l, out_r = r, gain = pad_level(s, ti, n.pad)}
 		slots[count], plays[count] = k, x.play
 		count += 1
 	}
@@ -1218,7 +1218,7 @@ run_fx :: proc(e: ^Engine, c: base.Span, l, r: []f32, key_l: []f32 = nil, key_r:
 	for f in e.fx[c.first:base.span_end(c)] {
 		p := e.song.params[f.device]
 		state := e.fx_bytes[f.state.first:base.span_end(f.state)]
-		device.DEVICE_TABLE[e.song.devices[f.device]].effect(state, &p, l, r, key_l, key_r)
+		device.DEVICE_TABLE[e.song.devices[f.device]].effect(state, &p, l, r, key_l, key_r, e.fx_scratch)
 	}
 }
 

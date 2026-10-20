@@ -71,12 +71,14 @@ fx_test_stream :: proc(kind: Device_Kind, p: ^Params, l, r: []f32, block := 0, a
 	state := make([]u8, row.effect_size(p))
 	defer delete(state)
 	row.effect_reset(state, p, at)
+	scratch := new(Fx_Scratch)
+	defer free(scratch)
 	step := block > 0 ? block : max(len(l), 1)
 	for start := 0; start < len(l); start += step {
 		end := min(start + step, len(l))
 		kl := key_l != nil ? key_l[start:end] : nil
 		kr := key_r != nil ? key_r[start:end] : nil
-		row.effect(state, p, l[start:end], r[start:end], kl, kr)
+		row.effect(state, p, l[start:end], r[start:end], kl, kr, scratch)
 	}
 }
 

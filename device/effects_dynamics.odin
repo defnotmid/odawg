@@ -20,7 +20,6 @@ fx_level_db :: proc(key_l, key_r: []f32, out: []f32) {
 
 @(private = "file")
 Fx_Compressor :: struct {
-	scratch:         Fx_Scratch,
 	held, reduction: f64, // dB taken off, >= 0
 }
 
@@ -34,13 +33,13 @@ reset_compressor :: proc(state: []u8, p: ^Params, at: i64) {fx_clear(state)}
 // over .Attack), so a steady tone is held at the curve's level rather than
 // rippling between its peaks. Unlike Web Audio's DynamicsCompressorNode
 // there is no automatic makeup gain.
-effect_compressor :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32) {
-	fx_run(state, p, l, r, key_l, key_r, proc(state: []u8, p: ^Params, l, r, key_l, key_r: []f32) {
+effect_compressor :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32, scratch: ^Fx_Scratch) {
+	fx_run(state, p, l, r, key_l, key_r, scratch, proc(state: []u8, p: ^Params, l, r, key_l, key_r: []f32, scratch: ^Fx_Scratch) {
 		c := fx_header(state, Fx_Compressor)
 		t := f64(p[.Threshold])
 		ratio := max(f64(p[.Ratio]), 1)
 		knee := max(f64(p[.Knee]), 0)
-		work := c.scratch.a[:len(l)]
+		work := scratch.a[:len(l)]
 
 		fx_level_db(key_l, key_r, work)
 		// The static curve: how many dB each sample wants taken off.
@@ -78,7 +77,6 @@ effect_compressor :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []
 
 @(private = "file")
 Fx_Gate :: struct {
-	scratch: Fx_Scratch,
 	env:     f32,
 	gain:    f64,
 }
@@ -89,10 +87,10 @@ reset_gate :: proc(state: []u8, p: ^Params, at: i64) {fx_clear(state)}
 // A gate: a peak follower on the louder key channel (instant rise, 20 ms
 // fall) opens it above .Threshold (dB); its gain opens over .Attack and
 // closes over .Release.
-effect_gate :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32) {
-	fx_run(state, p, l, r, key_l, key_r, proc(state: []u8, p: ^Params, l, r, key_l, key_r: []f32) {
+effect_gate :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32, scratch: ^Fx_Scratch) {
+	fx_run(state, p, l, r, key_l, key_r, scratch, proc(state: []u8, p: ^Params, l, r, key_l, key_r: []f32, scratch: ^Fx_Scratch) {
 		g := fx_header(state, Fx_Gate)
-		work := g.scratch.a[:len(l)]
+		work := scratch.a[:len(l)]
 		// The follower, then whether the gate wants to be open.
 		fall := f32(fx_time_coef(0.02))
 		open_level := f32(math.pow(10, f64(p[.Threshold]) / 20))
@@ -157,7 +155,6 @@ fx_peak_kernel :: proc() -> (kernel: [3][2 * FX_TAPS]f32) {
 
 @(private = "file")
 Fx_Limiter :: struct {
-	scratch:    Fx_Scratch,
 	pos:        i64, // the song sample the next input is
 	released:   f64,
 	sum:        f64, // of `hold`
@@ -196,8 +193,8 @@ tail_limiter :: proc(p: ^Params) -> f64 {return 0}
 // toward 1 over .Release, its minimum over the 5 ms window and that
 // minimum averaged over the window again, a ramp that reaches every peak's
 // gain before the peak; the delayed input times the ramp.
-effect_limiter :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32) {
-	fx_run(state, p, l, r, key_l, key_r, proc(state: []u8, p: ^Params, l, r, _, _: []f32) {
+effect_limiter :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32, scratch: ^Fx_Scratch) {
+	fx_run(state, p, l, r, key_l, key_r, scratch, proc(state: []u8, p: ^Params, l, r, _, _: []f32, scratch: ^Fx_Scratch) {
 		W :: FX_LIMITER_WINDOW
 		M :: FX_LIMITER_MASK
 		CAP :: W + 1
@@ -205,7 +202,7 @@ effect_limiter :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32
 		n := len(l)
 		ceiling := f32(math.pow(10, f64(p[.Threshold]) / 20))
 		kernel := fx_peak_kernel()
-		gain := f.scratch.d[:n]
+		gain := scratch.d[:n]
 
 		for i in 0 ..< n {
 			f.input[0][(f.pos + i64(i)) & M] = l[i]
@@ -259,8 +256,8 @@ effect_limiter :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32
 		// Out: the input FX_LIMITER_LATENCY back, times the ramp.
 		for i in 0 ..< n {
 			k := (f.pos + i64(i) - FX_LIMITER_LATENCY) & M
-			f.scratch.dry_l[i] = f.input[0][k]
-			f.scratch.dry_r[i] = f.input[1][k]
+			scratch.dry_l[i] = f.input[0][k]
+			scratch.dry_r[i] = f.input[1][k]
 			l[i] = f.input[0][k] * f32(gain[i])
 			r[i] = f.input[1][k] * f32(gain[i])
 		}

@@ -5,7 +5,6 @@ import "core:math"
 import "core:mem/virtual"
 import "core:testing"
 import base "../base"
-import device "../device"
 import spec "../spec"
 
 // The example files (examples/): styles, instruments and machines, at the
@@ -418,9 +417,10 @@ test_machine :: proc(t: ^testing.T) {
 	testing.expect_value(t, machine.layers.count, 3)
 	keys := make(map[u32]f32, context.temp_allocator)
 	for pr in s.programs.layers[machine.layers.first:base.span_end(machine.layers)] {
-		keys[pr.pad] = pr.key
-		if pr.pad == base.name_id("glass") {
-			testing.expect_value(t, s.programs.chokes[pr.chokes.first], base.name_id("door"))
+		pad := s.programs.pads[pr.row]
+		keys[pad.pad] = pad.key
+		if pad.pad == base.name_id("glass") {
+			testing.expect_value(t, s.programs.chokes[pad.chokes.first], base.name_id("door"))
 		}
 	}
 	testing.expect_value(t, keys[base.name_id("kick")], 36) // General MIDI's

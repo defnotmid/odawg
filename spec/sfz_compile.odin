@@ -209,7 +209,7 @@ sfz_program_desc :: proc(s: ^Sfz, set: i32, cc: [128]f32, path: string, findings
 		}
 		_ = param(&c, r, "hiprog", 127)
 		l := device.Layer_Desc{path = strings.concatenate({s.regions[r].file, ":", int_text(int(s.regions[r].line))})}
-		row := &l.row
+		row := &l.region
 		lo, hi := key_of(&c, r, "lokey", 0), key_of(&c, r, "hikey", 127)
 		if v, found := sfz_value(s, r, "key"); found {
 			k := sfz_key(s, v, 60)
@@ -223,7 +223,7 @@ sfz_program_desc :: proc(s: ^Sfz, set: i32, cc: [128]f32, path: string, findings
 			group = i32(param(&c, r, "group", 0)), off_by = i32(param(&c, r, "off_by", 0)),
 			off_time = f32(param(&c, r, "off_time", 0.006)),
 			polyphony = u16(max(param(&c, r, "polyphony", 0), 0)), note_polyphony = u16(max(param(&c, r, "note_polyphony", 0), 0)),
-			rt_decay = f32(param(&c, r, "rt_decay", 0)), gain = 1,
+			rt_decay = f32(param(&c, r, "rt_decay", 0)),
 		}
 		if row.hi_rand >= 1 {
 			row.hi_rand = 1.01 // its top includes 1

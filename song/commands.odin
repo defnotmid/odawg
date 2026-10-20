@@ -198,22 +198,17 @@ pad_gain :: proc(s: ^Song, row: Command_Row, tracks: []int, step: bool) -> bool 
 				return false
 			}
 		}
-		gains := &s.tracks[ti].pad_gains
-		slot := -1
-		for g, i in gains {
-			if g.pad == pad || (slot < 0 && g.pad == 0) {
-				slot = i
-				if g.pad == pad {
-					break
-				}
+		g: ^Pad_Gain
+		for &x in s.pad_gains {
+			if x.track == i32(ti) && x.pad == pad {
+				g = &x
 			}
 		}
-		if slot < 0 {
-			return false // a track holds PAD_GAINS pads' levels
+		if g == nil {
+			append(&s.pad_gains, Pad_Gain{track = i32(ti), pad = pad})
+			g = &s.pad_gains[len(s.pad_gains) - 1]
 		}
-		g := &gains[slot]
-		g.db = step ? (g.pad == pad ? g.db : 0) + f32(row.value) : f32(row.value)
-		g.pad = pad
+		g.db = step ? g.db + f32(row.value) : f32(row.value)
 	}
 	return len(tracks) > 0
 }

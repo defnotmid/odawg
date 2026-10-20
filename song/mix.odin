@@ -79,6 +79,9 @@ append_song :: proc(m: ^Song, s: ^Song, at: f64, prefix: string, gain_db: f64 = 
 		}
 		append(&m.tracks, x)
 	}
+	for g in s.pad_gains {
+		append(&m.pad_gains, Pad_Gain{g.track + track0, g.pad, g.db})
+	}
 	for i in 0 ..< len(s.notes) {
 		n := s.notes[i]
 		n.time += at
@@ -181,7 +184,7 @@ append_clip :: proc(m: ^Song, c: Clip) -> i32 {
 	append(&m.devices, device.Device_Kind.Voice)
 	append(&m.labels, "Player")
 	append(&m.params, p)
-	t := Track{part = part, style = -1, instrument = i32(len(m.devices) - 1), gain_db = c.gain_db, pan = c.pan, pan_law = .Balance, voice = c.voice, notes = {i32(len(m.notes)), 1}}
+	t := Track{part = part, style = -1, instrument = i32(len(m.devices) - 1), gain_db = c.gain_db, pan = c.pan, pan_law = .Balance, notes = {i32(len(m.notes)), 1}}
 	if c.effects != nil {
 		fx := new(spec.Spec)
 		spec.spec_init(fx)
@@ -195,6 +198,9 @@ append_clip :: proc(m: ^Song, c: Clip) -> i32 {
 	track := i32(len(m.tracks))
 	append(&m.tracks, t)
 	append_soa(&m.notes, Note_Row{time = c.start, duration = c.stop - c.start, velocity = 1, track = u16(track)})
+	if c.voice {
+		append(&m.voices, [2]f64{c.start, c.stop}) // speech: what a spans sidechain ducks under
+	}
 	append(&m.regions, Region{part, c.start, c.stop, c.name})
 	m.duration = max(m.duration, c.stop)
 	return track
@@ -213,29 +219,19 @@ duck_under_voice :: proc(depth_db, attack, hold, release, merge: f64) -> Sidecha
 mix_end :: proc(m: ^Song) {
 	sort_regions(m)
 	graph_build(m)
-	clear(&m.by_time)
-	for i in 0 ..< len(m.notes) {
-		append(&m.by_time, i32(i))
-	}
-	context.user_ptr = m
-	slice.stable_sort_by(m.by_time[:], proc(a, b: i32) -> bool {
-		s := (^Song)(context.user_ptr)
-		ta, tb := s.notes.time[a], s.notes.time[b]
-		if ta != tb {
-			return ta < tb
-		}
-		return s.tracks[s.notes.track[a]].part < s.tracks[s.notes.track[b]].part
-	})
-	clear(&m.voices)
-	for t in m.tracks {
-		if !t.voice {
-			continue
-		}
-		for i in t.notes.first ..< base.span_end(t.notes) {
-			append(&m.voices, [2]f64{m.notes.time[i], m.notes.time[i] + m.notes.duration[i]})
-		}
-	}
+	notes_by_time(m)
 	slice.sort_by(m.voices[:], proc(a, b: [2]f64) -> bool {return a[0] < b[0]})
+}
+
+// The mode of the program owning layer `i` (its row's table).
+@(private = "file")
+layer_mode_of :: proc(progs: ^device.Programs, i: int) -> device.Layer_Mode {
+	for p in progs.programs {
+		if i32(i) >= p.layers.first && i32(i) < base.span_end(p.layers) {
+			return p.layer_mode
+		}
+	}
+	return .One
 }
 
 // Appends a song's programs to a mix's, every index moved past what is
@@ -244,6 +240,7 @@ mix_end :: proc(m: ^Song) {
 programs_append :: proc(to, from: ^device.Programs) -> i32 {
 	p0, n0, m0 := i32(len(to.programs)), i32(len(to.nodes)), i32(len(to.mods))
 	i0, pad0, c0 := i32(len(to.inputs)), i32(len(to.layers)), i32(len(to.chokes))
+	pads0, regions0 := i32(len(to.pads)), i32(len(to.regions))
 	ctl0, tgt0 := i32(len(to.controls)), i32(len(to.control_targets))
 	shift :: proc(sp: Span, by: i32) -> Span {return {sp.first + by, sp.count}}
 	for p in from.programs {
@@ -273,12 +270,13 @@ programs_append :: proc(to, from: ^device.Programs) -> i32 {
 	append(&to.mods, ..from.mods[:])
 	append(&to.inputs, ..from.inputs[:])
 	t0 := f32(len(to.tables) / device.CURVE_POINTS)
-	for pr in from.layers {
+	for pr, i in from.layers {
 		x := pr
 		if x.program >= 0 {
 			x.program += p0
 		}
-		x.chokes = shift(pr.chokes, c0)
+		// its row: a pad's or a region's, by its program's mode
+		x.row += layer_mode_of(from, i) == .All ? regions0 : pads0
 		// its values, a Curve's table index moved past the tables there
 		x.params = {i32(len(to.layer_params)), pr.params.count}
 		if pr.program >= 0 {
@@ -293,6 +291,12 @@ programs_append :: proc(to, from: ^device.Programs) -> i32 {
 		}
 		append(&to.layers, x)
 	}
+	for pad in from.pads {
+		x := pad
+		x.chokes = shift(pad.chokes, c0)
+		append(&to.pads, x)
+	}
+	append(&to.regions, ..from.regions[:])
 	append(&to.chokes, ..from.chokes[:])
 	// a Curve's table index moves past the tables there
 	if t0 > 0 {

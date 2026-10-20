@@ -202,7 +202,7 @@ Tail_Proc :: #type proc(p: ^Params, n: Note, env: ^Voice_Env) -> f64
 // (nil: the signal).
 Effect_Size_Proc :: #type proc(p: ^Params) -> int
 Effect_Reset_Proc :: #type proc(state: []u8, p: ^Params, at: i64)
-Effect_Proc :: #type proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32)
+Effect_Proc :: #type proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32, scratch: ^Fx_Scratch)
 Effect_Latency_Proc :: #type proc(p: ^Params) -> int
 // Seconds of sound after the input stops (nil: none).
 Effect_Tail_Proc :: #type proc(p: ^Params) -> f64

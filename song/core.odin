@@ -7,6 +7,7 @@
 package odawg_song
 
 import "core:math"
+import "core:slice"
 import "core:strings"
 import base "../base"
 import device "../device"
@@ -91,23 +92,21 @@ Track :: struct {
 	gain_db:    f64,
 	pan:        f64,
 	pan_law:    Pan_Law,
-	voice:      bool, // speech: what a spans sidechain ducks under
 	muted:      bool, // heard by nothing (still ducking the ducked: one track heard alone)
 	room:       f64, // dB it dips by where its song makes room
-	pad_gains:  [PAD_GAINS]Pad_Gain, // pads at a level of their own (Pad_Gain_Set)
 	chain:      Span, // into chain: its effects in order
 	sends:      Span, // into sends
 	sidechains: Span, // into sidechains: what ducks it (a part's kick and a voice, both)
 	notes:      Span, // into notes
 }
 
-// A pad's level on a track (pad 0: an unused row).
+// A pad at a level of its own on a track (Pad_Gain_Set): Song.pad_gains,
+// only the pads given one.
 Pad_Gain :: struct {
-	pad: u32,
-	db:  f32,
+	track: i32, // into tracks
+	pad:   u32,
+	db:    f32,
 }
-
-PAD_GAINS :: 16
 
 // What ducks a track, and how: under each hit of a part (synth.lua's: the
 // gain falls by `depth` at a hit and recovers with time constant
@@ -253,6 +252,7 @@ Song :: struct {
 	placements: [dynamic]Placement, // the songs it plays (its own: one)
 	voices:   [dynamic][2]f64, // the voice tracks' spans, sorted (a spans sidechain ducks under them)
 	sidechains: [dynamic]Sidechain,
+	pad_gains: [dynamic]Pad_Gain,
 	// The master: its gain, then its chain (into chain; a mix's limiter).
 	master_gain_db: f64,
 	master:   Span,
@@ -322,6 +322,23 @@ song_from_spec :: proc(s: ^spec.Spec, out: ^Song, bank: ^device.Bank = nil) -> b
 	})
 	graph_build(out)
 	return true
+}
+
+// The time-order index over the notes (by time, then part).
+notes_by_time :: proc(s: ^Song) {
+	clear(&s.by_time)
+	for i in 0 ..< len(s.notes) {
+		append(&s.by_time, i32(i))
+	}
+	context.user_ptr = s
+	slice.stable_sort_by(s.by_time[:], proc(a, b: i32) -> bool {
+		s := (^Song)(context.user_ptr)
+		ta, tb := s.notes.time[a], s.notes.time[b]
+		if ta != tb {
+			return ta < tb
+		}
+		return s.tracks[s.notes.track[a]].part < s.tracks[s.notes.track[b]].part
+	})
 }
 
 // A style's index, by name ("": none, -1), added (its name copied) the first

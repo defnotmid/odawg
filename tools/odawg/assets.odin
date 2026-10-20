@@ -3,7 +3,6 @@ package main
 import "core:fmt"
 import "core:os"
 import "core:path/filepath"
-import "core:slice"
 import "core:strings"
 import assets "deps:odawg/assets"
 import base "deps:odawg/base"

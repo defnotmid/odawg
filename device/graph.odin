@@ -218,18 +218,29 @@ Graph_Node :: struct {
 	inputs:    Span, // into Programs.inputs
 }
 
-// What plays a note of a program with layers. A machine's (`layer_mode`
-// One): a pad (`program` its pad's) by name or key, or a named key of a
-// program's own (a Sampler's set: `program` -1, the note plays `key`), the
-// first that answers. An SFZ instrument's (All): its regions, every one
-// whose conditions the note meets sounding, each a voice.
+// What plays a note of a program with layers: the program a layer plays
+// (-1: a named key of the program's own, the note playing its key), its
+// level, its values where they differ from its program's, and `row`, its
+// row of what its program's layer_mode reads: a pad (One, Programs.pads) or
+// a region (All, Programs.regions).
 Layer_Row :: struct {
-	pad:     u32, // name_id of its name
-	key:     f32,
 	program: i32,
 	gain:    f32,
-	chokes:  Span, // into Programs.chokes: pad ids it cuts
-	// a region's conditions (All)
+	params:  Span, // into Programs.layer_params: its values where they differ from its program's
+	row:     i32,
+}
+
+// A machine's pad (`program` its pad's), or a named key of a program's own
+// (a Sampler's set's): by name or key, the first that answers.
+Layer_Pad :: struct {
+	pad:    u32, // name_id of its name
+	key:    f32,
+	chokes: Span, // into Programs.chokes: pad ids it cuts
+}
+
+// An SFZ instrument's region: every one whose conditions a note meets
+// sounds, each a voice, and how its voices stop.
+Layer_Region :: struct {
 	lo_key, hi_key:         u8,
 	lo_vel, hi_vel:         u8,
 	lo_rand, hi_rand:       f32, // the note's draw 0..1 in [lo, hi)
@@ -244,7 +255,6 @@ Layer_Row :: struct {
 	polyphony:              u16, // voices of its group at most (0: any)
 	note_polyphony:         u16, // voices of its group on one key at most (0: any)
 	rt_decay:               f32, // dB a second its release note loses for how long the note was held
-	params:                 Span, // into Programs.layer_params: its values where they differ from its program's
 }
 
 // A value of a layer's program that its layer plays otherwise (regions of
@@ -261,6 +271,14 @@ Layer_Trigger :: enum u8 {
 	Release, // its end (a release note)
 	First, // a start with no other note held
 	Legato, // a start while another is held
+}
+
+// Whether a note is one a trigger answers.
+LAYER_TRIGGERS := [Layer_Trigger]proc(n: Note) -> bool {
+	.Attack  = proc(n: Note) -> bool {return n.kind == .Attack},
+	.Release = proc(n: Note) -> bool {return n.kind == .Release},
+	.First   = proc(n: Note) -> bool {return n.kind == .Attack && !n.legato},
+	.Legato  = proc(n: Note) -> bool {return n.kind == .Attack && n.legato},
 }
 
 // How a voice cut by off_by stops.
@@ -306,6 +324,8 @@ Programs :: struct {
 	mods:     [dynamic]Mod,
 	inputs:   [dynamic]Graph_Input,
 	layers:   [dynamic]Layer_Row,
+	pads:     [dynamic]Layer_Pad, // the One layers' rows
+	regions:  [dynamic]Layer_Region, // the All layers' rows
 	layer_params: [dynamic]Layer_Param,
 	chokes:   [dynamic]u32,
 	tables:          [dynamic]f32, // Curve nodes' tables, CURVE_POINTS each
@@ -554,7 +574,11 @@ graph_resolve :: proc(progs: ^Programs, index: i32, n: Note) -> (play: i32, gain
 	prog := &progs.programs[index]
 	play, gain = index, 1
 	for pr in progs.layers[prog.layers.first:base.span_end(prog.layers)] {
-		if (n.pad != 0 && pr.pad == n.pad) || (n.pad == 0 && n.pitch > 0 && pr.key == math.round(n.pitch)) {
+		if prog.layer_mode != .One {
+			break
+		}
+		pad := progs.pads[pr.row]
+		if (n.pad != 0 && pad.pad == n.pad) || (n.pad == 0 && n.pitch > 0 && pad.key == math.round(n.pitch)) {
 			gain = pr.gain
 			if pr.program >= 0 {
 				play = pr.program
@@ -562,8 +586,8 @@ graph_resolve :: proc(progs: ^Programs, index: i32, n: Note) -> (play: i32, gain
 				pitch = n.pitch > 0 && n.pad != 0 ? n.pitch : (note > 0 ? note : 60)
 				return play, gain, pitch, pitch, true
 			}
-			pitch = n.pitch > 0 ? n.pitch : pr.key
-			return play, gain, pr.key, pitch, true
+			pitch = n.pitch > 0 ? n.pitch : pad.key
+			return play, gain, pad.key, pitch, true
 		}
 	}
 	if prog.nodes.count == 0 || n.pad != 0 {
@@ -589,9 +613,12 @@ graph_chokes :: proc(progs: ^Programs, index: i32, n: Note) -> []u32 {
 		return nil
 	}
 	prog := &progs.programs[index]
+	if prog.layer_mode != .One {
+		return nil
+	}
 	for pr in progs.layers[prog.layers.first:base.span_end(prog.layers)] {
-		if pr.pad == n.pad {
-			return progs.chokes[pr.chokes.first:base.span_end(pr.chokes)]
+		if pad := progs.pads[pr.row]; pad.pad == n.pad {
+			return progs.chokes[pad.chokes.first:base.span_end(pad.chokes)]
 		}
 	}
 	return nil
@@ -770,7 +797,7 @@ graph_start :: proc(s: ^Voice_State, p: ^Params, n: Note, env: ^Voice_Env, fresh
 		play, gain, key, pitch, ok = l.program, l.gain * (n.level > 0 ? n.level : 1), n.pitch, n.pitch, l.program >= 0
 		if n.kind == .Release {
 			// a note's end: its gate already closed, quieter the longer it was held
-			gain *= f32(base.db_to_gain(-f64(l.rt_decay) * n.duration))
+			gain *= f32(base.db_to_gain(-f64(env.programs.regions[l.row].rt_decay) * n.duration))
 			n.duration = 0
 		}
 		if play >= 0 && env.programs.programs[play].one_shot {
@@ -1085,30 +1112,13 @@ graph_layers :: proc(progs: ^Programs, index: i32, n: Note, rand: f32, out: []i3
 	key := int(math.round(n.pitch))
 	velocity := velocity_midi(n.velocity)
 	count := 0
-	for l, i in progs.layers[prog.layers.first:base.span_end(prog.layers)] {
+	for layer, i in progs.layers[prog.layers.first:base.span_end(prog.layers)] {
 		if count == len(out) {
 			break
 		}
-		if key < int(l.lo_key) || key > int(l.hi_key) || velocity < int(l.lo_vel) || velocity > int(l.hi_vel) {
+		l := progs.regions[layer.row]
+		if key < int(l.lo_key) || key > int(l.hi_key) || velocity < int(l.lo_vel) || velocity > int(l.hi_vel) || !LAYER_TRIGGERS[l.trigger](n) {
 			continue
-		}
-		switch l.trigger {
-		case .Attack:
-			if n.kind != .Attack {
-				continue
-			}
-		case .Release:
-			if n.kind != .Release {
-				continue
-			}
-		case .First:
-			if n.kind != .Attack || n.legato {
-				continue
-			}
-		case .Legato:
-			if n.kind != .Attack || !n.legato {
-				continue
-			}
 		}
 		if rand >= 0 && (rand < l.lo_rand || rand >= l.hi_rand) {
 			continue

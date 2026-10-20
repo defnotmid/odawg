@@ -126,7 +126,8 @@ Pad_Desc :: struct {
 // them sounding.
 Layer_Desc :: struct {
 	program: ^Program_Desc,
-	row:     Layer_Row, // its conditions and level (program and chokes are set when placed)
+	region:  Layer_Region, // its conditions
+	gain:    f32, // its level (0: 1)
 	path:    string,
 }
 
@@ -432,10 +433,11 @@ compile_nodes :: proc(progs: ^Programs, desc: ^Program_Desc, prog: Program, find
 		id := base.name_id(k.name)
 		known := false
 		for pr in progs.layers[prog.layers.first:] {
-			known ||= pr.pad == id
+			known ||= progs.pads[pr.row].pad == id
 		}
 		if !known {
-			append(&progs.layers, Layer_Row{pad = id, key = k.key, program = -1, gain = 1})
+			append(&progs.layers, Layer_Row{program = -1, gain = 1, row = i32(len(progs.pads))})
+			append(&progs.pads, Layer_Pad{pad = id, key = k.key})
 			prog.layers.count += 1
 		}
 	}
@@ -501,7 +503,7 @@ compile_machine :: proc(progs: ^Programs, desc: ^Program_Desc, prog: Program, fi
 		if programs[i] < 0 {
 			continue
 		}
-		row := Layer_Row{pad = base.name_id(p.name), key = keys[i], program = programs[i], gain = f32(base.db_to_gain(f64(p.gain_db)))}
+		row := Layer_Pad{pad = base.name_id(p.name), key = keys[i]}
 		row.chokes.first = i32(len(progs.chokes))
 		for name in p.chokes {
 			found := false
@@ -515,7 +517,8 @@ compile_machine :: proc(progs: ^Programs, desc: ^Program_Desc, prog: Program, fi
 			append(&progs.chokes, base.name_id(name))
 			row.chokes.count += 1
 		}
-		append(&progs.layers, row)
+		append(&progs.layers, Layer_Row{program = programs[i], gain = f32(base.db_to_gain(f64(p.gain_db))), row = i32(len(progs.pads))})
+		append(&progs.pads, row)
 		m.layers.count += 1
 	}
 	m.state, m.bufs = state, bufs
@@ -575,15 +578,11 @@ compile_layers :: proc(progs: ^Programs, desc: ^Program_Desc, prog: Program, fin
 		if programs[i] < 0 {
 			continue
 		}
-		row := l.row
-		row.program = programs[i]
-		if row.gain == 0 {
-			row.gain = 1
-		}
-		row.chokes = {}
+		row := Layer_Row{program = programs[i], gain = l.gain != 0 ? l.gain : 1, row = i32(len(progs.regions))}
 		row.params = layer_values(progs, programs[i], l.program, &tables)
-		m.release_layers ||= row.trigger == .Release
+		m.release_layers ||= l.region.trigger == .Release
 		append(&progs.layers, row)
+		append(&progs.regions, l.region)
 		m.layers.count += 1
 	}
 	m.state, m.bufs = state, bufs
@@ -700,7 +699,7 @@ targets_add :: proc(progs: ^Programs, id: i32, desc: ^Program_Desc, parts: []str
 			}
 			pid := base.name_id(p.name)
 			for pr in progs.layers[prog.layers.first:base.span_end(prog.layers)] {
-				if pr.pad == pid && pr.program >= 0 {
+				if progs.pads[pr.row].pad == pid && pr.program >= 0 {
 					count += targets_add(progs, pr.program, p.program, parts[2:], t)
 				}
 			}

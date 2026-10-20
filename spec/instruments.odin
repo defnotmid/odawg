@@ -2,7 +2,6 @@ package odawg_spec
 
 import "base:runtime"
 import "core:encoding/json"
-import "core:math"
 import "core:slice"
 import "core:strconv"
 import "core:strings"
@@ -326,7 +325,8 @@ Draft_Node :: struct {
 // A layer of a layered row: its conditions and its instrument.
 @(private = "file")
 Draft_Layer :: struct {
-	row:   device.Layer_Row,
+	region: device.Layer_Region,
+	gain:   f32,
 	value: json.Value, // its instrument
 	owner: ^Spec,
 	path:  string,
@@ -1049,7 +1049,7 @@ draft_layer :: proc(c: ^Ctx, d: ^Draft, v: json.Value, path: string, owner: ^Spe
 		return
 	}
 	l := Draft_Layer{owner = owner, path = path}
-	l.row = {hi_key = 127, hi_vel = 127, hi_rand = 1, seq_length = 1, seq_position = 1, gain = 1}
+	l.region, l.gain = {hi_key = 127, hi_vel = 127, hi_rand = 1, seq_length = 1, seq_position = 1}, 1
 	for k in sorted_keys(o) {
 		x := o[k]
 		at := base.path_join(path, k)
@@ -1059,24 +1059,24 @@ draft_layer :: proc(c: ^Ctx, d: ^Draft, v: json.Value, path: string, owner: ^Spe
 		case "instrument":
 			l.value = x
 		case "lo_key":
-			l.row.lo_key = key(c, x, at)
+			l.region.lo_key = key(c, x, at)
 		case "hi_key":
-			l.row.hi_key = key(c, x, at)
+			l.region.hi_key = key(c, x, at)
 		case "sw_last_lo":
-			l.row.sw_last_lo = 1 + key(c, x, at)
+			l.region.sw_last_lo = 1 + key(c, x, at)
 		case "sw_last_hi":
-			l.row.sw_last_hi = 1 + key(c, x, at)
+			l.region.sw_last_hi = 1 + key(c, x, at)
 		case "trigger":
 			s, _ := x.(json.String)
 			switch s {
 			case "attack":
-				l.row.trigger = .Attack
+				l.region.trigger = .Attack
 			case "release":
-				l.row.trigger = .Release
+				l.region.trigger = .Release
 			case "first":
-				l.row.trigger = .First
+				l.region.trigger = .First
 			case "legato":
-				l.row.trigger = .Legato
+				l.region.trigger = .Legato
 			case:
 				report(c, "bad_value", .Error, at, "%s: attack, release, first or legato", at)
 			}
@@ -1084,11 +1084,11 @@ draft_layer :: proc(c: ^Ctx, d: ^Draft, v: json.Value, path: string, owner: ^Spe
 			s, _ := x.(json.String)
 			switch s {
 			case "fast":
-				l.row.off_mode = .Fast
+				l.region.off_mode = .Fast
 			case "normal":
-				l.row.off_mode = .Normal
+				l.region.off_mode = .Normal
 			case "time":
-				l.row.off_mode = .Time
+				l.region.off_mode = .Time
 			case:
 				report(c, "bad_value", .Error, at, "%s: fast, normal or time", at)
 			}
@@ -1099,38 +1099,38 @@ draft_layer :: proc(c: ^Ctx, d: ^Draft, v: json.Value, path: string, owner: ^Spe
 			}
 			switch k {
 			case "lo_vel":
-				l.row.lo_vel = u8(clamp(n, 0, 127))
+				l.region.lo_vel = u8(clamp(n, 0, 127))
 			case "hi_vel":
-				l.row.hi_vel = u8(clamp(n, 0, 127))
+				l.region.hi_vel = u8(clamp(n, 0, 127))
 			case "lo_rand":
-				l.row.lo_rand = f32(n)
+				l.region.lo_rand = f32(n)
 			case "hi_rand":
-				l.row.hi_rand = f32(n)
+				l.region.hi_rand = f32(n)
 			case "seq_length":
-				l.row.seq_length = u16(max(n, 1))
+				l.region.seq_length = u16(max(n, 1))
 			case "seq_position":
-				l.row.seq_position = u16(max(n, 1))
+				l.region.seq_position = u16(max(n, 1))
 			case "group":
-				l.row.group = i32(n)
+				l.region.group = i32(n)
 			case "off_by":
-				l.row.off_by = i32(n)
+				l.region.off_by = i32(n)
 			case "off_time":
-				l.row.off_time = f32(n)
+				l.region.off_time = f32(n)
 			case "polyphony":
-				l.row.polyphony = u16(max(n, 0))
+				l.region.polyphony = u16(max(n, 0))
 			case "note_polyphony":
-				l.row.note_polyphony = u16(max(n, 0))
+				l.region.note_polyphony = u16(max(n, 0))
 			case "rt_decay":
-				l.row.rt_decay = f32(n)
+				l.region.rt_decay = f32(n)
 			case "gain_db":
-				l.row.gain = f32(base.db_to_gain(n))
+				l.gain = f32(base.db_to_gain(n))
 			}
 		case:
 			report(c, "unknown_key", .Warning, at, "%s: a layer reads instrument, lo_key, hi_key, lo_vel, hi_vel, lo_rand, hi_rand, seq_length, seq_position, trigger, sw_last_lo, sw_last_hi, group, off_by, off_mode, off_time, polyphony, note_polyphony, rt_decay, gain_db; not %q", at, k)
 		}
 	}
-	if l.row.sw_last_lo != 0 && l.row.sw_last_hi == 0 {
-		l.row.sw_last_hi = l.row.sw_last_lo
+	if l.region.sw_last_lo != 0 && l.region.sw_last_hi == 0 {
+		l.region.sw_last_hi = l.region.sw_last_lo
 	}
 	if l.value == nil {
 		report(c, "bad_value", .Error, path, "%s: a layer plays an instrument", path)
@@ -1245,7 +1245,7 @@ draft_desc :: proc(c: ^Ctx, d: ^Draft, written: string) -> ^device.Program_Desc 
 	desc.pads = pads
 	layers := make([]device.Layer_Desc, len(d.layers), context.temp_allocator)
 	for &l, i in d.layers {
-		layers[i] = {row = l.row, path = l.path}
+		layers[i] = {region = l.region, gain = l.gain, path = l.path}
 		sub: Draft
 		draft_init(&sub)
 		if draft_read(c, &sub, l.value, l.path, l.owner, 0) {
@@ -1482,7 +1482,10 @@ program_pads :: proc(progs: ^device.Programs, program: i32, out: ^[dynamic]u32) 
 		return
 	}
 	p := &progs.programs[program]
+	if p.layer_mode != .One {
+		return
+	}
 	for pr in progs.layers[p.layers.first:base.span_end(p.layers)] {
-		append(out, pr.pad)
+		append(out, progs.pads[pr.row].pad)
 	}
 }

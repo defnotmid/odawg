@@ -24,12 +24,10 @@ import "core:mem"
 // ---- the state and the run every effect shares ----------------------------------------
 
 // Blocks are processed in chunks of this many samples, each stage a loop
-// over the chunk, with the scratch the stages need inside the state.
-@(private)
+// over the chunk, in a scratch the stages share (the caller's: one per
+// engine, not one per instance; nothing in it lives past a call).
 FX_CHUNK :: 256
 
-// Every effect's state struct starts with this.
-@(private)
 Fx_Scratch :: struct #align (16) {
 	dry_l, dry_r: [FX_CHUNK]f32, // the input, or the dry signal delayed by the latency
 	key_l, key_r: [FX_CHUNK]f32,
@@ -39,7 +37,7 @@ Fx_Scratch :: struct #align (16) {
 
 // An effect's processing of one chunk; key always present and as long.
 @(private)
-Fx_Body :: #type proc(state: []u8, p: ^Params, l, r, key_l, key_r: []f32)
+Fx_Body :: #type proc(state: []u8, p: ^Params, l, r, key_l, key_r: []f32, scratch: ^Fx_Scratch)
 
 // The state struct at the start of an instance's bytes.
 @(private)
@@ -89,8 +87,8 @@ fx_clear :: proc(state: []u8) {
 // with Tone's equal-power crossfade (dry cos, wet sin of wet * pi/2). A
 // body with latency puts its delayed dry signal in the scratch's dry.
 @(private)
-fx_run :: proc(state: []u8, p: ^Params, left, right, key_l, key_r: []f32, body: Fx_Body) {
-	s := fx_header(state, Fx_Scratch)
+fx_run :: proc(state: []u8, p: ^Params, left, right, key_l, key_r: []f32, scratch: ^Fx_Scratch, body: Fx_Body) {
+	s := scratch
 	n := min(len(left), len(right))
 	wet := clamp(f64(p[.Wet]), 0, 1)
 	dg := f32(math.cos(wet * math.PI / 2))
@@ -106,7 +104,7 @@ fx_run :: proc(state: []u8, p: ^Params, left, right, key_l, key_r: []f32, body: 
 			kl = fx_key_chunk(key_l, start, end, s.key_l[:m])
 			kr = key_r != nil ? fx_key_chunk(key_r, start, end, s.key_r[:m]) : kl
 		}
-		body(state, p, l, r, kl, kr)
+		body(state, p, l, r, kl, kr, scratch)
 		if wet < 1 {
 			for &v, i in l {
 				v = dg * s.dry_l[i] + wg * v
@@ -274,7 +272,6 @@ fx_svf_pass_moving :: proc(s: Fx_Svf_Shape, g: []f64, st: ^Fx_Svf_State, x: []f3
 
 @(private = "file")
 Fx_Filter :: struct {
-	scratch: Fx_Scratch,
 	svf:     [2][4]Fx_Svf_State,
 }
 
@@ -283,8 +280,8 @@ reset_filter :: proc(state: []u8, p: ^Params, at: i64) {fx_clear(state)}
 
 // Tone's Filter: .Type at .Frequency with .Q, .Gain for shelves and peaks,
 // cascaded by .Rolloff.
-effect_filter :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32) {
-	fx_run(state, p, l, r, key_l, key_r, proc(state: []u8, p: ^Params, l, r, _, _: []f32) {
+effect_filter :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32, scratch: ^Fx_Scratch) {
+	fx_run(state, p, l, r, key_l, key_r, scratch, proc(state: []u8, p: ^Params, l, r, _, _: []f32, scratch: ^Fx_Scratch) {
 		f := fx_header(state, Fx_Filter)
 		c := fx_svf(FX_SVF_RULES[fx_filter_type(p[.Type])](f64(p[.Q]), f64(p[.Gain])), f64(p[.Frequency]))
 		for k in 0 ..< dsp.rolloff_stages(p[.Rolloff]) {
@@ -296,7 +293,6 @@ effect_filter :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32)
 
 @(private = "file")
 Fx_Auto_Filter :: struct {
-	scratch: Fx_Scratch,
 	pos:     i64, // the song sample the next input is
 	svf:     [2][4]Fx_Svf_State,
 }
@@ -312,15 +308,15 @@ reset_auto_filter :: proc(state: []u8, p: ^Params, at: i64) {
 // sweeps the filter's cutoff linearly between .Base_Frequency and
 // .Base_Frequency * 2^.Octaves, around their midpoint by .Depth. The filter
 // is .Filter_Type with .Filter_Q, cascaded by .Filter_Rolloff.
-effect_auto_filter :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32) {
-	fx_run(state, p, l, r, key_l, key_r, proc(state: []u8, p: ^Params, l, r, _, _: []f32) {
+effect_auto_filter :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32, scratch: ^Fx_Scratch) {
+	fx_run(state, p, l, r, key_l, key_r, scratch, proc(state: []u8, p: ^Params, l, r, _, _: []f32, scratch: ^Fx_Scratch) {
 		f := fx_header(state, Fx_Auto_Filter)
 		shape := FX_SVF_RULES[fx_filter_type(p[.Filter_Type])](f64(p[.Filter_Q]), 0)
 		lo := f64(p[.Base_Frequency])
 		hi := lo * math.pow(2, f64(p[.Octaves]))
 		w := math.TAU * f64(p[.Frequency]) / RATE
 		depth := f64(p[.Depth])
-		g := f.scratch.d[:len(l)]
+		g := scratch.d[:len(l)]
 		for &v, i in g {
 			v = fx_warp(lo + (hi - lo) * (0.5 + 0.5 * depth * math.sin(w * f64(f.pos + i64(i))))) * shape.g_scale
 		}
@@ -334,7 +330,6 @@ effect_auto_filter :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: [
 
 @(private = "file")
 Fx_EQ3 :: struct {
-	scratch: Fx_Scratch,
 	svf:     [2][9]Fx_Svf_State,
 }
 
@@ -346,8 +341,8 @@ reset_eq3 :: proc(state: []u8, p: ^Params, at: i64) {fx_clear(state)}
 // the low band through the high crossover's allpass so the bands sum flat:
 // at 0 dB the EQ only shifts phase. (Tone splits with 12 dB filters whose
 // sum notches at each crossover; this keeps its bands and gains.)
-effect_eq3 :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32) {
-	fx_run(state, p, l, r, key_l, key_r, proc(state: []u8, p: ^Params, l, r, _, _: []f32) {
+effect_eq3 :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32, scratch: ^Fx_Scratch) {
+	fx_run(state, p, l, r, key_l, key_r, scratch, proc(state: []u8, p: ^Params, l, r, _, _: []f32, scratch: ^Fx_Scratch) {
 		e := fx_header(state, Fx_EQ3)
 		f1 := f64(p[.Low_Frequency])
 		f2 := max(f64(p[.High_Frequency]), f1)
@@ -357,8 +352,8 @@ effect_eq3 :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32) {
 		gl := f32(math.pow(10, f64(p[.Low]) / 20))
 		gm := f32(math.pow(10, f64(p[.Mid]) / 20))
 		gh := f32(math.pow(10, f64(p[.High]) / 20))
-		low := e.scratch.a[:len(l)]
-		mid := e.scratch.b[:len(l)]
+		low := scratch.a[:len(l)]
+		mid := scratch.b[:len(l)]
 		for x, c in ([2][]f32{l, r}) {
 			s := &e.svf[c]
 			copy(low, x)
@@ -420,7 +415,6 @@ fx_curve :: #force_inline proc "contextless" (x, k: f64) -> f64 {
 
 @(private = "file")
 Fx_Distortion :: struct {
-	scratch: Fx_Scratch,
 	count:   i64, // samples in since the reset
 	input:   [2][FX_DISTORTION_RING]f32,
 	half:    [2][FX_DISTORTION_RING]f32, // the shaped values at t + 0.5
@@ -437,13 +431,13 @@ latency_distortion :: proc(p: ^Params) -> int {return FX_DISTORTION_LATENCY}
 // the samples and the half points are shaped, and the result is low-passed
 // back onto the samples, FX_DISTORTION_LATENCY samples late (the dry
 // signal is delayed to match).
-effect_distortion :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32) {
-	fx_run(state, p, l, r, key_l, key_r, proc(state: []u8, p: ^Params, l, r, _, _: []f32) {
+effect_distortion :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32, scratch: ^Fx_Scratch) {
+	fx_run(state, p, l, r, key_l, key_r, scratch, proc(state: []u8, p: ^Params, l, r, _, _: []f32, scratch: ^Fx_Scratch) {
 		D :: FX_DISTORTION_MASK
 		d := fx_header(state, Fx_Distortion)
 		k := f64(p[.Distortion]) * 100
 		h := fx_halfband()
-		dry := [2][]f32{d.scratch.dry_l[:len(l)], d.scratch.dry_r[:len(l)]}
+		dry := [2][]f32{scratch.dry_l[:len(l)], scratch.dry_r[:len(l)]}
 		for x, c in ([2][]f32{l, r}) {
 			input := &d.input[c]
 			half := &d.half[c]
@@ -477,15 +471,14 @@ effect_distortion :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []
 
 @(private = "file")
 Fx_Stateless :: struct {
-	scratch: Fx_Scratch,
 }
 
 size_bit_crusher :: proc(p: ^Params) -> int {return fx_size_of(Fx_Stateless)}
 reset_bit_crusher :: proc(state: []u8, p: ^Params, at: i64) {fx_clear(state)}
 
 // Tone's BitCrusher: each sample rounded to a step of 2^(1 - .Bits).
-effect_bit_crusher :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32) {
-	fx_run(state, p, l, r, key_l, key_r, proc(state: []u8, p: ^Params, l, r, _, _: []f32) {
+effect_bit_crusher :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32, scratch: ^Fx_Scratch) {
+	fx_run(state, p, l, r, key_l, key_r, scratch, proc(state: []u8, p: ^Params, l, r, _, _: []f32, scratch: ^Fx_Scratch) {
 		step := math.pow(0.5, f64(clamp(p[.Bits], 1, 16)) - 1)
 		for x in ([2][]f32{l, r}) {
 			for &s in x {
@@ -500,8 +493,8 @@ reset_stereo_widener :: proc(state: []u8, p: ^Params, at: i64) {fx_clear(state)}
 
 // Tone's StereoWidener: mid scaled by 2 (1 - .Width), side by 2 .Width, so
 // 0.5 leaves the signal as it is, 0 is mono and 1 only the sides.
-effect_stereo_widener :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32) {
-	fx_run(state, p, l, r, key_l, key_r, proc(state: []u8, p: ^Params, l, r, _, _: []f32) {
+effect_stereo_widener :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32, scratch: ^Fx_Scratch) {
+	fx_run(state, p, l, r, key_l, key_r, scratch, proc(state: []u8, p: ^Params, l, r, _, _: []f32, scratch: ^Fx_Scratch) {
 		gm := 2 * (1 - p[.Width])
 		gs := 2 * p[.Width]
 		for i in 0 ..< len(l) {

@@ -52,6 +52,7 @@ Master_Run :: struct {
 	own:       []device.Params,
 	own_gain:  f64,
 	states:    [][]u8,
+	scratch:   ^device.Fx_Scratch,
 	latency:   int,
 	stats:     Master_Stats,
 }
@@ -72,6 +73,7 @@ master_run_init :: proc(m: ^Master_Run, s: ^song.Song, mastering: Mastering, all
 		m.devices = make([]i32, s.master.count)
 		copy(m.devices, s.chain[s.master.first:base.span_end(s.master)])
 	}
+	m.scratch = new(device.Fx_Scratch)
 	m.states = make([][]u8, master_run_rows(m))
 	for i in 0 ..< len(m.states) {
 		kind, p := master_run_row(m, i)
@@ -89,6 +91,7 @@ master_run_destroy :: proc(m: ^Master_Run, allocator := context.allocator) {
 		mem.free_bytes(st)
 	}
 	delete(m.states)
+	free(m.scratch)
 	delete(m.devices)
 	delete(m.own_kinds)
 	delete(m.own)
@@ -148,7 +151,7 @@ master_run_block :: proc(m: ^Master_Run, l, r: []f32) {
 	}
 	for i in 0 ..< len(m.states) {
 		kind, p := master_run_row(m, i)
-		device.DEVICE_TABLE[kind].effect(m.states[i], &p, l, r, nil, nil)
+		device.DEVICE_TABLE[kind].effect(m.states[i], &p, l, r, nil, nil, m.scratch)
 	}
 	after: f32
 	for i in 0 ..< len(l) {

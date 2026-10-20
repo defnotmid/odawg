@@ -1136,18 +1136,7 @@ index_notes :: proc(song: ^Song, work: ^Work) {
 			append_soa(&song.notes, row)
 		}
 	}
-	for i in 0 ..< len(song.notes) {
-		append(&song.by_time, i32(i))
-	}
-	context.user_ptr = song
-	slice.stable_sort_by(song.by_time[:], proc(a, b: i32) -> bool {
-		s := (^Song)(context.user_ptr)
-		ta, tb := s.notes.time[a], s.notes.time[b]
-		if ta != tb {
-			return ta < tb
-		}
-		return s.tracks[s.notes.track[a]].part < s.tracks[s.notes.track[b]].part
-	})
+	notes_by_time(song)
 }
 
 // The regions by part, then start (the transitions' were added after the

@@ -67,7 +67,6 @@ FX_REVERB_GRID :: 256
 
 @(private = "file")
 Fx_Reverb :: struct {
-	scratch:      Fx_Scratch,
 	pos:          i64, // the song sample the next input is
 	diffuser_pos: [4]int,
 	z:            [8]f32, // the damping filters
@@ -123,8 +122,8 @@ fx_flush32 :: #force_inline proc "contextless" (x: f32) -> f32 {return (x + 1e-1
 // The network runs a stage at a time over the chunk, each line an array:
 // every line's shortest delay is longer than a chunk, so all its reads come
 // before any of its writes; only the damping is a recurrence.
-effect_reverb :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32) {
-	fx_run(state, p, l, r, key_l, key_r, proc(state: []u8, p: ^Params, l, r, _, _: []f32) {
+effect_reverb :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32, scratch: ^Fx_Scratch) {
+	fx_run(state, p, l, r, key_l, key_r, scratch, proc(state: []u8, p: ^Params, l, r, _, _: []f32, scratch: ^Fx_Scratch) {
 		LINE :: FX_REVERB_LINE_RING - 1
 		v := fx_header(state, Fx_Reverb)
 		n := len(l)
@@ -134,7 +133,7 @@ effect_reverb :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32)
 		ring := fx_ring(state, Fx_Reverb, ring_len, 0)
 		ring_mask := i64(ring_len - 1)
 		pre := i64(min(int(math.round(pre_delay * RATE)), ring_len - 1))
-		x := v.scratch.a[:n]
+		x := scratch.a[:n]
 
 		// Mono, after the pre-delay.
 		for &s, i in x {
@@ -278,7 +277,6 @@ effect_reverb :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32)
 
 @(private = "file")
 Fx_Delay :: struct {
-	scratch: Fx_Scratch,
 	pos:     i64, // the song sample the next input is
 	// then two rings: left and right (FeedbackDelay), the two sends (PingPongDelay)
 }
@@ -299,8 +297,8 @@ reset_feedback_delay :: proc(state: []u8, p: ^Params, at: i64) {
 
 // Tone's FeedbackDelay, per channel: the wet signal is the delay line's
 // output (.Delay_Time), fed back into its input by .Feedback.
-effect_feedback_delay :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32) {
-	fx_run(state, p, l, r, key_l, key_r, proc(state: []u8, p: ^Params, l, r, _, _: []f32) {
+effect_feedback_delay :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32, scratch: ^Fx_Scratch) {
+	fx_run(state, p, l, r, key_l, key_r, scratch, proc(state: []u8, p: ^Params, l, r, _, _: []f32, scratch: ^Fx_Scratch) {
 		f := fx_header(state, Fx_Delay)
 		ring_len := fx_ring_len(state, Fx_Delay, 2)
 		mask := i64(ring_len - 1)
@@ -331,8 +329,8 @@ reset_ping_pong_delay :: proc(state: []u8, p: ^Params, at: i64) {
 // Tone's PingPongDelay: the left input delayed once by .Delay_Time, the
 // right twice (Tone's pre-delay), and each side's echo fed into the other
 // side's input by .Feedback. A centred sound echoes left, right, then both.
-effect_ping_pong_delay :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32) {
-	fx_run(state, p, l, r, key_l, key_r, proc(state: []u8, p: ^Params, l, r, _, _: []f32) {
+effect_ping_pong_delay :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32, scratch: ^Fx_Scratch) {
+	fx_run(state, p, l, r, key_l, key_r, scratch, proc(state: []u8, p: ^Params, l, r, _, _: []f32, scratch: ^Fx_Scratch) {
 		f := fx_header(state, Fx_Delay)
 		ring_len := fx_ring_len(state, Fx_Delay, 2)
 		mask := i64(ring_len - 1)
@@ -378,15 +376,15 @@ reset_chorus :: proc(state: []u8, p: ^Params, at: i64) {
 // .Frequency (phase 0 at song sample 0) between .Delay_Time * (1 - .Depth)
 // and .Delay_Time * (1 + .Depth), the right LFO half a cycle behind the
 // left (Tone's spread of 180). Read with cubic interpolation.
-effect_chorus :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32) {
-	fx_run(state, p, l, r, key_l, key_r, proc(state: []u8, p: ^Params, l, r, _, _: []f32) {
+effect_chorus :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32, scratch: ^Fx_Scratch) {
+	fx_run(state, p, l, r, key_l, key_r, scratch, proc(state: []u8, p: ^Params, l, r, _, _: []f32, scratch: ^Fx_Scratch) {
 		f := fx_header(state, Fx_Delay)
 		ring_len := fx_ring_len(state, Fx_Delay, 2)
 		mask := i64(ring_len - 1)
 		base := f64(p[.Delay_Time]) * RATE
 		dev := base * f64(p[.Depth])
 		w := math.TAU * f64(p[.Frequency]) / RATE
-		delay := f.scratch.d[:len(l)]
+		delay := scratch.d[:len(l)]
 		for x, c in ([2][]f32{l, r}) {
 			ring := fx_ring(state, Fx_Delay, ring_len, c)
 			phase := c == 0 ? 0.0 : math.PI
