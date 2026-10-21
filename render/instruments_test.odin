@@ -343,6 +343,64 @@ test_song_placed_sounds_alone :: proc(t: ^testing.T) {
 		worst = max(worst, abs(v - clip.left[i]), abs(placed.right[i] - clip.right[i]))
 	}
 	testing.expectf(t, worst < 1e-5, "a window cutting into it differs from its render as a clip by %g", worst)
+	// under a master with a lookahead (a limiter: onimite's mix), placed and
+	// as a clip still play the same, its window where it is
+	{
+		master := Mastering{on = true, limit = true, ceiling_db = -1}
+		m, c: song.Song
+		bank: device.Bank
+		song.mix_init(&m)
+		song.append_song(&m, s, start - offset, "s", -3, {start, stop, 0.2, 0.3, .Linear})
+		song.mix_end(&m)
+		song.mix_init(&c)
+		c.bank = &bank
+		song.append_clip(&c, {name = "s", set = device.bank_borrow(&bank, "s", frames), start = start, stop = stop, offset = offset, gain_db = -3, fade_in = 0.2, fade_out = 0.3})
+		song.mix_end(&c)
+		a := output_from_song(&m, {to = length, mastering = master})
+		b := output_from_song(&c, {to = length, mastering = master})
+		limited: f32
+		at := -1
+		for v, i in a.left {
+			d := max(abs(v - b.left[i]), abs(a.right[i] - b.right[i]))
+			if d > limited {
+				limited = d
+				if at < 0 && d > 1e-5 {
+					at = i
+				}
+			}
+		}
+		testing.expectf(t, limited < 1e-5, "under a limiting master, placed it differs from its clip by %g from sample %d", limited, at)
+	}
+	// streamed to a sink, a chunk at a time, on a pool or none: the same
+	for threads in ([]int{0, 3}) {
+		m: song.Song
+		song.mix_init(&m)
+		song.append_song(&m, s, start - offset, "s", -3, {start, stop, 0.2, 0.3, .Linear})
+		song.mix_end(&m)
+		got := make([]f32, 2 * placed.frames)
+		tp := test_pool(threads)
+		defer test_pool_free(tp)
+		export_song(&m, {to = length, pool = threads > 0 ? &tp.work_pool : nil}, {&got, proc(data: rawptr, at: i64, l, r: []f32, stems: [][2][]f32) {
+			got := (^[]f32)(data)^
+			for i in 0 ..< len(l) {
+				if k := 2 * (int(at) + i); k + 1 < len(got) {
+					got[k], got[k + 1] = l[i], r[i]
+				}
+			}
+		}})
+		streamed: f32
+		at := -1
+		for v, i in placed.left {
+			d := max(abs(v - got[2 * i]), abs(placed.right[i] - got[2 * i + 1]))
+			if d > streamed {
+				streamed = d
+				if at < 0 && d > 1e-6 {
+					at = i
+				}
+			}
+		}
+		testing.expectf(t, streamed < 1e-6, "streamed to a sink (%d threads) it differs by %g from sample %d", threads, streamed, at)
+	}
 }
 
 // A host's 16-bit render lent as it is (bank_borrow over i16) plays as the

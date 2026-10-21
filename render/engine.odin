@@ -73,6 +73,7 @@ Engine :: struct {
 	edges:     []Edge_Run,
 	rings:     []f32,
 	cursor:    i64, // the song sample of the next output (a walk's first while it renders)
+	ahead:     i64, // how far the nodes run ahead of it: the master's lookahead, primed at a seek
 	pool:      ^common.Work_Pool, // the caller's (nil: the caller's thread alone)
 	flow:      Flow,
 	workers:   []Worker, // scratch, one a loop
@@ -512,7 +513,7 @@ flow_take :: proc(e: ^Engine) -> bool {
 @(private = "file")
 flow_chunk :: proc(e: ^Engine, w: ^Worker, c: int) {
 	w.slot = c % RING
-	w.at = e.cursor + i64(c * CHUNK)
+	w.at = e.cursor + e.ahead + i64(c * CHUNK)
 	w.frames = min(CHUNK, e.flow.frames - c * CHUNK)
 	w.master = e.flow.master
 }
@@ -577,7 +578,7 @@ engine_seek :: proc(e: ^Engine, at: i64, exact: bool) {
 		}
 		from = max(at - most, 0)
 	}
-	e.cursor = from
+	e.cursor, e.ahead = from, 0
 	for &nd in e.nodes {
 		nd.started = false
 	}
@@ -611,7 +612,8 @@ engine_seek :: proc(e: ^Engine, at: i64, exact: bool) {
 		walk(e, n, true, nil)
 		left -= i64(n)
 	}
-	e.cursor = at
+	// the nodes now run its lookahead ahead of the output
+	e.cursor, e.ahead = at, e.no_master ? 0 : i64(e.master.latency)
 	e.master.stats = {}
 }
 
