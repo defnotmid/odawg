@@ -51,6 +51,22 @@ decode :: proc(data: []u8, allocator := context.allocator) -> (d: Decoded, err: 
 	return
 }
 
+// A file's channels, rate and frames, from its header alone.
+decode_info :: proc(data: []u8) -> (d: Decoded, err: Error) {
+	info, e := audio.info(data)
+	if e != .None || !info.present {
+		return d, fmt.tprintf("audio: %v", e)
+	}
+	d.channels, d.rate = info.channels, info.sample_rate
+	return
+}
+
+// A file as f32, at most `keep` of its channels (0: all), in the temp
+// allocator: a step on the way to the bank.
+decode_f32 :: proc(data: []u8, keep: int) -> (samples: []f32, d: Decoded, err: Error) {
+	return decode_as(data, keep, f32, context.temp_allocator)
+}
+
 // A file straight to the bank's 16 bits, at most `keep` of its channels
 // (interleaved), with no floats between for PCM and FLAC.
 decode_i16 :: proc(data: []u8, keep: int, allocator := context.allocator) -> (pcm: []i16, d: Decoded, err: Error) {

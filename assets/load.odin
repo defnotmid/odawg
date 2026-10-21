@@ -11,8 +11,8 @@ import "core:strings"
 import "core:thread"
 
 // Loading: a set's files decoded (by odecs's audio, any format it reads),
-// made stereo, resampled to device.RATE through a Kaiser-windowed sinc and appended
-// to a device.Bank (frames to its slab, a sample row each, a zone row per
+// at most stereo, resampled to device.RATE once (through a Kaiser-windowed
+// sinc) if recorded at another rate, and appended to a device.Bank (frames to its slab, a sample row each, a zone row per
 // register zone, the set's row naming them).
 
 // A decoded file: interleaved samples, its rate, and its loop (frames;
@@ -293,9 +293,9 @@ bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Ne
 			bf.sha256, bf.size = bank_text(bank, got), size
 		}
 	}
-	// each file read once and decoded, side by side, into PCM of its own
-	// (at its own rate: a Sampler reads it at RATE), then each a chunk of the
-	// bank, in order
+	// each file read once and decoded, side by side, into PCM at RATE (a
+	// recording at another rate resampled once, here), then each a chunk of
+	// the bank, in order
 	jobs := make([]Decode_Job, len(wanted), context.temp_allocator)
 	for w, k in wanted {
 		jobs[k] = {file = -1, host = host}
@@ -341,8 +341,12 @@ bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Ne
 			}
 			z := &bank.zones[zi]
 			z.sample = sample
+			// what was given in the file's frames, in RATE's
+			z.offset = i32(frames_at_rate(i64(z.offset), j.rate))
 			if z.loop_to == device.LOOP_FROM_FILE {
 				z.loop_from, z.loop_to = i32(j.loop_from), i32(j.loop_to)
+			} else {
+				z.loop_from, z.loop_to = i32(frames_at_rate(i64(z.loop_from), j.rate)), i32(frames_at_rate(i64(z.loop_to), j.rate))
 			}
 		}
 	}
@@ -389,8 +393,16 @@ decode_all :: proc(jobs: []Decode_Job) {
 				j.err = fmt.aprintf("%s can't be read", j.name, allocator = runtime.heap_allocator())
 				return
 			case:
-				j.lent, j.channels, j.rate = got.samples, got.channels, got.rate > 0 ? got.rate : device.RATE
+				j.channels, j.rate = got.channels, got.rate > 0 ? got.rate : device.RATE
 				j.loop_from, j.loop_to = got.loop_from, got.loop_to
+				if j.rate == device.RATE {
+					j.lent = got.samples
+					return
+				}
+				// at another rate: ours, at RATE
+				j.hosted = false
+				j.pcm = pcm_at_rate(got.samples, got.channels, j.rate)
+				at_rate(j)
 				return
 			}
 		}
@@ -399,15 +411,48 @@ decode_all :: proc(jobs: []Decode_Job) {
 			j.err = fmt.aprintf("%s can't be read", j.name, allocator = runtime.heap_allocator())
 			return
 		}
-		// straight to 16 bits, in the bank's memory
-		pcm, d, derr := decode_i16(data, 2, runtime.heap_allocator())
+		// straight to 16 bits, in the bank's memory (at another rate, as
+		// floats, to RATE first)
+		info, ierr := decode_info(data)
+		if ierr != nil {
+			j.err = fmt.aprintf("%s can't be decoded", j.name, allocator = runtime.heap_allocator())
+			return
+		}
+		d: Decoded
+		derr: Error
+		if info.rate == device.RATE || info.rate <= 0 {
+			j.pcm, d, derr = decode_i16(data, 2, runtime.heap_allocator())
+		} else {
+			samples: []f32
+			samples, d, derr = decode_f32(data, 2)
+			if derr == nil {
+				j.pcm = pcm_at_rate(samples, d.channels, d.rate)
+			}
+		}
 		if derr != nil {
 			j.err = fmt.aprintf("%s can't be decoded", j.name, allocator = runtime.heap_allocator())
 			return
 		}
-		j.pcm, j.channels = pcm, d.channels
+		j.channels = d.channels
 		j.rate = d.rate > 0 ? d.rate : device.RATE
 		j.loop_from, j.loop_to = d.loop_from, d.loop_to
+		at_rate(j)
+	}
+	// `samples` (`channels` interleaved, at `rate`) at RATE, in 16 bits on the heap
+	pcm_at_rate :: proc(samples: []f32, channels, rate: int) -> []i16 {
+		at := resample(samples, channels, rate, context.temp_allocator)
+		pcm := make([]i16, len(at), runtime.heap_allocator())
+		for v, i in at {
+			pcm[i] = i16(clamp(math.round(v * 32768), -32768, 32767))
+		}
+		return pcm
+	}
+	// its loop in RATE's frames
+	at_rate :: proc(j: ^Decode_Job) {
+		if j.rate != device.RATE {
+			j.loop_from = frames_at_rate(j.loop_from, j.rate)
+			j.loop_to = frames_at_rate(j.loop_to, j.rate)
+		}
 	}
 	workers := min(len(jobs), max(1, os.get_processor_core_count()))
 	if workers <= 1 {
@@ -492,4 +537,9 @@ credits_from_names :: proc(names: []string, allocator := context.allocator) -> [
 		append(&lines, fmt.aprintf("%s: %s (%s, %s; %s)%s", s.name, src.credit, lic.spdx, lic.url, src.page, lic.credit_required ? "; credit required" : "", allocator = allocator))
 	}
 	return lines[:]
+}
+
+// A position in a recording's frames at `rate`, in RATE's.
+frames_at_rate :: proc "contextless" (frames: i64, rate: int) -> i64 {
+	return rate <= 0 || rate == device.RATE ? frames : i64(math.round(f64(frames) * device.RATE / f64(rate)))
 }

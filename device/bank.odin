@@ -96,11 +96,14 @@ Sample :: struct {
 	frames:   i64,
 	channels: u8, // 1 or 2
 	format:   Sample_Format,
-	rate:     i32, // its frames per second as recorded (0: RATE); a Sampler plays it at RATE
+	rate:     i32, // its recording's frames per second (0: RATE); its own frames are at RATE, resampled as it was loaded
 }
 
-// A sample's rate (RATE when it was made at it).
-sample_rate :: #force_inline proc "contextless" (s: Sample) -> f64 {return s.rate > 0 ? f64(s.rate) : RATE}
+// A position given in a sample's recording's frames (an SFZ region's offset,
+// end and loop points), in its own frames at RATE.
+sample_frames :: #force_inline proc "contextless" (s: Sample, recorded: f64) -> f64 {
+	return s.rate > 0 && s.rate != RATE ? recorded * RATE / f64(s.rate) : recorded
+}
 
 // A sample's values (interleaved by its channels).
 sample_f32 :: proc(b: ^Bank, s: Sample) -> []f32 {return b.f32s[s.chunk][s.at:][:s.frames * i64(s.channels)]}

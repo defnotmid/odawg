@@ -130,7 +130,7 @@ test_host_read :: proc(t: ^testing.T) {
 			m.reads += 1
 			switch {
 			case path == "a440.ogg":
-				return {samples = m.samples, channels = 2, rate = 44100}, .Read
+				return {samples = m.samples, channels = 2, rate = device.RATE}, .Read
 			case strings.has_suffix(path, ".wav"):
 				return {}, .Declined // the loader's own WAV reader
 			}
@@ -158,10 +158,10 @@ test_host_read :: proc(t: ^testing.T) {
 	testing.expect_value(t, mine.reads, 2)
 	zs := bank.sets[set].zones
 	smp := bank.samples[bank.zones[zs.first].sample]
-	testing.expect(t, smp.format == .F32 && smp.rate == 44100 && smp.channels == 2)
+	testing.expect(t, smp.format == .F32 && smp.rate == device.RATE && smp.channels == 2)
 	testing.expect(t, raw_data(device.sample_f32(&bank, smp)) == raw_data(mine.samples)) // lent, not copied
 	declined := bank.samples[bank.zones[zs.first + 1].sample]
-	testing.expect(t, declined.format == .I16 && declined.rate == 44100 && declined.channels == 1) // the loader's own
+	testing.expect(t, declined.format == .I16 && declined.rate == 44100 && declined.channels == 1 && declined.frames == 4800) // the loader's own, at RATE
 }
 
 // An SFZ: headers inherited, default_path, key and velocity ranges, tune,

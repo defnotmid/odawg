@@ -319,9 +319,19 @@ test_load_set :: proc(t: ^testing.T) {
 	testing.expect_value(t, int(bank.sets[0].zones.count), int(s.zones.count))
 	testing.expect_value(t, len(bank.samples), int(s.zones.count)) // a file each
 	for smp in bank.samples {
-		// 50 ms as recorded, at the file's rate (a Sampler reads it at RATE)
-		testing.expect_value(t, int(smp.frames), 2205)
+		// 50 ms, resampled to RATE as it loaded; its rate the recording's
+		testing.expect_value(t, int(smp.frames), 2400)
 		testing.expect_value(t, int(smp.rate), 44100)
+		// still a 220 Hz sine: its zero crossings, a cycle's two
+		values := device.sample_i16(&bank, smp)
+		crossings := 0
+		for i in 1 ..< len(values) {
+			if (values[i - 1] < 0) != (values[i] < 0) {
+				crossings += 1
+			}
+		}
+		hz := f64(crossings) / 2 / (f64(len(values)) / device.RATE)
+		testing.expectf(t, abs(hz - 220) < 15, "resampled, it plays %f Hz", hz)
 	}
 	// rr1 and rr2 of a note and layer: one group, places 0 and 1
 	sequences := [2]int{}

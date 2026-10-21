@@ -29,6 +29,18 @@ sine_wav :: proc(hz: f64, seconds: f64) -> []u8 {
 	return data
 }
 
+// A 44.1 kHz recording, as many libraries' are: 440 Hz for its first 0.75 s
+// (33075 frames), 880 Hz after.
+two_halves_44k :: proc() -> []u8 {
+	samples := make([]f32, 44100, context.temp_allocator)
+	for &v, i in samples {
+		hz := i < 33075 ? 440.0 : 880.0
+		v = f32(math.sin(2 * math.PI * hz * f64(i) / 44100) * 16000 / 32767)
+	}
+	data, _ := wav.encode(samples, 44100, 1, .S16, context.temp_allocator)
+	return data
+}
+
 // The same at 880 Hz, a second, as Ogg Vorbis: ffmpeg -f lavfi -i
 // "aevalsrc=0.488*sin(2*PI*880*t):s=48000:d=1" -c:a libvorbis -q:a 2
 // -map_metadata -1 -fflags +bitexact c880.ogg
@@ -62,6 +74,9 @@ SFZ :: `// what the test hears
 <region> sample=*sine key=74
 // E5: a flex envelope (written with a leading zero) closes it in 0.1 s
 <region> sample=a440.wav key=76 eg01_time0=0 eg01_level0=1 eg01_time1=0.1 eg01_level1=0 eg01_amplitude=100
+// F5: a 44.1 kHz recording from its offset in its own frames, 0.05 s before
+// its 880 Hz (read as RATE's frames it would start 0.1 s before)
+<region> sample=halves44k.wav key=77 pitch_keycenter=77 offset=30870
 `
 
 @(test)
@@ -90,6 +105,7 @@ test_sfz_instrument :: proc(t: ^testing.T) {
 		write(root, join("inst/samples", f.name), sine_wav(f.hz, f.name == "r2000.wav" ? 0.2 : 1))
 	}
 	write(root, "inst/samples/c880.ogg", C880_OGG)
+	write(root, "inst/samples/halves44k.wav", two_halves_44k())
 	sp := new(spec.Spec)
 	findings := make(base.Findings)
 	testing.expect(t, spec.spec_from_json(`{ bpm: 120, gain_db: 0, seed: 1, sections: [ { name: "a", duration: "8m" } ],
@@ -102,7 +118,7 @@ test_sfz_instrument :: proc(t: ^testing.T) {
 			{ time: 3.5, note: "F4", duration: 0.4 },
 			{ time: 4, note: "G4", duration: 2 }, { time: 4.5, note: "G4", duration: 0.3 },
 			{ time: 5.5, note: "C5", duration: 0.4 }, { time: 6, note: "C#1", duration: 0.1 }, { time: 6.5, note: "C5", duration: 0.4 },
-			{ time: 7, note: "D5", duration: 0.4 }, { time: 7.5, note: "E5", duration: 0.4 } ] } ] } } }`, sp, &findings))
+			{ time: 7, note: "D5", duration: 0.4 }, { time: 7.5, note: "E5", duration: 0.4 }, { time: 8, note: "F5", duration: 0.4 } ] } ] } } }`, sp, &findings))
 	host := assets.Bank_Host{root = root}
 	bank: device.Bank
 	defer device.bank_destroy(&bank)
@@ -172,4 +188,5 @@ test_sfz_instrument :: proc(t: ^testing.T) {
 		_, late := hear(out, 7.65, 7.85)
 		testing.expectf(t, early > 0.05 && late < early * 0.01, "E5's flex envelope: %.3f then %.4f", early, late)
 	}
+	near(t, "F5: a 44.1 kHz recording from its offset, in its own frames", out, 8, 880)
 }

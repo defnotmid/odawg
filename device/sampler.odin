@@ -221,8 +221,8 @@ sampler_start :: proc(st: ^Sampler_State, set: i32, attack, release: f32, key: f
 	if st.loop_to > st.length || st.loop_to - st.loop_from < 2 {
 		st.loop_to = st.loop_from // not a usable loop
 	}
-	// the pitch shift, and the recording's rate to RATE
-	st.step = math.pow(2, f64(pitch - z.root) / 12) * device_rate_ratio(bank.samples[z.sample])
+	// the pitch shift (its frames are at RATE)
+	st.step = math.pow(2, f64(pitch - z.root) / 12)
 	st.cutoff = clamp(1 / st.step, 1.0 / SINC_MAX_STRETCH, 1)
 	st.taps = int(math.ceil(SINC_HALF / st.cutoff))
 	amp := z.gain * min(f32(velocity) / f32(max(z.hi_velocity, 1)), 1)
@@ -234,10 +234,6 @@ sampler_start :: proc(st: ^Sampler_State, set: i32, attack, release: f32, key: f
 	st.gate = z.one_shot ? -1 : i64(math.round(max(n.duration, 0) * RATE))
 	st.over = st.gate >= 0 ? st.gate + i64(math.ceil(rel * RATE)) : -1
 }
-
-// Sample frames per output sample at the root pitch (1: recorded at RATE).
-@(private = "file")
-device_rate_ratio :: proc "contextless" (s: Sample) -> f64 {return sample_rate(s) / RATE}
 
 // The note's next len(l) samples, written into l and r (silence where it is
 // over); false once it is over.
@@ -335,7 +331,7 @@ tail_sampler :: proc(set_index: i32, release: f32, key: f32, n: Note, env: ^Voic
 			return guess
 		}
 		sm := bank.samples[z.sample]
-		step := math.pow(2, f64(pitch - z.root) / 12) * device_rate_ratio(sm)
+		step := math.pow(2, f64(pitch - z.root) / 12)
 		held := z.release > 0 ? max(n.duration, 0) + max(f64(z.release), SAMPLER_DECLICK) : held
 		// to its last frame, and the kernel's reach past it
 		left := (f64(sm.frames - i64(max(z.offset, 0))) / step + f64(SINC_HALF * SINC_MAX_STRETCH)) / RATE
@@ -462,8 +458,10 @@ region_start :: proc(c: ^Node_Call, lane: ^Lane, st: ^Region_State) {
 	sm := bank.samples[z.sample]
 	st.zone = zi
 	st.length = sm.frames
-	if end := i64(v[REGION_END]); end > 0 {
-		st.length = min(st.length, end + 1)
+	// its frames as SFZ gives them: the recording's, in the sample's at RATE
+	frames :: proc(sm: Sample, x: f32) -> i64 {return i64(math.round(sample_frames(sm, f64(x))))}
+	if v[REGION_END] > 0 {
+		st.length = min(st.length, frames(sm, v[REGION_END] + 1))
 	}
 	mode := LOOP_MODES[Loop_Mode(clamp(int(v[REGION_LOOP_MODE]), 0, len(Loop_Mode) - 1))]
 	if mode.zone_loop {
@@ -471,19 +469,19 @@ region_start :: proc(c: ^Node_Call, lane: ^Lane, st: ^Region_State) {
 	}
 	st.sustain = mode.sustain
 	if mode.points && v[REGION_LOOP_START] >= 0 {
-		st.loop_from = i64(v[REGION_LOOP_START])
+		st.loop_from = frames(sm, v[REGION_LOOP_START])
 	}
 	if mode.points && v[REGION_LOOP_END] > 0 {
-		st.loop_to = i64(v[REGION_LOOP_END]) + 1
+		st.loop_to = frames(sm, v[REGION_LOOP_END] + 1)
 	}
 	if st.loop_to > st.length || st.loop_to - st.loop_from < 2 {
 		st.loop_to = st.loop_from
 	}
 	random := f64(v[REGION_OFFSET_RANDOM]) * base.hash_unit(lane.seed ~ 0x0ff5e7)
-	st.start = max(f64(node_value(c, lane, REGION_OFFSET)) + math.floor(random), 0)
+	st.start = max(sample_frames(sm, f64(node_value(c, lane, REGION_OFFSET)) + math.floor(random)), 0)
 	st.pos = st.start
 	cents := (f64(lane.key) - f64(v[REGION_KEYCENTER])) * f64(v[REGION_KEYTRACK]) + f64(node_value(c, lane, REGION_TUNE))
-	st.step = math.pow(2, cents / 1200) * device_rate_ratio(sm)
+	st.step = math.pow(2, cents / 1200)
 	st.cutoff = clamp(1 / st.step, 1.0 / SINC_MAX_STRETCH, 1)
 	st.taps = int(math.ceil(SINC_HALF / st.cutoff))
 	st.delay = i64(math.round(f64(max(node_value(c, lane, REGION_DELAY), 0)) * RATE))
