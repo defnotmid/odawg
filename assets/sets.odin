@@ -7,6 +7,7 @@ import "core:strings"
 import base "../base"
 import device "../device"
 import spec "../spec"
+import common "deps:odecs/common"
 
 // Sample sets from wherever a song's are: the register's (pinned, fetched
 // on first use), a set the song brings (`sets = { my_kit = { pads = ... } }`)
@@ -36,6 +37,7 @@ Bank_Host :: struct {
 	stamp:   proc(data: rawptr, path: string) -> u64,
 	pinning: bool,
 	fetched: string,
+	pool:    ^common.Work_Pool, // the host's threads, lent to decode on (nil: the caller's alone)
 }
 
 Host_Read :: enum u8 {

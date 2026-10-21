@@ -1,14 +1,13 @@
 package odawg_render
 
-import "base:runtime"
 import "core:math"
-import "core:os"
 import "core:slice"
-import "core:thread"
 import analyze "../analyze"
 import base "../base"
 import device "../device"
 import song "../song"
+import common "deps:odecs/common"
+import "core:sync"
 
 // Tables: what is read of a song at random (a lane's peaks, a video frame's
 // energy or spectrum) as rows of numbers, one per step of the song, of the
@@ -277,8 +276,8 @@ table_stale :: proc(s: ^song.Song, t: ^Table) -> bool {
 // parts a table reads), each from song sample 0 and as long as the caller
 // has them (past their end reads as silence, as past the song does). Each
 // row reads its window straight from the slices; the tables fill side by
-// side (`threads`: 0, one per core).
-tables_fill :: proc(s: ^song.Song, tables: []^Table, mix: [2][]f32, parts: [][2][]f32, threads := 0) {
+// side on the caller's pool (nil: in turn on the caller's thread).
+tables_fill :: proc(s: ^song.Song, tables: []^Table, mix: [2][]f32, parts: [][2][]f32, pool: ^common.Work_Pool = nil) {
 	Fill :: struct {
 		table:  ^Table,
 		source: [2][]f32,
@@ -319,26 +318,31 @@ tables_fill :: proc(s: ^song.Song, tables: []^Table, mix: [2][]f32, parts: [][2]
 			}
 		}
 	}
-	workers := threads > 0 ? threads : max(1, os.get_processor_core_count())
-	if workers == 1 || len(jobs) == 1 {
-		for &j in jobs {
-			run(&j)
+	// the jobs by a shared cursor (their sizes differ: a spectrum's rows cost
+	// more than a level's), a scratch arena each
+	Fills :: struct {
+		jobs: []Fill,
+		next: int,
+		run:  proc(j: ^Fill),
+	}
+	fills := Fills{jobs, 0, run}
+	each :: proc(data: rawptr, first, end: int) {
+		f := (^Fills)(data)
+		for {
+			i := sync.atomic_add(&f.next, 1)
+			if i >= len(f.jobs) {
+				return
+			}
+			scratch: virtual_scratch
+			context.temp_allocator = scratch_begin(&scratch)
+			f.run(&f.jobs[i])
+			scratch_end(&scratch)
 		}
+	}
+	if pool == nil || len(jobs) <= 1 {
+		each(&fills, 0, 1)
 	} else {
-		heap := runtime.heap_allocator()
-		pool: thread.Pool
-		thread.pool_init(&pool, heap, min(workers, len(jobs)))
-		for &j in jobs {
-			thread.pool_add_task(&pool, heap, proc(t: thread.Task) {
-				scratch: virtual_scratch
-				context.temp_allocator = scratch_begin(&scratch)
-				defer scratch_end(&scratch)
-				run((^Fill)(t.data))
-			}, &j)
-		}
-		thread.pool_start(&pool)
-		thread.pool_finish(&pool)
-		thread.pool_destroy(&pool)
+		pool.run(pool, len(jobs), each, &fills)
 	}
 	for t in tables {
 		t.version = s != nil ? source_version(s, t.stem) : 1
@@ -360,7 +364,7 @@ table_init_frames :: proc(t: ^Table, kind: Table_Kind, frames: int, step_num, st
 // Fills every table in `tables` from one streamed export of the song
 // (`threads` as export_song's). The tables are the song's own size
 // (table_init); what each reads is held only until its rows are filled.
-tables_build :: proc(s: ^song.Song, tables: []^Table, threads := 0) {
+tables_build :: proc(s: ^song.Song, tables: []^Table, pool: ^common.Work_Pool = nil) {
 	if len(tables) == 0 {
 		return
 	}
@@ -425,7 +429,7 @@ tables_build :: proc(s: ^song.Song, tables: []^Table, threads := 0) {
 			b.held_first = low
 		}
 	}
-	export_song(s, {to = f64(b.frames) / RATE, threads = threads, stems = stems}, {&b, proc(data: rawptr, at: i64, l, r: []f32, stems: [][2][]f32) {
+	export_song(s, {to = f64(b.frames) / RATE, pool = pool, stems = stems}, {&b, proc(data: rawptr, at: i64, l, r: []f32, stems: [][2][]f32) {
 		b := (^Build)(data)
 		append(&b.held[0], ..l)
 		append(&b.held[1], ..r)

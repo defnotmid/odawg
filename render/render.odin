@@ -6,8 +6,8 @@
 // song, and the samples never depend on how many threads there were.
 package odawg_render
 
-import "base:runtime"
 import "core:math"
+import common "deps:odecs/common"
 import base "../base"
 import device "../device"
 import song "../song"
@@ -17,7 +17,7 @@ RATE :: base.RATE
 Options :: struct {
 	from:    f64, // song seconds
 	to:      f64, // song seconds; <= from: the song's end and its tail
-	threads: int, // 0: one per core
+	pool:    ^common.Work_Pool, // the caller's threads (nil: the caller's alone)
 	stems:   bool, // hand each stem (stem_count: the parts, the returns, the buses; what the master sums) to the sink too
 	mastering: Mastering, // a target's master in place of the song's (master_export)
 }
@@ -129,10 +129,9 @@ note_from_row :: proc(s: ^song.Song, i: int) -> device.Note {
 }
 
 // Streams [from, to) of the song to `sink` in order: one engine, the song as
-// one stream (a stretch at a time, each handed on as it is made), its nodes
-// on every core. Returns what the master measured.
+// one stream, each chunk handed on as it is made, its nodes on the caller's
+// pool. Returns what the master measured.
 export_song :: proc(s: ^song.Song, opts: Options, sink: Sink) -> Master_Stats {
-	heap := runtime.heap_allocator()
 	first := i64(math.round(max(opts.from, 0) * RATE))
 	to := opts.to > opts.from ? opts.to : s.duration + tail_from_song(s)
 	frames := max(0, int(math.round(to * RATE)) - int(first))
@@ -140,29 +139,14 @@ export_song :: proc(s: ^song.Song, opts: Options, sink: Sink) -> Master_Stats {
 		return {}
 	}
 	e: Engine
-	if !engine_init(&e, s, opts.threads, opts.mastering) {
+	if !engine_init(&e, s, opts.pool, opts.mastering) {
 		return {}
 	}
 	defer engine_destroy(&e)
 	if first > 0 {
 		engine_seek(&e, first, true)
 	}
-	parts := opts.stems ? stem_count(s) : 0
-	stretch := 4 * CHUNK
-	buf := make([]f32, 2 * stretch * (1 + parts), heap)
-	defer delete(buf, heap)
-	stems := make([][2][]f32, parts, heap)
-	defer delete(stems, heap)
-	for at := 0; at < frames; at += stretch {
-		n := min(stretch, frames - at)
-		for p in 0 ..< parts {
-			o := 2 * stretch * (1 + p)
-			stems[p] = {buf[o:][:n], buf[o + stretch:][:n]}
-		}
-		l, r := buf[:n], buf[stretch:][:n]
-		engine_process(&e, l, r, stems)
-		sink.take(sink.data, i64(at), l, r, stems)
-	}
+	engine_stream(&e, frames, sink, opts.stems)
 	return e.master.stats
 }
 
@@ -193,17 +177,21 @@ output_from_song :: proc(s: ^song.Song, opts: Options, allocator := context.allo
 		at := 2 * out.frames * (1 + i)
 		out.stems[i] = {out.slab[at:][:out.frames], out.slab[at + out.frames:][:out.frames]}
 	}
-	o := opts
-	o.to = to
-	out.stats = export_song(s, o, {&out, proc(data: rawptr, at: i64, l, r: []f32, stems: [][2][]f32) {
-		out := (^Output)(data)
-		copy(out.left[at:], l)
-		copy(out.right[at:], r)
-		for st, p in stems {
-			copy(out.stems[p][0][at:], st[0])
-			copy(out.stems[p][1][at:], st[1])
-		}
-	}})
+	// the one receive buffer, sized from the song before a sample is made:
+	// the master and the stems write into it as they make each chunk
+	if out.frames == 0 || len(s.tracks) == 0 {
+		return
+	}
+	e: Engine
+	if !engine_init(&e, s, opts.pool, opts.mastering) {
+		return
+	}
+	defer engine_destroy(&e)
+	if first > 0 {
+		engine_seek(&e, first, true)
+	}
+	engine_process(&e, out.left, out.right, out.stems)
+	out.stats = e.master.stats
 	return
 }
 

@@ -112,12 +112,12 @@ run_analyze :: proc(a: ^Args) -> bool {
 			push(&x.sources[1 + p], x.song, at, st[0], st[1])
 		}
 	}}
-	render.master_export(s, {to = f64(frames) / render.RATE, stems = true, threads = a.threads}, m, sink)
+	render.master_export(s, {to = f64(frames) / render.RATE, stems = true, pool = a.pool}, m, sink)
 	tables := make([dynamic]^render.Table)
 	for &src in sources {
 		append(&tables, &src.bands, &src.stereo, &src.crest)
 	}
-	render.tables_build(s, tables[:], a.threads)
+	render.tables_build(s, tables[:], a.pool)
 
 	report := Analysis_Report{song = s.name}
 	report.band_hz = make([]f64, len(render.BAND_HZ))

@@ -28,6 +28,7 @@ import song "deps:odawg/song"
 import spec "deps:odawg/spec"
 import tempo "deps:odawg/tempo"
 import theory "deps:odawg/theory"
+import common "deps:odecs/common"
 
 Args :: struct {
 	positional: [dynamic]string,
@@ -40,6 +41,7 @@ Args :: struct {
 	json:       bool,
 	verify:     bool,
 	threads:    int,
+	pool:       ^common.Work_Pool, // the app's one pool, lent to everything it runs (nil: --threads 1)
 }
 
 // The flags as rows: their spellings, what they hold (a text and a number
@@ -118,14 +120,25 @@ main :: proc() {
 		}
 		append(&a.positional, argv[i])
 	}
+	// the app's one pool, lent to every render, table fill and load (the
+	// caller's thread is one of --threads; 0: one per core)
+	threads := a.threads > 0 ? a.threads : os.get_processor_core_count()
+	pool: common.Static_Pool
+	if threads > 1 {
+		common.init_static_pool(&pool, threads - 1)
+		a.pool = &pool.work_pool
+	}
 	for c in COMMAND_TABLE {
 		if c.name == argv[0] {
-			if !c.run(&a) {
+			ok := c.run(&a)
+			common.destroy_static_pool(&pool)
+			if !ok {
 				os.exit(1)
 			}
 			return
 		}
 	}
+	common.destroy_static_pool(&pool)
 	fmt.eprintfln("odawg: no command %q", argv[0])
 	usage()
 	os.exit(2)
@@ -179,7 +192,7 @@ load :: proc(a: ^Args, l: ^Loaded, pinning := false) -> bool {
 	// then its sample sets declared (names to indices: the register's, its
 	// own, SFZ files), then only the zones the notes reach loaded (the
 	// register's fetched on first use)
-	host := assets.Bank_Host{root = filepath.dir(path), pinning = pinning}
+	host := assets.Bank_Host{root = filepath.dir(path), pinning = pinning, pool = a.pool}
 	read_style_files(&host, &l.spec, &l.findings)
 	assets.bank_declare_spec(&l.bank, &l.spec, &l.findings, &host)
 	ok := song.song_from_spec(&l.spec, &l.song, &l.bank)
@@ -226,7 +239,7 @@ run_render :: proc(a: ^Args) -> bool {
 		return false
 	}
 	s := &l.song
-	opts := render.Options{threads = a.threads}
+	opts := render.Options{pool = a.pool}
 	if a.range != "" {
 		b0, b1, ok := song.beats_from_range(s, a.range)
 		if !ok {
@@ -487,7 +500,7 @@ run_inspect :: proc(a: ^Args) -> bool {
 		return false
 	}
 	s := &l.song
-	opts := render.Options{threads = a.threads}
+	opts := render.Options{pool = a.pool}
 	if a.range != "" {
 		b0, b1, in_song := song.beats_from_range(s, a.range)
 		if !in_song {
@@ -530,7 +543,7 @@ run_bench :: proc(a: ^Args) -> bool {
 		out := make([dynamic]f32, context.temp_allocator)
 		x := Sink{&out, a.out != ""}
 		began := time.tick_now()
-		render.export_song(s, {threads = 1}, {&x, proc(data: rawptr, at: i64, l, r: []f32, stems: [][2][]f32) {
+		render.export_song(s, {}, {&x, proc(data: rawptr, at: i64, l, r: []f32, stems: [][2][]f32) {
 			x := (^Sink)(data)
 			if x.keep {
 				for i in 0 ..< len(l) {

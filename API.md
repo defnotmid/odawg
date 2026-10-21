@@ -17,9 +17,12 @@ oksl, odecs and ottis, built the same way:
   effect, play pattern, transition, check, mastering target, command) is a table row and
   its behaviour a rule table; flat tables with spans; `/` names. README.md lists the rules.
 - **Realtime first.** The engine streams any block from anywhere, deterministically and
-  independent of block size and of its thread count: a chunk at a time, each node once
-  what feeds it has, the ready nodes on as many threads as it is given (`engine_init(&e,
-  &song, threads)`); an export is that one stream. No caches: generated assets (a `say` line, a downloaded sample set) are
+  independent of block size and of how many threads render it: a chunk at a time, each
+  node once what feeds it has, running ahead of the slowest. **odawg owns no threads**:
+  the caller lends its one pool, odecs's `common.Work_Pool` (`engine_init(&e, &song,
+  pool)`, `Options.pool`, `Bank_Host.pool` for decodes, `tables_build(s, tables, pool)`;
+  nil runs everything on the caller's thread); a walk of the stream is one `run` of the
+  pool. An export is that one stream, each chunk handed on as it is made. No caches: generated assets (a `say` line, a downloaded sample set) are
   stored, music is computed.
 - **Samples download on first use** (`assets/`, like `ottis/assets`): a register table with
   each set's source, pinned SHA-256, licence and credit; never committed.
@@ -530,7 +533,7 @@ song.seconds_from_position(&g, "drop@1m")         // the time grammar; beat_from
 song.pulse_from_seconds(&g, t, {part = "drums", note = "kick"}, 8)
 song.notes_from_filter(&g, {part = "drums", note = "clap", range = "drop"}, &out)
 e: render.Engine                                  // realtime: any block, from anywhere
-render.engine_init(&e, &g, threads = 1); render.engine_seek(&e, at, exact = false); render.engine_process(&e, l, r)
+render.engine_init(&e, &g, pool = nil); render.engine_seek(&e, at, exact = false); render.engine_process(&e, l, r)
 render.export_song(&g, {from, to, stems}, sink)   // the stream on every core, to a sink in order
 render.master_export(&g, opts, .Streaming, sink)  // measured, gained, limited, written
 song.mix_init(&mix); song.append_song(&mix, &g, at, "score", window = w, duck = d); song.append_clip(&mix, clip); song.mix_end(&mix)

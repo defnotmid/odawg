@@ -4,11 +4,10 @@ import "base:runtime"
 import "core:math"
 import "core:mem"
 import "core:mem/virtual"
-import "core:os"
 import "core:slice"
 import "core:strings"
 import "core:sync"
-import "core:thread"
+import common "deps:odecs/common"
 import base "../base"
 import device "../device"
 import dsp "../dsp"
@@ -28,15 +27,20 @@ import song "../song"
 // the stream from 0 and a preview, a scrub and a final render hear the
 // same song.
 //
-// It renders a chunk at a time: every node its chunk's blocks in a row, each
-// once what feeds it has. With threads, its workers take the nodes as they
-// become ready (a node's sound is its own state over its inputs, so which
-// worker runs it, and when, changes nothing: any thread count gives the
-// same stream).
+// It renders a chunk at a time: every node its chunks' blocks in a row, each
+// chunk once what feeds it has made it. On the caller's pool (a
+// common.Work_Pool it lends: the engine owns no threads), a walk is one
+// `run` of loops, each taking whatever node's next chunk is ready, so nodes
+// run ahead of the slowest, up to RING chunks past the last one taken (handed
+// on, in order, as it is made); a loop sleeps only when no node can go on. A
+// node's sound is its own state over its inputs, so which thread runs it, and
+// when, changes nothing: any pool, or none, gives the same stream.
 
 BLOCK :: 1024 // what a track processes at a time (any size gives the same samples)
 CHUNK_BLOCKS :: 8 // a node's blocks in a row before what it feeds reads them
 CHUNK :: CHUNK_BLOCKS * BLOCK
+RING :: 4 // a node's chunks held at once: how far it may run ahead of the last taken
+MAX_LOOPS :: 33 // a walk's loops at most (a pool's map runs as many as it has threads)
 // A worker's scratch: a track's block, its send, a discard (seeks, mutes), a
 // choked note's.
 SCRATCH :: 8 * BLOCK
@@ -68,28 +72,27 @@ Engine :: struct {
 	dirty:     []bool,
 	edges:     []Edge_Run,
 	rings:     []f32,
-	cursor:    i64, // the song sample of the next output (a chunk's first while it renders)
-	chunk:     Chunk, // the chunk rendering
-	workers:   []Worker, // [0] the caller's, then a thread's each
-	pool:      Pool,
+	cursor:    i64, // the song sample of the next output (a walk's first while it renders)
+	pool:      ^common.Work_Pool, // the caller's (nil: the caller's thread alone)
+	flow:      Flow,
+	workers:   []Worker, // scratch, one a loop
 	master:    Master_Run, // the song's master: its gain, chain, lookahead, what it measured
 	no_master: bool, // its host runs the master itself, over what the engine gives in order
 	stem_gain: []f32, // per stem (stem_count): its placement's level, so a stem is what the master hears of it
 	arena:     virtual.Arena,
 }
 
-// What a node's run of a chunk needs to know: its samples, and whether the
-// master runs (a seek's walk stops before it).
-Chunk :: struct {
-	frames: int,
-	master: bool,
-}
-
-// What one node's run uses besides its own rows, a worker's own: its voices'
-// lanes (the largest call of device.graph_run), its effects' scratch, its
-// track scratch, the key the node hears (its key edges summed; nil: none)
-// and its block, and a temp allocator, emptied after each node.
+// What one node's run of a chunk uses besides its own rows, a worker's own:
+// the chunk (its slot in the ring, its first song sample, its samples, and
+// whether the master runs: a seek's walk stops before it), its voices' lanes
+// (the largest call of device.graph_run), its effects' scratch, its track
+// scratch, the key the node hears (its key edges summed; nil: none) and its
+// block, and a temp allocator, emptied after each node.
 Worker :: struct {
+	slot:       int,
+	at:         i64,
+	frames:     int,
+	master:     bool,
 	graph:      []f32,
 	fx_scratch: ^device.Fx_Scratch,
 	scratch:    []f32, // a discard (2 x BLOCK) at 4 x BLOCK, a choked note's at 6 x BLOCK
@@ -98,22 +101,30 @@ Worker :: struct {
 	temp:       virtual.Arena,
 }
 
-// The threads, and a chunk's nodes as they become ready: each node waits for
-// the nodes feeding it (its edges, sound or key), the ready ones queue, a
-// worker takes one, runs its chunk, and readies those it feeds.
-Pool :: struct {
-	threads: []^thread.Thread,
-	feeds:   []i32, // the nodes each node feeds, by feeds_of
-	feeds_of: []base.Span,
-	inputs:  []i32, // per node: the edges into it (not a loop's)
-	waiting: []i32, // per node, this chunk: its inputs not done yet
-	ready:   []i32, // this chunk's nodes in the order they became ready
+// A walk's chunks through the nodes: per node the nodes feeding it and fed
+// by it (the edges that aren't a loop's), how many of the walk's chunks it
+// has made, and whether its next is queued; the queue; per ring slot the
+// nodes still to make its chunk; the chunks taken. A loop takes a queued node,
+// makes its next chunk, queues whatever that let go on, and takes the next
+// chunk in order once every node has made it.
+Flow :: struct {
+	sources:    []i32, // by sources_of
+	sources_of: []base.Span,
+	feeds:      []i32, // by feeds_of
+	feeds_of:   []base.Span,
+	made:       []i32, // per node: the walk's chunks it has made
+	queued:     []i32, // per node: 1 from queued until its chunk is made
+	queue:      []i32, // the nodes queued (a ring of len(nodes))
 	head, tail: int, // under mutex
-	mutex:   sync.Mutex,
-	work:    sync.Sema, // a post per ready node (and per thread to quit)
-	done:    sync.Sema, // the chunk's last node done
-	left:    int, // nodes not done this chunk
-	quit:    bool,
+	mutex:      sync.Mutex,
+	left:       [RING]i32, // per slot: the nodes still to make its chunk
+	taken:      i32, // the walk's chunks handed on
+	taking:     i32, // 1 while a loop hands one on
+	chunks:     int, // the walk's
+	frames:     int,
+	master:     bool,
+	out:        ^Walk_Out,
+	progress:   sync.Futex, // bumped as anything moves on: idle loops wait on it
 }
 
 // A node as the engine runs it. Its output runs `lead` samples ahead of the
@@ -170,10 +181,10 @@ Fx_Run :: struct {
 }
 
 // Sizes the engine for a song and puts it at sample 0: rendering on the
-// caller's thread and `threads - 1` more (0: one per core), its master
-// mastered as `mastering` says (none: the song's own). The engine must not
-// move while it has threads.
-engine_init :: proc(e: ^Engine, s: ^song.Song, threads := 1, mastering := Mastering{}) -> bool {
+// caller's thread or, lent, the caller's pool (a map of loops each walk), its
+// master mastered as `mastering` says (none: the song's own). Don't render
+// from a range the same pool is running.
+engine_init :: proc(e: ^Engine, s: ^song.Song, pool: ^common.Work_Pool = nil, mastering := Mastering{}) -> bool {
 	e.song = s
 	e.env = song.voice_env(s)
 	if len(s.nodes) == 0 {
@@ -311,10 +322,12 @@ engine_init :: proc(e: ^Engine, s: ^song.Song, threads := 1, mastering := Master
 		nd.pre = pres[k]
 		nd.tail = i64(math.ceil(node_memory(s, k).state * RATE)) + DORMANT_MARGIN
 	}
-	e.blocks = make([]f32, 2 * CHUNK * len(s.nodes))
-	e.dirty = make([]bool, CHUNK_BLOCKS * len(s.nodes))
-	count := threads > 0 ? threads : max(1, os.get_processor_core_count())
-	e.workers = make([]Worker, count)
+	e.blocks = make([]f32, RING * 2 * CHUNK * len(s.nodes))
+	e.dirty = make([]bool, RING * CHUNK_BLOCKS * len(s.nodes))
+	e.pool = pool
+	// a worker a loop: as many as nodes can run at once, at most the most
+	// threads a pool lends
+	e.workers = make([]Worker, pool != nil ? clamp(len(s.nodes), 1, MAX_LOOPS) : 1)
 	for &w in e.workers {
 		w.graph = make([]f32, graph_total)
 		w.fx_scratch = new(device.Fx_Scratch)
@@ -322,22 +335,12 @@ engine_init :: proc(e: ^Engine, s: ^song.Song, threads := 1, mastering := Master
 		w.keys = make([]f32, 2 * BLOCK)
 		_ = virtual.arena_init_growing(&w.temp)
 	}
-	if count > 1 {
-		pool_init(e, looped)
-	}
+	flow_init(e, looped)
 	engine_seek(e, 0, false)
 	return true
 }
 
 engine_destroy :: proc(e: ^Engine) {
-	if len(e.pool.threads) > 0 {
-		sync.atomic_store(&e.pool.quit, true)
-		sync.sema_post(&e.pool.work, len(e.pool.threads))
-		for t in e.pool.threads {
-			thread.join(t)
-			thread.destroy(t)
-		}
-	}
 	for &w in e.workers {
 		virtual.arena_destroy(&w.temp)
 	}
@@ -345,83 +348,181 @@ engine_destroy :: proc(e: ^Engine) {
 	e^ = {}
 }
 
-// The pool: each node's inputs and the nodes it feeds (by the edges that
-// aren't a loop's), and a thread per worker past the caller's.
+// Each node's sources and feeds (by the edges that aren't a loop's).
 @(private = "file")
-pool_init :: proc(e: ^Engine, looped: []bool) {
+flow_init :: proc(e: ^Engine, looped: []bool) {
 	s := e.song
-	p := &e.pool
+	f := &e.flow
 	n := len(s.nodes)
-	p.inputs = make([]i32, n)
-	p.waiting = make([]i32, n)
-	p.ready = make([]i32, n)
-	p.feeds_of = make([]base.Span, n)
+	f.made = make([]i32, n)
+	f.queued = make([]i32, n)
+	f.queue = make([]i32, n)
+	f.sources_of = make([]base.Span, n)
+	f.feeds_of = make([]base.Span, n)
 	for x, i in s.edges {
 		if !looped[i] {
-			p.inputs[x.to] += 1
-			p.feeds_of[x.from].count += 1
+			f.sources_of[x.to].count += 1
+			f.feeds_of[x.from].count += 1
 		}
 	}
-	at: i32
-	for &f in p.feeds_of {
-		f.first = at
-		at += f.count
-		f.count = 0
+	spans :: proc(of: []base.Span) -> []i32 {
+		at: i32
+		for &sp in of {
+			sp.first = at
+			at += sp.count
+			sp.count = 0
+		}
+		return make([]i32, at)
 	}
-	p.feeds = make([]i32, at)
+	f.sources = spans(f.sources_of)
+	f.feeds = spans(f.feeds_of)
 	for x, i in s.edges {
 		if !looped[i] {
-			f := &p.feeds_of[x.from]
-			p.feeds[f.first + f.count] = x.to
-			f.count += 1
+			src := &f.sources_of[x.to]
+			f.sources[src.first + src.count] = x.from
+			src.count += 1
+			fd := &f.feeds_of[x.from]
+			f.feeds[fd.first + fd.count] = x.to
+			fd.count += 1
 		}
-	}
-	p.threads = make([]^thread.Thread, len(e.workers) - 1)
-	for &t, i in p.threads {
-		t = thread.create(pool_thread)
-		t.data = e
-		t.user_index = i + 1
-		thread.start(t)
 	}
 }
 
-// A pool thread: a ready node at a time, until the engine is destroyed.
+// Whether node k's next chunk can be made: within the walk and the ring
+// (RING past what has been taken), everything feeding it made it.
 @(private = "file")
-pool_thread :: proc(t: ^thread.Thread) {
-	e := (^Engine)(t.data)
-	w := &e.workers[t.user_index]
-	p := &e.pool
-	context.temp_allocator = virtual.arena_allocator(&w.temp)
+flow_ready :: proc(e: ^Engine, k: int) -> bool {
+	f := &e.flow
+	c := sync.atomic_load(&f.made[k])
+	if int(c) >= f.chunks || c >= sync.atomic_load(&f.taken) + RING {
+		return false
+	}
+	sp := f.sources_of[k]
+	for src in f.sources[sp.first:base.span_end(sp)] {
+		if sync.atomic_load(&f.made[src]) <= c {
+			return false
+		}
+	}
+	return true
+}
+
+// Queues node k's next chunk if it is ready and not queued yet. Whoever
+// finds it not ready lets it go and looks again, so a chunk made meanwhile
+// (whose maker found it still queued) is never missed.
+@(private = "file")
+flow_try :: proc(e: ^Engine, k: int) {
+	f := &e.flow
 	for {
-		sync.sema_wait(&p.work)
-		if sync.atomic_load(&p.quit) {
+		if _, ok := sync.atomic_compare_exchange_strong(&f.queued[k], 0, 1); !ok {
 			return
 		}
-		sync.mutex_lock(&p.mutex)
-		k := p.ready[p.head]
-		p.head += 1
-		sync.mutex_unlock(&p.mutex)
-		node_chunk(e, w, int(k))
-		free_all(context.temp_allocator)
-		f := p.feeds_of[k]
-		for d in p.feeds[f.first:base.span_end(f)] {
-			if sync.atomic_sub(&p.waiting[d], 1) == 1 {
-				pool_ready(p, d)
-			}
+		if flow_ready(e, k) {
+			sync.mutex_lock(&f.mutex)
+			f.queue[f.tail % len(f.queue)] = i32(k)
+			f.tail += 1
+			sync.mutex_unlock(&f.mutex)
+			flow_moved(f)
+			return
 		}
-		if sync.atomic_sub(&p.left, 1) == 1 {
-			sync.sema_post(&p.done)
+		sync.atomic_store(&f.queued[k], 0)
+		if !flow_ready(e, k) {
+			return
 		}
 	}
 }
 
 @(private = "file")
-pool_ready :: proc(p: ^Pool, k: i32) {
-	sync.mutex_lock(&p.mutex)
-	p.ready[p.tail] = k
-	p.tail += 1
-	sync.mutex_unlock(&p.mutex)
-	sync.sema_post(&p.work)
+flow_moved :: proc(f: ^Flow) {
+	sync.atomic_add(&f.progress, 1)
+	sync.futex_signal(&f.progress)
+}
+
+// A loop of a walk, on worker w, until every chunk is taken: the next chunk
+// in order handed on once made, else a queued node's next chunk, else asleep
+// until something moves on.
+@(private = "file")
+flow_loop :: proc(e: ^Engine, w: ^Worker) {
+	f := &e.flow
+	context.temp_allocator = virtual.arena_allocator(&w.temp)
+	for {
+		seen := sync.atomic_load(&f.progress)
+		if flow_take(e) {
+			continue
+		}
+		k := -1
+		sync.mutex_lock(&f.mutex)
+		if f.head < f.tail {
+			k = int(f.queue[f.head % len(f.queue)])
+			f.head += 1
+		}
+		sync.mutex_unlock(&f.mutex)
+		if k >= 0 {
+			c := int(sync.atomic_load(&f.made[k]))
+			flow_chunk(e, w, c)
+			node_chunk(e, w, k)
+			free_all(context.temp_allocator)
+			sync.atomic_add(&f.made[k], 1)
+			sync.atomic_sub(&f.left[c % RING], 1)
+			sync.atomic_store(&f.queued[k], 0)
+			flow_try(e, k)
+			fd := f.feeds_of[k]
+			for d in f.feeds[fd.first:base.span_end(fd)] {
+				flow_try(e, int(d))
+			}
+			flow_moved(f)
+			continue
+		}
+		if int(sync.atomic_load(&f.taken)) >= f.chunks {
+			sync.futex_broadcast(&f.progress)
+			return
+		}
+		sync.futex_wait(&f.progress, u32(seen))
+	}
+}
+
+// Hands on the next chunk if every node has made it (one loop at a time, so
+// in order); its ring slot is then free for the chunk RING on.
+@(private = "file")
+flow_take :: proc(e: ^Engine) -> bool {
+	f := &e.flow
+	c := int(sync.atomic_load(&f.taken))
+	if c >= f.chunks || sync.atomic_load(&f.left[c % RING]) != 0 {
+		return false
+	}
+	if _, ok := sync.atomic_compare_exchange_strong(&f.taking, 0, 1); !ok {
+		return false
+	}
+	defer sync.atomic_store(&f.taking, 0)
+	if int(sync.atomic_load(&f.taken)) != c {
+		return false
+	}
+	take(e, c, f.out)
+	if c + RING < f.chunks {
+		sync.atomic_store(&f.left[c % RING], i32(len(e.nodes)))
+	}
+	sync.atomic_add(&f.taken, 1)
+	for k in e.order {
+		flow_try(e, int(k))
+	}
+	flow_moved(f)
+	return true
+}
+
+// Chunk c of the walk, as a worker runs it.
+@(private = "file")
+flow_chunk :: proc(e: ^Engine, w: ^Worker, c: int) {
+	w.slot = c % RING
+	w.at = e.cursor + i64(c * CHUNK)
+	w.frames = min(CHUNK, e.flow.frames - c * CHUNK)
+	w.master = e.flow.master
+}
+
+// A walk's loops, a range of the pool's map each: the first of its range's
+// worker (the rest are other loops' to run, should the pool run them apart).
+@(private = "file")
+flow_range :: proc(data: rawptr, first, end: int) {
+	e := (^Engine)(data)
+	flow_loop(e, &e.workers[first])
 }
 
 // How many of a track's notes ever sound at once (one for a mono device).
@@ -493,7 +594,7 @@ engine_seek :: proc(e: ^Engine, at: i64, exact: bool) {
 					node_start(e, w, k)
 				}
 			}
-			walk_chunk(e, n, false)
+			walk(e, n, false, nil)
 		}
 		// what needs no pre-roll joins at `at` itself
 		for k in 0 ..< len(e.nodes) {
@@ -507,7 +608,7 @@ engine_seek :: proc(e: ^Engine, at: i64, exact: bool) {
 	master_run_reset(&e.master, at)
 	for left := e.no_master ? 0 : i64(e.master.latency); left > 0; {
 		n := int(min(left, BLOCK))
-		walk_chunk(e, n, true)
+		walk(e, n, true, nil)
 		left -= i64(n)
 	}
 	e.cursor = at
@@ -521,7 +622,7 @@ node_start :: proc(e: ^Engine, w: ^Worker, k: int) {
 	s := e.song
 	nd := &e.nodes[k]
 	nd.started = true
-	slice.zero(e.dirty[CHUNK_BLOCKS * k:][:CHUNK_BLOCKS])
+	slice.zero(e.dirty[RING * CHUNK_BLOCKS * k:][:RING * CHUNK_BLOCKS])
 	NODE_RUNS[s.nodes[k].kind].start(e, w, k, e.cursor + nd.lead)
 	for i in nd.inputs.first ..< base.span_end(nd.inputs) {
 		x := &e.edges[i]
@@ -531,54 +632,119 @@ node_start :: proc(e: ^Engine, w: ^Worker, k: int) {
 	}
 }
 
-// The song's next `n` samples (at most CHUNK): every started node into its
-// chunk, a node once what feeds it has (a track its voices and chain, a bus
-// its inputs and chain), the master's last (mastered unless `no_master`;
-// `master` false: only the nodes before it, a seek's walk); on the pool's
-// threads when it has them. Returns the master's chunk.
-@(private = "file")
-walk_chunk :: proc(e: ^Engine, n: int, master := true) -> ([]f32, []f32) {
-	e.chunk = {n, master}
-	if p := &e.pool; len(p.threads) > 0 {
-		p.head, p.tail = 0, 0
-		sync.atomic_store(&p.left, len(e.nodes))
-		copy(p.waiting, p.inputs)
-		for k in e.order {
-			if p.inputs[k] == 0 {
-				pool_ready(p, k)
-			}
-		}
-		sync.sema_wait(&p.done)
-	} else {
-		w := &e.workers[0]
-		context.temp_allocator = virtual.arena_allocator(&w.temp)
-		for k in e.order {
-			node_chunk(e, w, int(k))
-			free_all(context.temp_allocator)
-		}
-	}
-	e.cursor += i64(n)
-	return chunk_of(e, int(song.master_node(e.song)), n)
+// Where a walk hands each chunk as it is made: into the mix (and the stems,
+// when given) from the walk's first sample, or, with a sink, to it in order
+// (the mix as the master made it, the stems through `scratch`: a chunk each).
+Walk_Out :: struct {
+	l, r:    []f32,
+	stems:   [][2][]f32,
+	sink:    Sink,
+	at:      i64, // the sink's `at` of the walk's first sample
+	scratch: [][2][]f32,
 }
 
-// Node k over the chunk, a block at a time.
+// The song's next `n` samples, in chunks: every started node makes each, a
+// chunk once what feeds it has (a track its voices and chain, a bus its
+// inputs and chain), the master's last (mastered unless `no_master`;
+// `master` false: only the nodes before it, a seek's walk), each chunk handed
+// to `out` as the last node makes it. On the caller's pool, one map of loops.
+@(private = "file")
+walk :: proc(e: ^Engine, n: int, master: bool, out: ^Walk_Out) {
+	f := &e.flow
+	chunks := (n + CHUNK - 1) / CHUNK
+	f.chunks, f.frames, f.master, f.out = chunks, n, master, out
+	if e.pool == nil || len(e.workers) == 1 {
+		w := &e.workers[0]
+		context.temp_allocator = virtual.arena_allocator(&w.temp)
+		for c in 0 ..< chunks {
+			flow_chunk(e, w, c)
+			for k in e.order {
+				node_chunk(e, w, int(k))
+				free_all(context.temp_allocator)
+			}
+			take(e, c, out)
+		}
+		e.cursor += i64(n)
+		return
+	}
+	f.taken, f.taking, f.head, f.tail = 0, 0, 0, 0
+	for c in 0 ..< RING {
+		f.left[c] = c < chunks ? i32(len(e.nodes)) : 0
+	}
+	slice.zero(f.made)
+	slice.zero(f.queued)
+	for k in e.order {
+		flow_try(e, int(k))
+	}
+	e.pool.run(e.pool, len(e.workers), flow_range, e)
+	e.cursor += i64(n)
+}
+
+// Chunk c of the walk to `out`: the master's, and each stem's at its
+// placement's level (silence where it made none).
+@(private = "file")
+take :: proc(e: ^Engine, c: int, out: ^Walk_Out) {
+	if out == nil {
+		return
+	}
+	slot := c % RING
+	at := c * CHUNK
+	n := min(CHUNK, e.flow.frames - at)
+	ml, mr := chunk_of(e, slot, int(song.master_node(e.song)), n)
+	stems := out.stems
+	o := at
+	if out.sink.take != nil {
+		stems, o = out.scratch, 0
+	} else {
+		copy(out.l[at:], ml)
+		copy(out.r[at:], mr)
+	}
+	first := len(e.song.tracks)
+	for st, p in stems {
+		g := e.stem_gain[p]
+		for j := 0; j * BLOCK < n; j += 1 {
+			m := min(BLOCK, n - j * BLOCK)
+			b := o + j * BLOCK
+			if e.dirty[((first + p) * RING + slot) * CHUNK_BLOCKS + j] {
+				sl, sr := slot_block(e, slot, first + p, j, m)
+				for i in 0 ..< m {
+					st[0][b + i] = sl[i] * g
+					st[1][b + i] = sr[i] * g
+				}
+			} else {
+				slice.zero(st[0][b:][:m])
+				slice.zero(st[1][b:][:m])
+			}
+		}
+	}
+	if out.sink.take != nil {
+		views := make([][2][]f32, len(stems), context.temp_allocator)
+		for st, p in stems {
+			views[p] = {st[0][:n], st[1][:n]}
+		}
+		out.sink.take(out.sink.data, out.at + i64(at), ml, mr, views)
+	}
+}
+
+// Node k over a worker's chunk, a block at a time.
 @(private = "file")
 node_chunk :: proc(e: ^Engine, w: ^Worker, k: int) {
 	nd := &e.nodes[k]
 	kind := e.song.nodes[k].kind
-	n := e.chunk.frames
+	n := w.frames
 	for j := 0; j * BLOCK < n; j += 1 {
 		m := min(BLOCK, n - j * BLOCK)
-		l, r := node_block(e, k, j, m)
+		l, r := node_block(e, w, k, j, m)
+		dirty := &e.dirty[(k * RING + w.slot) * CHUNK_BLOCKS + j]
 		if !nd.started {
-			e.dirty[CHUNK_BLOCKS * k + j] = false
+			dirty^ = false
 			continue
 		}
-		if kind == .Master && !e.chunk.master {
+		if kind == .Master && !w.master {
 			continue
 		}
 		w.key_l, w.key_r = node_keys(e, w, k, j, m)
-		e.dirty[CHUNK_BLOCKS * k + j] = NODE_RUNS[kind].block(e, w, k, j, l, r)
+		dirty^ = NODE_RUNS[kind].block(e, w, k, j, l, r)
 	}
 }
 
@@ -629,16 +795,16 @@ sum_start :: proc(e: ^Engine, w: ^Worker, k: int, at: i64) {
 
 @(private = "file")
 sum_block :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32) -> bool {
-	heard := node_inputs(e, k, j, l, r)
+	heard := node_inputs(e, w, k, j, l, r)
 	return e.nodes[k].chain.count > 0 ? node_chain_run(e, w, k, j, l, r, heard) : heard
 }
 
 // A placement's: what its song plays, at its level, ducked, windowed.
 @(private = "file")
 song_block :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32) -> bool {
-	heard := node_inputs(e, k, j, l, r)
+	heard := node_inputs(e, w, k, j, l, r)
 	if heard {
-		placement_block(e, k, j, l, r)
+		placement_block(e, w, k, j, l, r)
 	}
 	return heard
 }
@@ -647,34 +813,41 @@ song_block :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32) -> bool 
 // owner runs the master).
 @(private = "file")
 master_node_block :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32) -> bool {
-	node_inputs(e, k, j, l, r)
+	node_inputs(e, w, k, j, l, r)
 	if !e.no_master && master_run_active(&e.master) {
 		master_run_block(&e.master, l, r)
 	}
 	return true
 }
 
-// Block j of node k's chunk, n samples of it.
+// Block j of node k's chunk in ring slot `slot`, n samples of it.
 @(private = "file")
-node_block :: #force_inline proc(e: ^Engine, k, j, n: int) -> ([]f32, []f32) {
-	return e.blocks[2 * CHUNK * k + j * BLOCK:][:n], e.blocks[2 * CHUNK * k + CHUNK + j * BLOCK:][:n]
+slot_block :: #force_inline proc(e: ^Engine, slot, k, j, n: int) -> ([]f32, []f32) {
+	at := (k * RING + slot) * 2 * CHUNK + j * BLOCK
+	return e.blocks[at:][:n], e.blocks[at + CHUNK:][:n]
 }
 
-// Node k's chunk, its first n samples.
+// Block j of node k's chunk, the one the worker runs.
 @(private = "file")
-chunk_of :: #force_inline proc(e: ^Engine, k, n: int) -> ([]f32, []f32) {
-	return e.blocks[2 * CHUNK * k:][:n], e.blocks[2 * CHUNK * k + CHUNK:][:n]
+node_block :: #force_inline proc(e: ^Engine, w: ^Worker, k, j, n: int) -> ([]f32, []f32) {
+	return slot_block(e, w.slot, k, j, n)
 }
 
-// The song sample block j of the chunk starts at.
+// Node k's chunk in ring slot `slot`, its first n samples.
 @(private = "file")
-block_at :: #force_inline proc(e: ^Engine, j: int) -> i64 {
-	return e.cursor + i64(j * BLOCK)
+chunk_of :: #force_inline proc(e: ^Engine, slot, k, n: int) -> ([]f32, []f32) {
+	return slot_block(e, slot, k, 0, n)
+}
+
+// The song sample block j of the worker's chunk starts at.
+@(private = "file")
+block_at :: #force_inline proc(w: ^Worker, j: int) -> i64 {
+	return w.at + i64(j * BLOCK)
 }
 
 @(private = "file")
-dirty_at :: #force_inline proc(e: ^Engine, k, j: int) -> bool {
-	return e.dirty[CHUNK_BLOCKS * k + j]
+dirty_at :: #force_inline proc(e: ^Engine, w: ^Worker, k, j: int) -> bool {
+	return e.dirty[(k * RING + w.slot) * CHUNK_BLOCKS + j]
 }
 
 // A bus's or a return's chain over its block (its input summed in place):
@@ -685,7 +858,7 @@ dirty_at :: #force_inline proc(e: ^Engine, k, j: int) -> bool {
 node_chain_run :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32, heard: bool) -> (wrote: bool) {
 	nd := &e.nodes[k]
 	n := len(l)
-	start := block_at(e, j) + nd.lead + nd.latency // its input's song sample at l[0]
+	start := block_at(w, j) + nd.lead + nd.latency // its input's song sample at l[0]
 	if !heard && start >= nd.awake_until {
 		return false // asleep, nothing coming: its block is the input's silence
 	}
@@ -743,10 +916,10 @@ node_keys :: proc(e: ^Engine, w: ^Worker, k, j, n: int) -> ([]f32, []f32) {
 			slice.zero(kr)
 			found = true
 		}
-		if !dirty_at(e, int(x.from), j) {
+		if !dirty_at(e, w, int(x.from), j) {
 			continue
 		}
-		sl, sr := node_block(e, int(x.from), j, n)
+		sl, sr := node_block(e, w, int(x.from), j, n)
 		for i in 0 ..< n {
 			kl[i] += sl[i] * x.gain
 			kr[i] += sr[i] * x.gain
@@ -761,7 +934,7 @@ node_keys :: proc(e: ^Engine, w: ^Worker, k, j, n: int) -> ([]f32, []f32) {
 // A node's input: its edges' sources summed in edge order, each at its gain
 // (through its delay line where it has one). Whether any sound came in.
 @(private = "file")
-node_inputs :: proc(e: ^Engine, k: int, j: int, l, r: []f32) -> bool {
+node_inputs :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32) -> bool {
 	s := e.song
 	n := len(l)
 	slice.zero(l)
@@ -774,8 +947,8 @@ node_inputs :: proc(e: ^Engine, k: int, j: int, l, r: []f32) -> bool {
 		if x.kind != .Audio || run.looped {
 			continue
 		}
-		sl, sr := node_block(e, int(x.from), j, n)
-		sounds := dirty_at(e, int(x.from), j)
+		sl, sr := node_block(e, w, int(x.from), j, n)
+		sounds := dirty_at(e, w, int(x.from), j)
 		if run.delay > 0 {
 			// written at the source's time, read `delay` behind it
 			size := i64(run.ring.count / 2)
@@ -814,10 +987,10 @@ node_inputs :: proc(e: ^Engine, k: int, j: int, l, r: []f32) -> bool {
 // A placement's node over a block of what its song plays: its level, its
 // duck under the voice, its window (`at`: the song sample of l[0]).
 @(private = "file")
-placement_block :: proc(e: ^Engine, k: int, j: int, l, r: []f32) {
+placement_block :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32) {
 	s := e.song
 	pl := s.placements[s.nodes[k].ref]
-	at := block_at(e, j) + e.nodes[k].lead
+	at := block_at(w, j) + e.nodes[k].lead
 	if g := f32(base.db_to_gain(pl.gain_db)); g != 1 {
 		for i in 0 ..< len(l) {
 			l[i] *= g
@@ -966,31 +1139,26 @@ reset_fx :: proc(e: ^Engine, k: int, f: Fx_Run, at: i64) {
 // returns, then the buses), as long as l, what goes into the master), on
 // the caller's thread: for a preview playing, or a frame.
 engine_process :: proc(e: ^Engine, l, r: []f32, stems: [][2][]f32 = nil) {
-	first := len(e.song.tracks)
-	for done := 0; done < len(l); {
-		n := min(len(l) - done, CHUNK)
-		ml, mr := walk_chunk(e, n)
-		for st, p in stems {
-			g := e.stem_gain[p]
-			for j := 0; j * BLOCK < n; j += 1 {
-				m := min(BLOCK, n - j * BLOCK)
-				at := done + j * BLOCK
-				if dirty_at(e, first + p, j) {
-					sl, sr := node_block(e, first + p, j, m)
-					for i in 0 ..< m {
-						st[0][at + i] = sl[i] * g
-						st[1][at + i] = sr[i] * g
-					}
-				} else {
-					slice.zero(st[0][at:][:m])
-					slice.zero(st[1][at:][:m])
-				}
-			}
-		}
-		copy(l[done:], ml)
-		copy(r[done:], mr)
-		done += n
+	out := Walk_Out{l = l, r = r, stems = stems}
+	walk(e, len(l), true, &out)
+}
+
+// The next `frames` samples handed to `sink` a chunk at a time, in order (its
+// `at` counted from where they start), with each stem when `stems`: an
+// export's. The sink is called on whichever thread makes the chunk, one call
+// at a time.
+engine_stream :: proc(e: ^Engine, frames: int, sink: Sink, stems: bool) {
+	heap := runtime.heap_allocator()
+	parts := stems ? stem_count(e.song) : 0
+	slab := make([]f32, 2 * CHUNK * parts, heap)
+	defer delete(slab, heap)
+	scratch := make([][2][]f32, parts, heap)
+	defer delete(scratch, heap)
+	for p in 0 ..< parts {
+		scratch[p] = {slab[2 * CHUNK * p:][:CHUNK], slab[2 * CHUNK * p + CHUNK:][:CHUNK]}
 	}
+	out := Walk_Out{sink = sink, scratch = scratch}
+	walk(e, frames, true, &out)
 }
 
 // Stem `p`'s name, for a file: a part's own ("drums"), a return's or a

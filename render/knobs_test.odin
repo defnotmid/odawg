@@ -112,7 +112,7 @@ knob_hit :: proc(t: ^testing.T, ref: Knob_Ref, knobs: bool) -> (db, centroid: f3
 	for f in s.findings {
 		testing.expectf(t, f.severity != .Error, "%s %s: %s", ref.machine, ref.pad, f.message)
 	}
-	out := output_from_song(s, {threads = 1})
+	out := output_from_song(s, {})
 	return hit_measure(out)
 }
 

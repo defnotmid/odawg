@@ -8,7 +8,8 @@ import "core:math"
 import "core:mem/virtual"
 import "core:os"
 import "core:strings"
-import "core:thread"
+import common "deps:odecs/common"
+import "core:sync"
 
 // Loading: a set's files decoded (by odecs's audio, any format it reads),
 // at most stereo, resampled to device.RATE once (through a Kaiser-windowed
@@ -312,7 +313,7 @@ bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Ne
 			jobs[k].path, jobs[k].name, jobs[k].hosted = host_path(host, bf.path), bf.url != "" ? bf.url : bf.path, bf.url == "" && host != nil && host.read != nil
 		}
 	}
-	decode_all(jobs)
+	decode_all(jobs, host != nil ? host.pool : nil)
 	for &j, k in jobs {
 		w := wanted[k]
 		if w.file < 0 {
@@ -371,7 +372,7 @@ Decode_Job :: struct {
 
 // Decodes the jobs on every core (a scratch arena each for the file).
 @(private = "file")
-decode_all :: proc(jobs: []Decode_Job) {
+decode_all :: proc(jobs: []Decode_Job, pool: ^common.Work_Pool) {
 	run :: proc(j: ^Decode_Job) {
 		if j.file < 0 {
 			return
@@ -454,22 +455,28 @@ decode_all :: proc(jobs: []Decode_Job) {
 			j.loop_to = frames_at_rate(j.loop_to, j.rate)
 		}
 	}
-	workers := min(len(jobs), max(1, os.get_processor_core_count()))
-	if workers <= 1 {
-		for &j in jobs {
-			run(&j)
+	// the files by a shared cursor (their sizes differ), on the host's pool
+	Decodes :: struct {
+		jobs: []Decode_Job,
+		next: int,
+		run:  proc(j: ^Decode_Job),
+	}
+	decodes := Decodes{jobs, 0, run}
+	each :: proc(data: rawptr, first, end: int) {
+		d := (^Decodes)(data)
+		for {
+			i := sync.atomic_add(&d.next, 1)
+			if i >= len(d.jobs) {
+				return
+			}
+			d.run(&d.jobs[i])
 		}
-		return
 	}
-	heap := runtime.heap_allocator()
-	pool: thread.Pool
-	thread.pool_init(&pool, heap, workers)
-	for &j in jobs {
-		thread.pool_add_task(&pool, heap, proc(t: thread.Task) {run((^Decode_Job)(t.data))}, &j)
+	if pool == nil || len(jobs) <= 1 {
+		each(&decodes, 0, 1)
+	} else {
+		pool.run(pool, len(jobs), each, &decodes)
 	}
-	thread.pool_start(&pool)
-	thread.pool_finish(&pool)
-	thread.pool_destroy(&pool)
 }
 
 // Declares the named sets and loads all of them (every key): for listening

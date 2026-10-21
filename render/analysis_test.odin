@@ -63,7 +63,9 @@ test_analyzer_is_table :: proc(t: ^testing.T) {
 	add_examples(sp, &findings)
 	s := new(song.Song)
 	testing.expect(t, song.song_from_spec(sp, s))
-	whole := output_from_song(s, {threads = 2})
+	tp1 := test_pool(2)
+	defer test_pool_free(tp1)
+	whole := output_from_song(s, {pool = &tp1.work_pool})
 	STEP :: 4800
 	kinds := [3]Table_Kind{.Bands, .Stereo, .Crest}
 	for kind in kinds {

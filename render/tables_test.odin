@@ -43,7 +43,9 @@ test_tables :: proc(t: ^testing.T) {
 	defer table_destroy(&peaks)
 	testing.expect(t, table_stale(s, &energy))
 	tables := []^Table{&energy, &spectrum, &peaks}
-	tables_build(s, tables, 4)
+	tp11 := test_pool(4)
+	defer test_pool_free(tp11)
+	tables_build(s, tables, &tp11.work_pool)
 	testing.expect(t, !table_stale(s, &energy))
 	whole := output_from_song(s, {to = f64(energy.frames) / RATE, stems = true})
 	defer output_destroy(&whole)
@@ -155,8 +157,12 @@ test_tables_shape :: proc(t: ^testing.T) {
 	// with the mix's table too, both its spans are the render's
 	mix: Table
 	table_init(&mix, s, .Peaks, -1, 256, 1, allocator = context.temp_allocator)
-	tables_build(s, {&lead, &mix}, 3)
-	whole := output_from_song(s, {to = f64(lead.frames) / RATE, stems = true, threads = 2}, context.temp_allocator)
+	tp12 := test_pool(3)
+	defer test_pool_free(tp12)
+	tables_build(s, {&lead, &mix}, &tp12.work_pool)
+	tp13 := test_pool(2)
+	defer test_pool_free(tp13)
+	whole := output_from_song(s, {to = f64(lead.frames) / RATE, stems = true, pool = &tp13.work_pool}, context.temp_allocator)
 	st := whole.stems[song.part_index(s, "lead")]
 	worst: f32
 	rows := 0
@@ -192,7 +198,9 @@ test_tables_shape :: proc(t: ^testing.T) {
 		at := 2 * whole.frames * (1 + p)
 		st = {buf[at:][:whole.frames], buf[at + whole.frames:][:whole.frames]}
 	}
-	export_into(s, {threads = 3}, into_mix, into_parts)
+	tp14 := test_pool(3)
+	defer test_pool_free(tp14)
+	export_into(s, {pool = &tp14.work_pool}, into_mix, into_parts)
 	for v, i in into_mix[0] {
 		same_samples := v == whole.left[i] && into_parts[0][1][i] == whole.stems[0][1][i]
 		if !same_samples {

@@ -77,7 +77,9 @@ test_routes :: proc(t: ^testing.T) {
 		}
 	}
 	testing.expect(t, keyed)
-	out := output_from_song(s, {stems = true, threads = 2})
+	tp5 := test_pool(2)
+	defer test_pool_free(tp5)
+	out := output_from_song(s, {stems = true, pool = &tp5.work_pool})
 	defer output_destroy(&out)
 	testing.expect_value(t, len(out.stems), stem_count(s))
 	testing.expect_value(t, stem_count(s), len(s.parts) + len(s.returns) + 1)
@@ -102,7 +104,9 @@ test_routes :: proc(t: ^testing.T) {
 			lead: { instrument: "pluck", play: [ { name: "a", notes: "C5 E5 G5 -" } ] },
 			pad: { instrument: "pad", effects: [ { name: "Compressor", threshold: -40, ratio: 20, attack: 0.001, release: 0.1 } ],
 				play: [ { name: "a", chords: true } ] } } }`, &arena)
-	other := output_from_song(unkeyed, {stems = true, threads = 2})
+	tp6 := test_pool(2)
+	defer test_pool_free(tp6)
+	other := output_from_song(unkeyed, {stems = true, pool = &tp6.work_pool})
 	defer output_destroy(&other)
 	beat := RATE / 2 // 120 bpm
 	energy :: proc(x: []f32) -> f32 {
@@ -135,7 +139,7 @@ test_route_loop :: proc(t: ^testing.T) {
 		parts: {
 			looped: { instrument: "pluck", to: "x", play: [ { name: "a", notes: "C5 E5" } ] },
 			heard: { instrument: "pluck", play: [ { name: "a", notes: "G5 - - -" } ] } } }`, &arena)
-	out := output_from_song(s, {stems = true, threads = 1})
+	out := output_from_song(s, {stems = true})
 	defer output_destroy(&out)
 	loops := 0
 	named := false
@@ -162,7 +166,7 @@ test_return_sleeps :: proc(t: ^testing.T) {
 	s := compose_text(t, `{ bpm: 120, sections: [ { name: "a", duration: "1m" }, { name: "gap", duration: "4m" }, { name: "b", duration: "1m" } ],
 		returns: { hall: [ { name: "Reverb", decay: 0.5 } ] },
 		parts: { lead: { instrument: "pluck", sends: { hall: -6 }, play: [ { name: "a", notes: "C5" }, { name: "b", notes: "E5" } ] } } }`, &arena)
-	whole := output_from_song(s, {threads = 1})
+	whole := output_from_song(s, {})
 	defer output_destroy(&whole)
 	e: Engine
 	testing.expect(t, engine_init(&e, s))
@@ -196,7 +200,7 @@ test_route_latency :: proc(t: ^testing.T) {
 		parts: {
 			a: { instrument: "machines/909.json", to: "brick", play: [ { name: "a", steps: { rim: "....x..........." } } ] },
 			b: { instrument: "machines/909.json", play: [ { name: "a", steps: { rim: "....x..........." } } ] } } }`, &arena)
-	out := output_from_song(s, {stems = true, threads = 1})
+	out := output_from_song(s, {stems = true})
 	defer output_destroy(&out)
 	first :: proc(x: []f32) -> int {
 		for v, i in x {
@@ -248,7 +252,7 @@ test_bus_key :: proc(t: ^testing.T) {
 	kick, pump := song.part_node(s, song.part_index(s, "kick")), song.node_from_name(s, "pump")
 	testing.expect(t, pump >= 0 && has_edge(s, kick, pump, .Key))
 	testing.expect(t, !has_edge(s, kick, pump, .Audio))
-	out := output_from_song(s, {stems = true, threads = 1})
+	out := output_from_song(s, {stems = true})
 	defer output_destroy(&out)
 	bus := out.stems[stem_count(s) - 1] // the buses come last
 	rms :: proc(x: []f32) -> f32 {

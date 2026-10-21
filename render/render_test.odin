@@ -7,6 +7,7 @@ import "core:testing"
 import base "../base"
 import spec "../spec"
 import song "../song"
+import common "deps:odecs/common"
 
 @(private = "file")
 SPEC :: `{ key: "A minor", seed: 5, sections: [
@@ -33,9 +34,11 @@ test_render :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	defer virtual.arena_destroy(&arena)
 	s := compose(t, &arena)
-	one := output_from_song(s, {threads = 1, stems = true})
+	one := output_from_song(s, {stems = true})
 	defer output_destroy(&one)
-	many := output_from_song(s, {threads = 8})
+	tp2 := test_pool(8)
+	defer test_pool_free(tp2)
+	many := output_from_song(s, {pool = &tp2.work_pool})
 	defer output_destroy(&many)
 	testing.expect_value(t, one.frames, many.frames)
 	same := true
@@ -63,7 +66,7 @@ test_blocks :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	defer virtual.arena_destroy(&arena)
 	s := compose(t, &arena)
-	whole := output_from_song(s, {threads = 1})
+	whole := output_from_song(s, {})
 	defer output_destroy(&whole)
 	e: Engine
 	testing.expect(t, engine_init(&e, s))
@@ -82,20 +85,36 @@ test_blocks :: proc(t: ^testing.T) {
 	testing.expectf(t, worst == 0, "800-sample blocks differ by %e", worst)
 }
 
-// On any number of threads the export is the same stream, to the sample,
-// stems and all: which worker renders a node, and when, changes nothing.
+// On a pool of any size, or none, the export is the same stream, to the
+// sample, stems and all: which thread renders a node, and when, changes
+// nothing.
 @(test)
 test_threads :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	defer virtual.arena_destroy(&arena)
 	s := compose(t, &arena)
-	one := output_from_song(s, {threads = 1, stems = true})
+	one := output_from_song(s, {stems = true})
 	defer output_destroy(&one)
-	for threads in ([]int{2, 5, 16}) {
-		many := output_from_song(s, {threads = threads, stems = true})
+	for threads in ([]int{1, 2, 5, 16}) {
+		tp := test_pool(threads)
+		defer test_pool_free(tp)
+		many := output_from_song(s, {pool = &tp.work_pool, stems = true})
 		defer output_destroy(&many)
-		testing.expectf(t, slice.equal(one.slab, many.slab), "on %d threads the export differs", threads)
+		testing.expectf(t, slice.equal(one.slab, many.slab), "on a pool of %d threads the export differs", threads)
 	}
+}
+
+// A pool of `threads` workers for a test (odecs's reference Work_Pool); a
+// test's own, since a pool is never run reentrantly.
+test_pool :: proc(threads: int) -> ^common.Static_Pool {
+	p := new(common.Static_Pool)
+	common.init_static_pool(p, threads)
+	return p
+}
+
+test_pool_free :: proc(p: ^common.Static_Pool) {
+	common.destroy_static_pool(p)
+	free(p)
 }
 
 // A range renders the same samples as the whole song does over that range.
@@ -104,10 +123,10 @@ test_range :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	defer virtual.arena_destroy(&arena)
 	s := compose(t, &arena)
-	whole := output_from_song(s, {threads = 1})
+	whole := output_from_song(s, {})
 	defer output_destroy(&whole)
 	from := s.sections[1].start
-	part := output_from_song(s, {from = from, to = from + 2, threads = 1})
+	part := output_from_song(s, {from = from, to = from + 2})
 	defer output_destroy(&part)
 	offset := int(math.round(from * RATE))
 	worst: f32
@@ -126,10 +145,14 @@ test_master :: proc(t: ^testing.T) {
 	defer virtual.arena_destroy(&arena)
 	s := compose(t, &arena)
 	devices, chain, master, gain := len(s.devices), len(s.chain), s.master, s.master_gain_db
-	l := master_export(s, {threads = 4}, .Streaming, {})
+	tp3 := test_pool(4)
+	defer test_pool_free(tp3)
+	l := master_export(s, {pool = &tp3.work_pool}, .Streaming, {})
 	testing.expectf(t, math.abs(l.integrated + 14) < 0.5, "%f LUFS", l.integrated)
 	testing.expectf(t, l.true_peak <= -0.9, "%f dBTP", l.true_peak)
 	testing.expect(t, len(s.devices) == devices && len(s.chain) == chain && s.master == master && s.master_gain_db == gain, "mastering changed the song")
-	again := master_export(s, {threads = 4}, .Streaming, {})
+	tp4 := test_pool(4)
+	defer test_pool_free(tp4)
+	again := master_export(s, {pool = &tp4.work_pool}, .Streaming, {})
 	testing.expectf(t, again.integrated == l.integrated, "mastered again: %f LUFS, first %f", again.integrated, l.integrated)
 }

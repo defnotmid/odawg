@@ -98,7 +98,7 @@ test_inline_set :: proc(t: ^testing.T) {
 	testing.expect(t, bank_load(&bank, needs[:], &findings, nil, &host))
 	testing.expectf(t, !has_code(findings, "asset_unavailable"), "%v", findings)
 	testing.expect_value(t, int(bank.samples[bank.zones[zs.first].sample].rate), 44100)
-	out := render.output_from_song(s, {threads = 1})
+	out := render.output_from_song(s, {})
 	testing.expect(t, render.peak_from_samples(out.left, out.right) > 0.01)
 	// the same files again: nothing new; a file changed: the set again
 	sets := len(bank.sets)

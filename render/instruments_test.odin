@@ -58,7 +58,7 @@ test_rows_render :: proc(t: ^testing.T) {
 		arena: virtual.Arena
 		s := compose_with(t, strings.concatenate({`{ bpm: 120, gain_db: 0, sections: [ { name: "a", duration: "1m" } ],
 			parts: { p: { instrument: "`, name, `", play: [ { name: "a", notes: "C4 E4 G4 -" } ] } } }`}, context.temp_allocator), &arena)
-		out := output_from_song(s, {threads = 1})
+		out := output_from_song(s, {})
 		expect_sound(t, name, out, out.frames)
 		output_destroy(&out)
 		virtual.arena_destroy(&arena)
@@ -69,7 +69,7 @@ test_rows_render :: proc(t: ^testing.T) {
 			arena: virtual.Arena
 			s := compose_with(t, strings.concatenate({`{ bpm: 120, gain_db: 0, sections: [ { name: "a", duration: "1m" } ],
 				parts: { d: { instrument: "`, machine, `", play: [ { name: "a", steps: { `, pad, `: "x..." } } ] } } }`}, context.temp_allocator), &arena)
-			out := output_from_song(s, {threads = 1})
+			out := output_from_song(s, {})
 			expect_sound(t, fmt.tprintf("%s %s", machine, pad), out, out.frames)
 			output_destroy(&out)
 			virtual.arena_destroy(&arena)
@@ -79,7 +79,7 @@ test_rows_render :: proc(t: ^testing.T) {
 	defer virtual.arena_destroy(&arena)
 	s := compose_with(t, `{ bpm: 125, gain_db: 0, key: "A minor", sections: [ { name: "a", duration: "1m", chords: "Am" } ],
 		parts: { acid: { instrument: "instruments/tb303.json", octave: 2, play: [ { name: "a", degrees: "1! . 1 8~ 1 . 5~ 8", subdivision: "16n", duration: "32n." } ] } } }`, &arena)
-	out := output_from_song(s, {threads = 1})
+	out := output_from_song(s, {})
 	defer output_destroy(&out)
 	expect_sound(t, "tb303", out, out.frames)
 }
@@ -106,10 +106,12 @@ test_seek_is_straight :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	defer virtual.arena_destroy(&arena)
 	s := compose_with(t, `{ bpm: 125, key: "A minor", seed: 9, sections: [ { name: "a", duration: "8m", style: "styles/acid_house.json", energy: 1, chords: "Am Am Am G" } ] }`, &arena)
-	straight := output_from_song(s, {threads = 1, stems = true})
+	straight := output_from_song(s, {stems = true})
 	defer output_destroy(&straight)
 	FROM :: 5.37
-	cut := output_from_song(s, {from = FROM, to = f64(straight.frames) / RATE, threads = 3, stems = true})
+	tp7 := test_pool(3)
+	defer test_pool_free(tp7)
+	cut := output_from_song(s, {from = FROM, to = f64(straight.frames) / RATE, pool = &tp7.work_pool, stems = true})
 	defer output_destroy(&cut)
 	offset := int(math.round(FROM * RATE))
 	testing.expect_value(t, cut.frames, straight.frames - offset)
@@ -239,8 +241,10 @@ test_clip :: proc(t: ^testing.T) {
 	song.append_clip(&m, {name = "bed", set = set, start = 1, stop = 50, offset = 2, fade_in = 0.5, fade_out = 1, curve = .Linear})
 	song.mix_end(&m)
 	testing.expect_value(t, m.labels[m.tracks[0].instrument], "Player")
-	straight := output_from_song(&m, {threads = 1})
-	cut := output_from_song(&m, {from = 37, to = f64(straight.frames) / RATE, threads = 3})
+	straight := output_from_song(&m, {})
+	tp8 := test_pool(3)
+	defer test_pool_free(tp8)
+	cut := output_from_song(&m, {from = 37, to = f64(straight.frames) / RATE, pool = &tp8.work_pool})
 	worst := seek_differs(straight, cut, 37)
 	testing.expectf(t, worst == 0, "from a seek the clip differs by %g", worst)
 	// silent before its start; then the source from its offset, faded in
@@ -270,7 +274,7 @@ test_clip :: proc(t: ^testing.T) {
 		found ||= f.path == "bed/effects/2"
 	}
 	testing.expectf(t, found, "a bad effect is a finding at bed/effects/2: %v", fx.findings)
-	filtered := output_from_song(&fx, {threads = 1})
+	filtered := output_from_song(&fx, {})
 	moved: f32
 	for v, i in filtered.left[RATE:2 * RATE] {
 		moved = max(moved, abs(v - straight.left[RATE + i]))
@@ -293,7 +297,7 @@ test_song_placed_sounds_alone :: proc(t: ^testing.T) {
 			lead: { instrument: "PluckSynth", sends: { hall: -6 }, effects: [ { name: "FeedbackDelay", delay_time: "8n", feedback: 0.4, wet: 0.3 } ],
 				play: [ { name: "a", notes: "A4 C5 E5 -", subdivision: "8n" } ] },
 			pad: { instrument: "Synth", effects: [ { name: "Chorus" }, { name: "AutoFilter" } ], play: [ { name: "a", notes: "A3 - C4 -", subdivision: "4n" } ] } } }`, &arena)
-	alone := output_from_song(s, {threads = 1})
+	alone := output_from_song(s, {})
 	length := f64(alone.frames) / RATE
 	for place in ([][2]f64{{1.25, 1.25}, {0.1, 0}}) {
 		at, opens := place[0], place[1]
@@ -301,7 +305,7 @@ test_song_placed_sounds_alone :: proc(t: ^testing.T) {
 		song.mix_init(&m)
 		song.append_song(&m, s, at, "s", 0, {opens, at + length + 1, 0, 0, .Linear})
 		song.mix_end(&m)
-		placed := output_from_song(&m, {threads = 1, from = at, to = at + length})
+		placed := output_from_song(&m, {from = at, to = at + length})
 		testing.expect_value(t, placed.frames, alone.frames)
 		first := -1
 		for v, i in alone.left[:min(alone.frames, placed.frames)] {
@@ -332,7 +336,7 @@ test_song_placed_sounds_alone :: proc(t: ^testing.T) {
 			song.append_song(&m, s, start - offset, "s", -3, {start, stop, 0.2, 0.3, .Linear})
 		}
 		song.mix_end(&m)
-		(as_clip ? &clip : &placed)^ = output_from_song(&m, {threads = 1, to = length})
+		(as_clip ? &clip : &placed)^ = output_from_song(&m, {to = length})
 	}
 	worst: f32
 	for v, i in placed.left {
@@ -362,7 +366,7 @@ test_clip_borrows_i16 :: proc(t: ^testing.T) {
 		m.bank = bank
 		song.append_clip(&m, {name = "render", set = set, start = 0.5, stop = 3.5, offset = 0.25, fade_in = 0.1, fade_out = 0.2})
 		song.mix_end(&m)
-		return output_from_song(&m, {threads = 1})
+		return output_from_song(&m, {})
 	}
 	bank: device.Bank
 	a := play(&bank, device.bank_borrow(&bank, "render", whole))
@@ -401,8 +405,10 @@ test_clip_rate :: proc(t: ^testing.T) {
 		m.bank = &bank
 		song.append_clip(&m, {name = "bed", set = set, start = 1, stop = 9, offset = 4, rate = rate})
 		song.mix_end(&m)
-		straight := output_from_song(&m, {threads = 1})
-		cut := output_from_song(&m, {from = 3.7, to = f64(straight.frames) / RATE, threads = 3})
+		straight := output_from_song(&m, {})
+		tp9 := test_pool(3)
+		defer test_pool_free(tp9)
+		cut := output_from_song(&m, {from = 3.7, to = f64(straight.frames) / RATE, pool = &tp9.work_pool})
 		worst := seek_differs(straight, cut, 3.7)
 		testing.expectf(t, worst == 0, "rate %v: from a seek the clip differs by %g", rate, worst)
 		// past the declick fades, the source at offset + k * rate (a 2x clip
@@ -523,7 +529,7 @@ test_layers :: proc(t: ^testing.T) {
 		cut: { gain_db: 0, instrument: { layers: [ { instrument: `, tone, `, group: 1, off_by: 1 } ] },
 			play: [ { name: "a", events: [ { time: 0, note: "G4", duration: 2 }, { time: 0.5, note: "C4", duration: 0.25 } ] } ] } } }`})
 	s := compose_with(t, text, &arena)
-	out := output_from_song(s, {threads = 1, stems = true})
+	out := output_from_song(s, {stems = true})
 	defer output_destroy(&out)
 	rms :: proc(st: [2][]f32, from, to: f64) -> f32 {
 		a, b := int(from * RATE), min(int(to * RATE), len(st[0]))
@@ -549,7 +555,9 @@ test_layers :: proc(t: ^testing.T) {
 	testing.expectf(t, rms(cut, 0.9, 1.5) < rms(cut, 0.1, 0.4) * 0.01, "off_by: %v %v", rms(cut, 0.9, 1.5), rms(cut, 0.1, 0.4))
 	// the same from an exact seek mid-phrase
 	FROM :: 0.37
-	seg := output_from_song(s, {from = FROM, to = f64(out.frames) / RATE, threads = 3, stems = true})
+	tp10 := test_pool(3)
+	defer test_pool_free(tp10)
+	seg := output_from_song(s, {from = FROM, to = f64(out.frames) / RATE, pool = &tp10.work_pool, stems = true})
 	defer output_destroy(&seg)
 	worst := seek_differs(out, seg, FROM)
 	testing.expectf(t, worst == 0, "from a seek it differs by %g", worst)
