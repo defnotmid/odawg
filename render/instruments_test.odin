@@ -84,26 +84,39 @@ test_rows_render :: proc(t: ^testing.T) {
 	expect_sound(t, "tb303", out, out.frames)
 }
 
-// A render cut into segments (each from engine_seek, on its own thread)
-// is the render played straight through: the 909's notes (each drawing
-// its drift from its own seed, never a running generator, summed in the
-// order of their notes whatever slots they took) to the sample, and the 303's (one voice whose slew and slides carry from note to note:
-// a seek replays the notes its memory holds) within -80 dB, cut mid-phrase
-// and inside its slides.
+// How far a range rendered from an exact seek at `from` strays from the
+// render played straight through over it.
+@(private = "file")
+seek_differs :: proc(straight, cut: Output, from: f64) -> (worst: f32) {
+	offset := int(math.round(from * RATE))
+	for v, i in cut.left {
+		worst = max(worst, abs(v - straight.left[offset + i]), abs(cut.right[i] - straight.right[offset + i]))
+	}
+	return
+}
+
+// A range rendered from an exact seek mid-phrase (inside the 303's slides)
+// is the render played straight through over it: the 909's notes (each
+// drawing its drift from its own seed, never a running generator, summed in
+// the order of their notes whatever slots they took) to the sample, and the
+// 303's (one voice whose slew and slides carry from note to note: a seek
+// replays the notes its memory holds) within -80 dB.
 @(test)
-test_segments_are_straight :: proc(t: ^testing.T) {
+test_seek_is_straight :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	defer virtual.arena_destroy(&arena)
 	s := compose_with(t, `{ bpm: 125, key: "A minor", seed: 9, sections: [ { name: "a", duration: "8m", style: "styles/acid_house.json", energy: 1, chords: "Am Am Am G" } ] }`, &arena)
-	straight := output_from_song(s, {threads = 1, segment = 1000, stems = true})
+	straight := output_from_song(s, {threads = 1, stems = true})
 	defer output_destroy(&straight)
-	cut := output_from_song(s, {threads = 3, segment = 1.37, stems = true})
+	FROM :: 5.37
+	cut := output_from_song(s, {from = FROM, to = f64(straight.frames) / RATE, threads = 3, stems = true})
 	defer output_destroy(&cut)
-	testing.expect_value(t, cut.frames, straight.frames)
-	worst :: proc(a, b: [2][]f32) -> (diff, peak: f32) {
-		for v, i in a[0] {
-			diff = max(diff, abs(v - b[0][i]), abs(a[1][i] - b[1][i]))
-			peak = max(peak, abs(v), abs(a[1][i]))
+	offset := int(math.round(FROM * RATE))
+	testing.expect_value(t, cut.frames, straight.frames - offset)
+	worst :: proc(a, b: [2][]f32, offset: int) -> (diff, peak: f32) {
+		for v, i in b[0] {
+			diff = max(diff, abs(v - a[0][offset + i]), abs(b[1][i] - a[1][offset + i]))
+			peak = max(peak, abs(v), abs(b[1][i]))
 		}
 		return
 	}
@@ -113,10 +126,10 @@ test_segments_are_straight :: proc(t: ^testing.T) {
 		if p < 0 {
 			continue
 		}
-		diff, peak := worst(straight.stems[p], cut.stems[p])
+		diff, peak := worst(straight.stems[p], cut.stems[p], offset)
 		testing.expectf(t, peak > 0.01, "%s: silent", name)
 		limit := name == "drums" ? 0 : peak * 1e-4
-		testing.expectf(t, diff <= limit, "%s: cut into segments it differs by %g (peak %g)", name, diff, peak)
+		testing.expectf(t, diff <= limit, "%s: from a seek it differs by %g (peak %g)", name, diff, peak)
 	}
 }
 
@@ -226,14 +239,10 @@ test_clip :: proc(t: ^testing.T) {
 	song.append_clip(&m, {name = "bed", set = set, start = 1, stop = 50, offset = 2, fade_in = 0.5, fade_out = 1, curve = .Linear})
 	song.mix_end(&m)
 	testing.expect_value(t, m.labels[m.tracks[0].instrument], "Player")
-	straight := output_from_song(&m, {threads = 1, segment = 1000})
-	cut := output_from_song(&m, {threads = 3, segment = 37})
-	testing.expect_value(t, cut.frames, straight.frames)
-	worst: f32
-	for v, i in straight.left {
-		worst = max(worst, abs(v - cut.left[i]), abs(straight.right[i] - cut.right[i]))
-	}
-	testing.expectf(t, worst == 0, "cut into segments the clip differs by %g", worst)
+	straight := output_from_song(&m, {threads = 1})
+	cut := output_from_song(&m, {from = 37, to = f64(straight.frames) / RATE, threads = 3})
+	worst := seek_differs(straight, cut, 37)
+	testing.expectf(t, worst == 0, "from a seek the clip differs by %g", worst)
 	// silent before its start; then the source from its offset, faded in
 	testing.expect_value(t, straight.left[RATE - 1], 0)
 	q := RATE / 4 + 123 // a quarter second in, where the ramp isn't 0
@@ -353,7 +362,7 @@ test_clip_borrows_i16 :: proc(t: ^testing.T) {
 		m.bank = bank
 		song.append_clip(&m, {name = "render", set = set, start = 0.5, stop = 3.5, offset = 0.25, fade_in = 0.1, fade_out = 0.2})
 		song.mix_end(&m)
-		return output_from_song(&m, {threads = 1, segment = 1000})
+		return output_from_song(&m, {threads = 1})
 	}
 	bank: device.Bank
 	a := play(&bank, device.bank_borrow(&bank, "render", whole))
@@ -392,13 +401,10 @@ test_clip_rate :: proc(t: ^testing.T) {
 		m.bank = &bank
 		song.append_clip(&m, {name = "bed", set = set, start = 1, stop = 9, offset = 4, rate = rate})
 		song.mix_end(&m)
-		straight := output_from_song(&m, {threads = 1, segment = 1000})
-		cut := output_from_song(&m, {threads = 3, segment = 37})
-		worst: f32
-		for v, i in straight.left {
-			worst = max(worst, abs(v - cut.left[i]), abs(straight.right[i] - cut.right[i]))
-		}
-		testing.expectf(t, worst == 0, "rate %v: cut into segments the clip differs by %g", rate, worst)
+		straight := output_from_song(&m, {threads = 1})
+		cut := output_from_song(&m, {from = 3.7, to = f64(straight.frames) / RATE, threads = 3})
+		worst := seek_differs(straight, cut, 3.7)
+		testing.expectf(t, worst == 0, "rate %v: from a seek the clip differs by %g", rate, worst)
 		// past the declick fades, the source at offset + k * rate (a 2x clip
 		// runs out of recording at 8 s in, a backwards one at 4 s)
 		off: f32
@@ -541,23 +547,22 @@ test_layers :: proc(t: ^testing.T) {
 	cut := out.stems[song.part_index(s, "cut")]
 	// G4 held to 2 s, C4 at 0.5 s cuts it: after C4 ends only silence
 	testing.expectf(t, rms(cut, 0.9, 1.5) < rms(cut, 0.1, 0.4) * 0.01, "off_by: %v %v", rms(cut, 0.9, 1.5), rms(cut, 0.1, 0.4))
-	// the same, cut into segments
-	seg := output_from_song(s, {threads = 3, segment = 0.37, stems = true})
+	// the same from an exact seek mid-phrase
+	FROM :: 0.37
+	seg := output_from_song(s, {from = FROM, to = f64(out.frames) / RATE, threads = 3, stems = true})
 	defer output_destroy(&seg)
-	worst: f32
-	for v, i in out.left {
-		worst = max(worst, abs(v - seg.left[i]), abs(out.right[i] - seg.right[i]))
-	}
-	testing.expectf(t, worst == 0, "cut into segments it differs by %g", worst)
+	worst := seek_differs(out, seg, FROM)
+	testing.expectf(t, worst == 0, "from a seek it differs by %g", worst)
+	offset := int(math.round(FROM * RATE))
 	for name in ([]string{"sw", "rr", "cut"}) {
 		st, sg := out.stems[song.part_index(s, name)], seg.stems[song.part_index(s, name)]
 		at := -1
 		w: f32
-		for v, i in st[0] {
-			if abs(v - sg[0][i]) > w {
-				w = abs(v - sg[0][i])
+		for v, i in sg[0] {
+			if abs(v - st[0][offset + i]) > w {
+				w = abs(v - st[0][offset + i])
 				if at < 0 && w > 1e-6 {
-					at = i
+					at = offset + i
 				}
 			}
 		}

@@ -2,6 +2,7 @@ package odawg_render
 
 import "core:math"
 import "core:mem/virtual"
+import "core:slice"
 import "core:testing"
 import base "../base"
 import spec "../spec"
@@ -32,9 +33,9 @@ test_render :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	defer virtual.arena_destroy(&arena)
 	s := compose(t, &arena)
-	one := output_from_song(s, {threads = 1, segment = 1000, stems = true})
+	one := output_from_song(s, {threads = 1, stems = true})
 	defer output_destroy(&one)
-	many := output_from_song(s, {threads = 8, segment = 1000})
+	many := output_from_song(s, {threads = 8})
 	defer output_destroy(&many)
 	testing.expect_value(t, one.frames, many.frames)
 	same := true
@@ -62,7 +63,7 @@ test_blocks :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	defer virtual.arena_destroy(&arena)
 	s := compose(t, &arena)
-	whole := output_from_song(s, {threads = 1, segment = 1000})
+	whole := output_from_song(s, {threads = 1})
 	defer output_destroy(&whole)
 	e: Engine
 	testing.expect(t, engine_init(&e, s))
@@ -81,22 +82,20 @@ test_blocks :: proc(t: ^testing.T) {
 	testing.expectf(t, worst == 0, "800-sample blocks differ by %e", worst)
 }
 
-// Cut into time segments (each seeking exactly to its start), the export is
-// the same song: the joins are inaudible.
+// On any number of threads the export is the same stream, to the sample,
+// stems and all: which worker renders a node, and when, changes nothing.
 @(test)
-test_segments :: proc(t: ^testing.T) {
+test_threads :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	defer virtual.arena_destroy(&arena)
 	s := compose(t, &arena)
-	whole := output_from_song(s, {threads = 4, segment = 1000})
-	defer output_destroy(&whole)
-	cut := output_from_song(s, {threads = 4, segment = 1.7})
-	defer output_destroy(&cut)
-	worst: f32
-	for i in 0 ..< whole.frames {
-		worst = max(worst, abs(cut.left[i] - whole.left[i]))
+	one := output_from_song(s, {threads = 1, stems = true})
+	defer output_destroy(&one)
+	for threads in ([]int{2, 5, 16}) {
+		many := output_from_song(s, {threads = threads, stems = true})
+		defer output_destroy(&many)
+		testing.expectf(t, slice.equal(one.slab, many.slab), "on %d threads the export differs", threads)
 	}
-	testing.expectf(t, worst < 1e-3, "segments differ by %f", worst)
 }
 
 // A range renders the same samples as the whole song does over that range.
@@ -105,7 +104,7 @@ test_range :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	defer virtual.arena_destroy(&arena)
 	s := compose(t, &arena)
-	whole := output_from_song(s, {threads = 1, segment = 1000})
+	whole := output_from_song(s, {threads = 1})
 	defer output_destroy(&whole)
 	from := s.sections[1].start
 	part := output_from_song(s, {from = from, to = from + 2, threads = 1})

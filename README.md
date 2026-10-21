@@ -58,7 +58,7 @@ them by their directory names (`import song "deps:odawg/song"`).
 | `assets` | the sample register (every set's source, pinned SHA-256, licence, credit), a song's own sets and SFZ files (sets.odin, sfz.odin; read from its folder or through the host's `Bank_Host`), declaring sets and loading only the zones a song's notes reach (downloaded on first use into the user data folder), decoding (through odecs's audio: WAV, FLAC, Ogg, MP3 and the rest) |
 | `spec` | the spec's flat tables and the one table-driven reader (JSON, or a host's tables as json.Value); instrument rows read into a `Program_Desc` (instruments.odin; the built-in rows in tone_rows.json) |
 | `song` | composing: the form, the arrangement (styles a song names, as files), transitions; the note table and the questions; a mix of songs and clips on one timeline (a host's video); the commands that edit it; the sample keys a song needs |
-| `render` | the engine (a stream: voice pools, effect states, dormant tracks, the master), an export (the stream cut into time segments on every core, handed to a sink in order: a WAV written as it comes, memory), mastering to a target, WAV |
+| `render` | the engine (a stream: voice pools, effect states, dormant tracks, the master), an export (the one stream, its nodes on every core, handed to a sink in order: a WAV written as it comes, memory), mastering to a target, WAV |
 | `check` | the checks, as rows |
 | `tools/odawg` | the command line, its commands as rows |
 
@@ -83,8 +83,7 @@ The rules that keep it this way:
   pre-rolls the effects' tails, which is what lets an export split by time.
 - **No caches, nothing held that isn't asked for.** Music is computed;
   only generated assets (a downloaded sample set) are stored, and never
-  committed. An export holds one wave of segment buffers (a fixed budget),
-  never the song; a song's bank holds the zones its notes play, in 16-bit
+  committed. An export holds one stretch of the stream, never the song; a song's bank holds the zones its notes play, in 16-bit
   at their own channel count; a track between its sounds is dormant (no
   work); a voice slot is its device's state size.
 

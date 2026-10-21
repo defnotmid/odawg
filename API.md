@@ -17,8 +17,9 @@ oksl, odecs and ottis, built the same way:
   effect, play pattern, transition, check, mastering target, command) is a table row and
   its behaviour a rule table; flat tables with spans; `/` names. README.md lists the rules.
 - **Realtime first.** The engine streams any block from anywhere, deterministically and
-  independent of block size; an export is that stream partitioned (time segments × tracks)
-  across cores. No caches: generated assets (a `say` line, a downloaded sample set) are
+  independent of block size and of its thread count: a chunk at a time, each node once
+  what feeds it has, the ready nodes on as many threads as it is given (`engine_init(&e,
+  &song, threads)`); an export is that one stream. No caches: generated assets (a `say` line, a downloaded sample set) are
   stored, music is computed.
 - **Samples download on first use** (`assets/`, like `ottis/assets`): a register table with
   each set's source, pinned SHA-256, licence and credit; never committed.
@@ -529,7 +530,7 @@ song.seconds_from_position(&g, "drop@1m")         // the time grammar; beat_from
 song.pulse_from_seconds(&g, t, {part = "drums", note = "kick"}, 8)
 song.notes_from_filter(&g, {part = "drums", note = "clap", range = "drop"}, &out)
 e: render.Engine                                  // realtime: any block, from anywhere
-render.engine_init(&e, &g); render.engine_seek(&e, at, exact = false); render.engine_process(&e, l, r)
+render.engine_init(&e, &g, threads = 1); render.engine_seek(&e, at, exact = false); render.engine_process(&e, l, r)
 render.export_song(&g, {from, to, stems}, sink)   // the stream on every core, to a sink in order
 render.master_export(&g, opts, .Streaming, sink)  // measured, gained, limited, written
 song.mix_init(&mix); song.append_song(&mix, &g, at, "score", window = w, duck = d); song.append_clip(&mix, clip); song.mix_end(&mix)
@@ -550,7 +551,7 @@ was expanded in, each transition's sound. A part sounds only in its regions and 
 (release, the effect chain's and the returns' tails, overlapping ones merged), so what is
 measured of it takes that shape: a table has rows only there, none for silence. A table holds
 what was measured (min and max per bucket, a frame's energy or magnitudes), never samples,
-and is filled from one streamed export on every core whatever its segments.
+and is filled from one streamed export on every core.
 
 Edits are command rows (`COMMAND_KINDS`: `Part_Gain_Set`, `Part_Pan_Set`, `Part_Mute_Set`,
 `Pad_Gain_Set`, `Param_Set`, `Master_Gain_Set`, and their `_Step`s), each kind's row saying

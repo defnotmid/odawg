@@ -156,7 +156,7 @@ test_tables_shape :: proc(t: ^testing.T) {
 	mix: Table
 	table_init(&mix, s, .Peaks, -1, 256, 1, allocator = context.temp_allocator)
 	tables_build(s, {&lead, &mix}, 3)
-	whole := output_from_song(s, {to = f64(lead.frames) / RATE, stems = true, threads = 2, segment = 1.3}, context.temp_allocator)
+	whole := output_from_song(s, {to = f64(lead.frames) / RATE, stems = true, threads = 2}, context.temp_allocator)
 	st := whole.stems[song.part_index(s, "lead")]
 	worst: f32
 	rows := 0
@@ -192,7 +192,7 @@ test_tables_shape :: proc(t: ^testing.T) {
 		at := 2 * whole.frames * (1 + p)
 		st = {buf[at:][:whole.frames], buf[at + whole.frames:][:whole.frames]}
 	}
-	export_into(s, {threads = 3, segment = 0.9}, into_mix, into_parts)
+	export_into(s, {threads = 3}, into_mix, into_parts)
 	for v, i in into_mix[0] {
 		same_samples := v == whole.left[i] && into_parts[0][1][i] == whole.stems[0][1][i]
 		if !same_samples {

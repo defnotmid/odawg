@@ -530,7 +530,7 @@ run_bench :: proc(a: ^Args) -> bool {
 		out := make([dynamic]f32, context.temp_allocator)
 		x := Sink{&out, a.out != ""}
 		began := time.tick_now()
-		render.export_song(s, {threads = 1, segment = f64(frames) / render.RATE + 1}, {&x, proc(data: rawptr, at: i64, l, r: []f32, stems: [][2][]f32) {
+		render.export_song(s, {threads = 1}, {&x, proc(data: rawptr, at: i64, l, r: []f32, stems: [][2][]f32) {
 			x := (^Sink)(data)
 			if x.keep {
 				for i in 0 ..< len(l) {

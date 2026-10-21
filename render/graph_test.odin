@@ -162,7 +162,7 @@ test_return_sleeps :: proc(t: ^testing.T) {
 	s := compose_text(t, `{ bpm: 120, sections: [ { name: "a", duration: "1m" }, { name: "gap", duration: "4m" }, { name: "b", duration: "1m" } ],
 		returns: { hall: [ { name: "Reverb", decay: 0.5 } ] },
 		parts: { lead: { instrument: "pluck", sends: { hall: -6 }, play: [ { name: "a", notes: "C5" }, { name: "b", notes: "E5" } ] } } }`, &arena)
-	whole := output_from_song(s, {threads = 1, segment = 1000})
+	whole := output_from_song(s, {threads = 1})
 	defer output_destroy(&whole)
 	e: Engine
 	testing.expect(t, engine_init(&e, s))
