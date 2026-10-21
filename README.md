@@ -59,7 +59,7 @@ them by their directory names (`import song "deps:odawg/song"`).
 | `spec` | the spec's flat tables and the one table-driven reader (JSON, or a host's tables as json.Value); instrument rows read into a `Program_Desc` (instruments.odin; the built-in rows in tone_rows.json) |
 | `song` | composing: the form, the arrangement (styles a song names, as files), transitions; the note table and the questions; a mix of songs and clips on one timeline (a host's video); the commands that edit it; the sample keys a song needs |
 | `render` | the engine (a stream: voice pools, effect states, dormant tracks, the master), an export (the one stream, its nodes on every core, handed to a sink in order: a WAV written as it comes, memory), mastering to a target, WAV |
-| `check` | the checks, as rows |
+| `check` | the checks, as rows over what was measured of a render (`Measures`): measured whole (`findings_from_render`) or as it streams, chunk by chunk (`Measuring`, then `findings_from_measures`), the same either way |
 | `tools/odawg` | the command line, its commands as rows |
 
 The rules that keep it this way:
