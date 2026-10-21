@@ -407,29 +407,42 @@ flow_ready :: proc(e: ^Engine, k: int) -> bool {
 	return true
 }
 
-// Queues node k's next chunk if it is ready and not queued yet. Whoever
+// Claims node k's next chunk if it is ready and no one has it yet. Whoever
 // finds it not ready lets it go and looks again, so a chunk made meanwhile
-// (whose maker found it still queued) is never missed.
+// (whose maker found it still claimed) is never missed.
 @(private = "file")
-flow_try :: proc(e: ^Engine, k: int) {
+flow_claim :: proc(e: ^Engine, k: int) -> bool {
 	f := &e.flow
 	for {
 		if _, ok := sync.atomic_compare_exchange_strong(&f.queued[k], 0, 1); !ok {
-			return
+			return false
 		}
 		if flow_ready(e, k) {
-			sync.mutex_lock(&f.mutex)
-			f.queue[f.tail % len(f.queue)] = i32(k)
-			f.tail += 1
-			sync.mutex_unlock(&f.mutex)
-			flow_moved(f)
-			return
+			return true
 		}
 		sync.atomic_store(&f.queued[k], 0)
 		if !flow_ready(e, k) {
-			return
+			return false
 		}
 	}
+}
+
+// Queues node k's next chunk if it can be claimed, waking a loop for it.
+@(private = "file")
+flow_try :: proc(e: ^Engine, k: int) {
+	if flow_claim(e, k) {
+		flow_push(e, k)
+	}
+}
+
+@(private = "file")
+flow_push :: proc(e: ^Engine, k: int) {
+	f := &e.flow
+	sync.mutex_lock(&f.mutex)
+	f.queue[f.tail % len(f.queue)] = i32(k)
+	f.tail += 1
+	sync.mutex_unlock(&f.mutex)
+	flow_moved(f)
 }
 
 @(private = "file")
@@ -439,38 +452,51 @@ flow_moved :: proc(f: ^Flow) {
 }
 
 // A loop of a walk, on worker w, until every chunk is taken: the next chunk
-// in order handed on once made, else a queued node's next chunk, else asleep
-// until something moves on.
+// in order handed on once made, else a node's next chunk (what the last one
+// made ready, kept here: its own next, else the first it feeds; the rest
+// queued for other loops), else asleep until something is queued or can be
+// taken.
 @(private = "file")
 flow_loop :: proc(e: ^Engine, w: ^Worker) {
 	f := &e.flow
 	context.temp_allocator = virtual.arena_allocator(&w.temp)
+	k := -1
 	for {
 		seen := sync.atomic_load(&f.progress)
-		if flow_take(e) {
+		if k < 0 && flow_take(e) {
 			continue
 		}
-		k := -1
-		sync.mutex_lock(&f.mutex)
-		if f.head < f.tail {
-			k = int(f.queue[f.head % len(f.queue)])
-			f.head += 1
+		if k < 0 {
+			sync.mutex_lock(&f.mutex)
+			if f.head < f.tail {
+				k = int(f.queue[f.head % len(f.queue)])
+				f.head += 1
+			}
+			sync.mutex_unlock(&f.mutex)
 		}
-		sync.mutex_unlock(&f.mutex)
 		if k >= 0 {
 			c := int(sync.atomic_load(&f.made[k]))
 			flow_chunk(e, w, c)
 			node_chunk(e, w, k)
-			free_all(context.temp_allocator)
+			temp_reset(w)
 			sync.atomic_add(&f.made[k], 1)
-			sync.atomic_sub(&f.left[c % RING], 1)
 			sync.atomic_store(&f.queued[k], 0)
-			flow_try(e, k)
+			done := sync.atomic_sub(&f.left[c % RING], 1) == 1
+			next := flow_claim(e, k) ? k : -1
 			fd := f.feeds_of[k]
 			for d in f.feeds[fd.first:base.span_end(fd)] {
-				flow_try(e, int(d))
+				if flow_claim(e, int(d)) {
+					if next < 0 {
+						next = int(d)
+					} else {
+						flow_push(e, int(d))
+					}
+				}
 			}
-			flow_moved(f)
+			if done {
+				flow_moved(f) // the chunk can be taken
+			}
+			k = next
 			continue
 		}
 		if int(sync.atomic_load(&f.taken)) >= f.chunks {
@@ -507,6 +533,14 @@ flow_take :: proc(e: ^Engine) -> bool {
 	}
 	flow_moved(f)
 	return true
+}
+
+// A worker's temp memory emptied, when a node used it (emptying zeroes it).
+@(private = "file")
+temp_reset :: #force_inline proc(w: ^Worker) {
+	if w.temp.total_used > 0 {
+		free_all(virtual.arena_allocator(&w.temp))
+	}
 }
 
 // Chunk c of the walk, as a worker runs it.
@@ -662,7 +696,7 @@ walk :: proc(e: ^Engine, n: int, master: bool, out: ^Walk_Out) {
 			flow_chunk(e, w, c)
 			for k in e.order {
 				node_chunk(e, w, int(k))
-				free_all(context.temp_allocator)
+				temp_reset(w)
 			}
 			take(e, c, out)
 		}
@@ -815,7 +849,10 @@ song_block :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32) -> bool 
 // owner runs the master).
 @(private = "file")
 master_node_block :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32) -> bool {
-	node_inputs(e, w, k, j, l, r)
+	if !node_inputs(e, w, k, j, l, r) {
+		slice.zero(l)
+		slice.zero(r)
+	}
 	if !e.no_master && master_run_active(&e.master) {
 		master_run_block(&e.master, l, r)
 	}
@@ -862,7 +899,12 @@ node_chain_run :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32, hear
 	n := len(l)
 	start := block_at(w, j) + nd.lead + nd.latency // its input's song sample at l[0]
 	if !heard && start >= nd.awake_until {
-		return false // asleep, nothing coming: its block is the input's silence
+		return false // asleep, nothing coming: its block untouched
+	}
+	if !heard {
+		// awake, its tail over silence
+		slice.zero(l)
+		slice.zero(r)
 	}
 	sound :: #force_inline proc(l, r: []f32, j: int) -> bool {return l[j] != 0 || r[j] != 0}
 	for i := 0; i < n; {
@@ -934,14 +976,20 @@ node_keys :: proc(e: ^Engine, w: ^Worker, k, j, n: int) -> ([]f32, []f32) {
 }
 
 // A node's input: its edges' sources summed in edge order, each at its gain
-// (through its delay line where it has one). Whether any sound came in.
+// (through its delay line where it has one). Whether any sound came in: only
+// then is its block written (cleared by the first source that sounds), so a
+// silent node touches nothing.
 @(private = "file")
-node_inputs :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32) -> bool {
+node_inputs :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32) -> (heard: bool) {
 	s := e.song
 	n := len(l)
-	slice.zero(l)
-	slice.zero(r)
-	heard := false
+	first :: #force_inline proc(heard: ^bool, l, r: []f32) {
+		if !heard^ {
+			slice.zero(l)
+			slice.zero(r)
+			heard^ = true
+		}
+	}
 	inputs := e.nodes[k].inputs
 	for i in inputs.first ..< base.span_end(inputs) {
 		x := s.edges[i]
@@ -960,30 +1008,37 @@ node_inputs :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32) -> bool
 			if sounds {
 				run.sound = run.pos + i64(n) - 1
 			}
+			// the ring is written whatever comes (what it holds is its
+			// source's past), read only while what it reads may hold sound (a
+			// ring at least delay + BLOCK long: no write here reaches a read)
 			for i in 0 ..< n {
 				t := run.pos + i64(i)
 				rl[t & mask] = sounds ? sl[i] : 0
 				rr[t & mask] = sounds ? sr[i] : 0
-				l[i] += rl[(t - run.delay) & mask] * x.gain
-				r[i] += rr[(t - run.delay) & mask] * x.gain
 			}
-			// heard while what it reads may still hold sound
-			heard ||= run.pos - run.delay <= run.sound
+			if run.pos - run.delay <= run.sound {
+				first(&heard, l, r)
+				for i in 0 ..< n {
+					t := run.pos + i64(i) - run.delay
+					l[i] += rl[t & mask] * x.gain
+					r[i] += rr[t & mask] * x.gain
+				}
+			}
 			run.pos += i64(n)
 			continue
 		}
 		if !sounds {
 			continue
 		}
+		first(&heard, l, r)
 		for i in 0 ..< n {
 			l[i] += sl[i] * x.gain
 		}
 		for i in 0 ..< n {
 			r[i] += sr[i] * x.gain
 		}
-		heard = true
 	}
-	return heard
+	return
 }
 
 // A placement's node over a block of what its song plays: its level, its
@@ -1489,8 +1544,16 @@ track_block :: proc(e: ^Engine, w: ^Worker, ti: int, l, r: []f32) -> (wrote: boo
 	n := len(l)
 	nd := &e.nodes[ti]
 	input := run.cursor + nd.latency
-	slice.zero(l)
-	slice.zero(r)
+	// its block is written only where it plays (and the gaps between, once
+	// it has): a dormant block is left untouched
+	clean := 0
+	clear_to :: #force_inline proc(clean: ^int, to: int, l, r: []f32) {
+		if to > clean^ {
+			slice.zero(l[clean^:to])
+			slice.zero(r[clean^:to])
+			clean^ = to
+		}
+	}
 	p := s.params[t.instrument]
 	mono := device.voice_mono(&p, &e.env)
 	end := base.span_end(t.notes)
@@ -1523,6 +1586,7 @@ track_block :: proc(e: ^Engine, w: ^Worker, ti: int, l, r: []f32) -> (wrote: boo
 			limit := sounding(e, run) ? i64(n) : clamp(nd.awake_until - input, i64(pos), i64(n))
 			next := clamp(next_start(s, run, end) - input, i64(pos), limit)
 			if int(next) > pos {
+				clear_to(&clean, int(next), l, r)
 				play_graphs(e, w, ti, l[pos:next], r[pos:next])
 				pos = int(next)
 			}
@@ -1543,6 +1607,9 @@ track_block :: proc(e: ^Engine, w: ^Worker, ti: int, l, r: []f32) -> (wrote: boo
 			finish_segment(e, w, ti, input + i64(from), l[from:pos], r[from:pos], kl, kr)
 			wrote = true
 		}
+	}
+	if wrote {
+		clear_to(&clean, n, l, r)
 	}
 	run.cursor += i64(n)
 	return
