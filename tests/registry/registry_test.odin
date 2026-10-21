@@ -62,7 +62,7 @@ test_host_kind :: proc(t: ^testing.T) {
 	for f in s.findings {
 		testing.expectf(t, f.severity != .Error, "%s: %s", f.code, f.message)
 	}
-	out := render.output_from_song(s, {threads = 1})
+	out := render.output_from_song(s, {})
 	defer render.output_destroy(&out)
 	testing.expect(t, render.peak_from_samples(out.left, out.right) > 0.1)
 	// 2 bits: -1, -0.5, 0, 0.5, 1 (the mix's master and pan leave the steps' ratios)

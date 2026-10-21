@@ -141,7 +141,7 @@ test_sfz_instrument :: proc(t: ^testing.T) {
 		testing.expect(t, mic != nil && cc != nil && mic.value == 127 && cc.value == 127)
 		testing.expect(t, !song.command_apply(s, {.Param_Set, "p/cc20", 0}))
 	}
-	out := render.output_from_song(s, {threads = 1})
+	out := render.output_from_song(s, {})
 	defer render.output_destroy(&out)
 	// a window's frequency (its zero crossings) and level
 	hear :: proc(out: render.Output, from, to: f64) -> (hz, rms: f64) {
