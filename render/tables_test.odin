@@ -25,7 +25,7 @@ compose :: proc(t: ^testing.T, arena: ^virtual.Arena) -> ^song.Song {
 }
 
 // Every row of a table is what measuring the rendered song at that moment
-// gives, whatever segments the export cut: the mix's energy and spectrum
+// gives, on any pool: the mix's energy and spectrum
 // per frame, a part's peaks per bucket.
 @(test)
 test_tables :: proc(t: ^testing.T) {

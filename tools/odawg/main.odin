@@ -516,7 +516,7 @@ run_inspect :: proc(a: ^Args) -> bool {
 	return !base.has_errors(l.findings[:])
 }
 
-// Each song rendered whole on one core (one segment: no pre-roll), timed:
+// Each song rendered whole on one core (no pool), timed:
 // the realtime factor is seconds of sound per second of that core. With -o
 // the last song's mix is written as raw interleaved f32, to compare runs.
 run_bench :: proc(a: ^Args) -> bool {

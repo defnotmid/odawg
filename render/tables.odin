@@ -20,7 +20,7 @@ import "core:sync"
 // it stale, and the next build fills it again.
 //
 // A row is computed from its own window of samples alone, so a table is the
-// same whatever segments the export cut, and the same as measuring the
+// same however the export was rendered, and the same as measuring the
 // stream at that moment.
 
 Table_Kind :: enum u8 {

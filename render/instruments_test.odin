@@ -218,8 +218,8 @@ test_controls :: proc(t: ^testing.T) {
 
 // A clip (song.append_clip: a program of one Clip node) plays its set as
 // recorded: from its offset, from start to stop on the mix, its fades of
-// their curve; and a render cut into segments is the same, a segment
-// starting deep in a long clip (past 30 s) included.
+// their curve; and a range rendered from an exact seek deep in a long clip
+// (past 30 s) is the same.
 @(test)
 test_clip :: proc(t: ^testing.T) {
 	arena: virtual.Arena
@@ -441,7 +441,7 @@ test_clip_borrows_i16 :: proc(t: ^testing.T) {
 // A clip at a rate reads frame offset + k * rate for its sample k: at 2
 // and 0.5 a slow sine comes out as the sine at those positions (through
 // the kernel), at -1 the source exactly, backwards from the offset, then
-// silence past the recording's start; and each the same cut into segments.
+// silence past the recording's start; and each the same from an exact seek.
 @(test)
 test_clip_rate :: proc(t: ^testing.T) {
 	arena: virtual.Arena
@@ -567,7 +567,7 @@ test_row_option_order :: proc(t: ^testing.T) {
 // Keys in its keyswitch range switch (they don't sound) and later notes
 // play the layers of the last switch; a release layer sounds at each
 // note's end; a round robin alternates; a group whose off_by is itself
-// cuts its earlier voice. A render cut into segments is the same.
+// cuts its earlier voice. A range from an exact seek is the same.
 @(test)
 test_layers :: proc(t: ^testing.T) {
 	arena: virtual.Arena

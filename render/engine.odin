@@ -986,8 +986,8 @@ song_block :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32) -> bool 
 	return heard
 }
 
-// The master: the mix through its Master_Run (not an export segment's: its
-// owner runs the master).
+// The master: the mix through its Master_Run (unless its host runs the
+// master itself: no_master).
 @(private = "file")
 master_node_block :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32) -> bool {
 	if !node_inputs(e, w, k, j, l, r) {
