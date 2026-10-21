@@ -63,12 +63,13 @@ Engine :: struct {
 	fx:        []Fx_Run,
 	fx_bytes:  []u8,
 	// The routing: a run per node (song.nodes), the order they render in,
-	// their chunks (2 x CHUNK each) and whether each block of it holds
-	// sound (CHUNK_BLOCKS a node), and per edge (song.edges) its delay line
-	// (empty: none).
+	// the buffer each holds for each chunk of the ring (-1: none, it wrote
+	// nothing) and whether each block of it holds sound (CHUNK_BLOCKS a
+	// chunk), and per edge (song.edges) its delay line (empty: none).
 	nodes:     []Node_Run,
 	order:     []i32,
-	blocks:    []f32,
+	buffer_of: []i32, // per node and ring slot
+	buffers:   Buffers,
 	dirty:     []bool,
 	edges:     []Edge_Run,
 	rings:     []f32,
@@ -127,6 +128,20 @@ Flow :: struct {
 	out:        ^Walk_Out,
 	progress:   sync.Futex, // bumped as anything moves on: idle loops wait on it
 }
+
+// The chunk buffers (2 x CHUNK each, the left then the right), shared: a
+// node takes one for a chunk only when it may write in it, and every chunk's
+// go back as the chunk is taken (everything has read it then), so what they
+// hold is what sounds at once, never every node's. Slabs of BUFFER_SLAB,
+// more only when more nodes than ever sound at once; the slabs' list has
+// room for all there could be (RING a node), so it never moves.
+Buffers :: struct {
+	slabs: [dynamic][]f32, // the heap's
+	free:  [dynamic]i32,
+	mutex: sync.Mutex,
+}
+
+BUFFER_SLAB :: 16
 
 // A node as the engine runs it. Its output runs `lead` samples ahead of the
 // song cursor (what the lookahead of everything after it needs), its input
@@ -323,7 +338,16 @@ engine_init :: proc(e: ^Engine, s: ^song.Song, pool: ^common.Work_Pool = nil, ma
 		nd.pre = pres[k]
 		nd.tail = i64(math.ceil(node_memory(s, k).state * RATE)) + DORMANT_MARGIN
 	}
-	e.blocks = make([]f32, RING * 2 * CHUNK * len(s.nodes))
+	e.buffer_of = make([]i32, RING * len(s.nodes))
+	slice.fill(e.buffer_of, -1)
+	// at most a buffer per node and slot: room for every slab that could be,
+	// so growing never moves what a reader is looking through
+	most := RING * len(s.nodes)
+	e.buffers.slabs = make([dynamic][]f32, 0, (most + BUFFER_SLAB - 1) / BUFFER_SLAB, runtime.heap_allocator())
+	e.buffers.free = make([dynamic]i32, 0, most + BUFFER_SLAB, runtime.heap_allocator())
+	for _ in 0 ..< (RING * min(len(s.nodes), 32) + BUFFER_SLAB - 1) / BUFFER_SLAB {
+		buffers_grow(&e.buffers)
+	}
 	e.dirty = make([]bool, RING * CHUNK_BLOCKS * len(s.nodes))
 	e.pool = pool
 	// a worker a loop: as many as nodes can run at once, at most the most
@@ -342,11 +366,56 @@ engine_init :: proc(e: ^Engine, s: ^song.Song, pool: ^common.Work_Pool = nil, ma
 }
 
 engine_destroy :: proc(e: ^Engine) {
+	for slab in e.buffers.slabs {
+		delete(slab, runtime.heap_allocator())
+	}
+	delete(e.buffers.slabs)
+	delete(e.buffers.free)
 	for &w in e.workers {
 		virtual.arena_destroy(&w.temp)
 	}
 	virtual.arena_destroy(&e.arena)
 	e^ = {}
+}
+
+@(private = "file")
+buffers_grow :: proc(b: ^Buffers) {
+	first := i32(len(b.slabs) * BUFFER_SLAB)
+	append(&b.slabs, make([]f32, BUFFER_SLAB * 2 * CHUNK, runtime.heap_allocator()))
+	for i := i32(BUFFER_SLAB) - 1; i >= 0; i -= 1 {
+		append(&b.free, first + i)
+	}
+}
+
+// A buffer for node k's chunk in the worker's slot, unless it holds one.
+@(private = "file")
+buffer_take :: proc(e: ^Engine, w: ^Worker, k: int) {
+	at := &e.buffer_of[k * RING + w.slot]
+	if at^ >= 0 {
+		return
+	}
+	b := &e.buffers
+	sync.mutex_lock(&b.mutex)
+	if len(b.free) == 0 {
+		buffers_grow(b)
+	}
+	at^ = pop(&b.free)
+	sync.mutex_unlock(&b.mutex)
+}
+
+// Every buffer of ring slot `slot` back: its chunk was taken.
+@(private = "file")
+buffers_give :: proc(e: ^Engine, slot: int) {
+	b := &e.buffers
+	sync.mutex_lock(&b.mutex)
+	for k in 0 ..< len(e.nodes) {
+		at := &e.buffer_of[k * RING + slot]
+		if at^ >= 0 {
+			append(&b.free, at^)
+			at^ = -1
+		}
+	}
+	sync.mutex_unlock(&b.mutex)
 }
 
 // Each node's sources and feeds (by the edges that aren't a loop's).
@@ -524,6 +593,7 @@ flow_take :: proc(e: ^Engine) -> bool {
 		return false
 	}
 	take(e, c, f.out)
+	buffers_give(e, c % RING)
 	if c + RING < f.chunks {
 		sync.atomic_store(&f.left[c % RING], i32(len(e.nodes)))
 	}
@@ -699,6 +769,7 @@ walk :: proc(e: ^Engine, n: int, master: bool, out: ^Walk_Out) {
 				temp_reset(w)
 			}
 			take(e, c, out)
+			buffers_give(e, c % RING)
 		}
 		e.cursor += i64(n)
 		return
@@ -762,26 +833,96 @@ take :: proc(e: ^Engine, c: int, out: ^Walk_Out) {
 	}
 }
 
-// Node k over a worker's chunk, a block at a time.
+// Node k over a worker's chunk, a block at a time. A node that may not write
+// in it (node_may_write) takes no buffer and runs only what moves on all the
+// same: a track's clock, a delay line's ring, a muted track's unheard play.
 @(private = "file")
 node_chunk :: proc(e: ^Engine, w: ^Worker, k: int) {
 	nd := &e.nodes[k]
 	kind := e.song.nodes[k].kind
 	n := w.frames
+	dirty := e.dirty[(k * RING + w.slot) * CHUNK_BLOCKS:][:CHUNK_BLOCKS]
+	if !nd.started {
+		slice.zero(dirty)
+		return
+	}
+	if kind == .Master && !w.master {
+		return
+	}
+	if !node_may_write(e, w, k) {
+		slice.zero(dirty)
+		switch {
+		case kind == .Track && e.song.tracks[k].muted:
+			track_skip(e, w, k, n)
+		case kind == .Track:
+			e.tracks[k].cursor += i64(n)
+		case:
+			for j := 0; j * BLOCK < n; j += 1 {
+				node_inputs(e, w, k, j, nil, nil) // its delay lines' rings, silence written
+			}
+		}
+		return
+	}
+	buffer_take(e, w, k)
 	for j := 0; j * BLOCK < n; j += 1 {
 		m := min(BLOCK, n - j * BLOCK)
 		l, r := node_block(e, w, k, j, m)
-		dirty := &e.dirty[(k * RING + w.slot) * CHUNK_BLOCKS + j]
-		if !nd.started {
-			dirty^ = false
-			continue
-		}
-		if kind == .Master && !w.master {
-			continue
-		}
 		w.key_l, w.key_r = node_keys(e, w, k, j, m)
-		dirty^ = NODE_RUNS[kind].block(e, w, k, j, l, r)
+		dirty[j] = NODE_RUNS[kind].block(e, w, k, j, l, r)
 	}
+}
+
+// Whether node k may write in the worker's chunk: the master always; a
+// track (not muted) while a voice sounds, its tails are awake, or a note
+// starts in it; a summing node while a source has sound in it, a delay line
+// may read sound, or its chain is awake.
+@(private = "file")
+node_may_write :: proc(e: ^Engine, w: ^Worker, k: int) -> bool {
+	s := e.song
+	nd := &e.nodes[k]
+	n := i64(w.frames)
+	switch s.nodes[k].kind {
+	case .Master:
+		return true
+	case .Track:
+		if s.tracks[k].muted {
+			return false
+		}
+		// as track_block sleeps: awake at its start, a voice sounding, or a
+		// note starting in it
+		run := &e.tracks[k]
+		input := run.cursor + nd.latency
+		if input < nd.awake_until {
+			return true
+		}
+		for slot in run.slots.first ..< base.span_end(run.slots) {
+			if e.slot_note[slot] >= 0 {
+				return true
+			}
+		}
+		end := base.span_end(s.tracks[k].notes)
+		return run.next_note < end && i64(math.round(s.notes.time[run.next_note] * RATE)) < input + n
+	case .Part, .Return, .Bus, .Song:
+		if nd.chain.count > 0 && w.at + nd.lead + nd.latency < nd.awake_until {
+			return true
+		}
+		for i in nd.inputs.first ..< base.span_end(nd.inputs) {
+			x := s.edges[i]
+			run := &e.edges[i]
+			if x.kind != .Audio || run.looped {
+				continue
+			}
+			for j := 0; j * BLOCK < int(n); j += 1 {
+				if dirty_at(e, w, int(x.from), j) {
+					return true
+				}
+			}
+			if run.delay > 0 && run.pos - run.delay <= run.sound {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // How each kind of node runs: put at song sample `at` (its output's: a
@@ -859,11 +1000,13 @@ master_node_block :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32) -
 	return true
 }
 
-// Block j of node k's chunk in ring slot `slot`, n samples of it.
+// Block j of node k's chunk in ring slot `slot`, n samples of it (its
+// buffer's: it holds one where it wrote).
 @(private = "file")
 slot_block :: #force_inline proc(e: ^Engine, slot, k, j, n: int) -> ([]f32, []f32) {
-	at := (k * RING + slot) * 2 * CHUNK + j * BLOCK
-	return e.blocks[at:][:n], e.blocks[at + CHUNK:][:n]
+	b := int(e.buffer_of[k * RING + slot])
+	buf := e.buffers.slabs[b / BUFFER_SLAB][(b % BUFFER_SLAB) * 2 * CHUNK:][:2 * CHUNK]
+	return buf[j * BLOCK:][:n], buf[CHUNK + j * BLOCK:][:n]
 }
 
 // Block j of node k's chunk, the one the worker runs.
@@ -982,7 +1125,7 @@ node_keys :: proc(e: ^Engine, w: ^Worker, k, j, n: int) -> ([]f32, []f32) {
 @(private = "file")
 node_inputs :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32) -> (heard: bool) {
 	s := e.song
-	n := len(l)
+	n := min(BLOCK, w.frames - j * BLOCK)
 	first :: #force_inline proc(heard: ^bool, l, r: []f32) {
 		if !heard^ {
 			slice.zero(l)
@@ -997,8 +1140,11 @@ node_inputs :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32) -> (hea
 		if x.kind != .Audio || run.looped {
 			continue
 		}
-		sl, sr := node_block(e, w, int(x.from), j, n)
 		sounds := dirty_at(e, w, int(x.from), j)
+		sl, sr: []f32
+		if sounds {
+			sl, sr = node_block(e, w, int(x.from), j, n)
+		}
 		if run.delay > 0 {
 			// written at the source's time, read `delay` behind it
 			size := i64(run.ring.count / 2)
