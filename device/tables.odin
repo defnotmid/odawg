@@ -190,8 +190,49 @@ Voice_Env :: struct {
 // (nil: the signal).
 Effect_Proc :: #type proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32, scratch: ^Fx_Scratch)
 Effect_Latency_Proc :: #type proc(p: ^Params) -> int
-// Seconds of sound after the input stops (nil: none).
-Effect_Tail_Proc :: #type proc(p: ^Params) -> f64
+
+// What an effect holds of what it heard, in seconds: how long its output
+// rings on after its input stops (a reverb's tail: what a song's end waits
+// for), and how long until its state no longer depends on older input (what
+// an exact seek pre-rolls, and how long a node stays awake through silence
+// before it may sleep and wake fresh). A filter or a reverb remembers as
+// long as it rings; a compressor rings not at all, but its envelope
+// remembers several of its releases.
+Effect_Memory :: struct {
+	ring:  f64,
+	state: f64, // >= ring
+}
+
+// The kinds of memory an effect has, a rule each (MEMORY_RULES): every
+// effect row names its own. The zero value, .Unset, is a row that doesn't:
+// effect_memory refuses it, and so do the tests.
+Memory_Rule :: enum u8 {
+	Unset,
+	Stateless, // each sample out from its sample in alone
+	Filter, // SVFs at .Frequency and .Q, cascaded by .Rolloff
+	Crossover, // EQ3's Butterworth stages, the slowest at .Low_Frequency
+	Swept_Filter, // AutoFilter's SVFs, the slowest at .Base_Frequency
+	Envelope, // a level follower over .Attack and .Release (Compressor, Limiter)
+	Gate, // a 20 ms peak follower, then a gain over .Attack and .Release
+	Oversampler, // Distortion's half-band filters
+	Echo, // a delay line fed back into itself
+	Chorus, // a swept delay line
+	Reverb,
+}
+
+MEMORY_RULES := [Memory_Rule]proc(p: ^Params) -> Effect_Memory {
+	.Unset        = nil,
+	.Stateless    = proc(p: ^Params) -> Effect_Memory {return {}},
+	.Filter       = memory_filter,
+	.Crossover    = memory_crossover,
+	.Swept_Filter = memory_swept_filter,
+	.Envelope     = memory_envelope,
+	.Gate         = memory_gate,
+	.Oversampler  = memory_oversampler,
+	.Echo         = memory_echo,
+	.Chorus       = memory_chorus,
+	.Reverb       = memory_reverb,
+}
 
 Param_Value :: struct {
 	param: Param,
@@ -211,7 +252,7 @@ Device_Row :: struct {
 	clock:       bool, // its state starts with the song sample its next input is (a reset puts it at `at`)
 	init:        proc(state: []u8), // what a reset sets past zero (nil: nothing)
 	effect_latency: Effect_Latency_Proc, // nil: none
-	effect_tail: Effect_Tail_Proc,
+	memory:      Memory_Rule, // an effect's (MEMORY_RULES)
 }
 
 Device_Kind :: enum u8 {
@@ -239,19 +280,19 @@ FX :: Param_Set{.Wet}
 DEVICE_TABLE := [Device_Kind]Device_Row {
 	.Voice = {name = ""},
 	// effects: Tone's defaults
-	.Filter = {name = "Filter", reads = FX + {.Type, .Frequency, .Q, .Rolloff, .Gain}, defaults = {{.Wet, 1}, {.Type, f32(dsp.Filter_Type.Lowpass)}, {.Frequency, 350}, {.Q, 1}, {.Rolloff, -12}}, effect = effect_filter, state = size_of(Fx_Filter)},
-	.EQ3 = {name = "EQ3", reads = FX + {.Low, .Mid, .High, .Low_Frequency, .High_Frequency}, defaults = {{.Wet, 1}, {.Low_Frequency, 400}, {.High_Frequency, 2500}}, effect = effect_eq3, state = size_of(Fx_EQ3)},
-	.Compressor = {name = "Compressor", reads = FX + {.Threshold, .Ratio, .Knee, .Attack, .Release}, defaults = {{.Wet, 1}, {.Threshold, -24}, {.Ratio, 12}, {.Knee, 30}, {.Attack, 0.003}, {.Release, 0.25}}, effect = effect_compressor, state = size_of(Fx_Compressor)},
-	.Limiter = {name = "Limiter", reads = FX + {.Threshold, .Release}, defaults = {{.Wet, 1}, {.Threshold, -12}, {.Release, 0.1}}, effect = effect_limiter, state = size_of(Fx_Limiter), clock = true, init = init_limiter, effect_latency = latency_limiter, effect_tail = tail_limiter},
-	.Gate = {name = "Gate", reads = FX + {.Threshold, .Attack, .Release}, defaults = {{.Wet, 1}, {.Threshold, -40}, {.Attack, 0.001}, {.Release, 0.1}}, effect = effect_gate, state = size_of(Fx_Gate)},
-	.Reverb = {name = "Reverb", reads = FX + {.Decay, .Pre_Delay}, defaults = {{.Wet, 1}, {.Decay, 1.5}, {.Pre_Delay, 0.01}}, effect = effect_reverb, state = size_of(Fx_Reverb), rings = rings_reverb, clock = true, init = init_reverb, effect_tail = tail_reverb},
-	.Feedback_Delay = {name = "FeedbackDelay", reads = FX + {.Delay_Time, .Feedback}, defaults = {{.Wet, 1}, {.Delay_Time, 0.25}, {.Feedback, 0.125}}, effect = effect_feedback_delay, state = size_of(Fx_Delay), rings = rings_feedback_delay, clock = true, effect_tail = tail_delay},
-	.Ping_Pong_Delay = {name = "PingPongDelay", reads = FX + {.Delay_Time, .Feedback}, defaults = {{.Wet, 1}, {.Delay_Time, 0.25}, {.Feedback, 0.125}}, effect = effect_ping_pong_delay, state = size_of(Fx_Delay), rings = rings_ping_pong_delay, clock = true, effect_tail = tail_delay},
-	.Chorus = {name = "Chorus", reads = FX + {.Frequency, .Delay_Time, .Depth}, defaults = {{.Wet, 0.5}, {.Frequency, 1.5}, {.Delay_Time, 0.0035}, {.Depth, 0.7}}, effect = effect_chorus, state = size_of(Fx_Delay), rings = rings_chorus, clock = true, effect_tail = tail_chorus},
-	.Distortion = {name = "Distortion", reads = FX + {.Distortion}, defaults = {{.Wet, 1}, {.Distortion, 0.4}}, effect = effect_distortion, state = size_of(Fx_Distortion), effect_latency = latency_distortion},
-	.Bit_Crusher = {name = "BitCrusher", reads = FX + {.Bits}, defaults = {{.Wet, 1}, {.Bits, 4}}, effect = effect_bit_crusher, state = 0},
-	.Stereo_Widener = {name = "StereoWidener", reads = FX + {.Width}, defaults = {{.Wet, 1}, {.Width, 0.5}}, effect = effect_stereo_widener, state = 0},
-	.Auto_Filter = {name = "AutoFilter", reads = FX + {.Frequency, .Depth, .Base_Frequency, .Octaves, .Filter_Type, .Filter_Q, .Filter_Rolloff}, defaults = {{.Wet, 1}, {.Frequency, 1}, {.Depth, 1}, {.Base_Frequency, 200}, {.Octaves, 2.6}, {.Filter_Type, f32(dsp.Filter_Type.Lowpass)}, {.Filter_Q, 1}, {.Filter_Rolloff, -12}}, effect = effect_auto_filter, state = size_of(Fx_Auto_Filter), clock = true},
+	.Filter = {name = "Filter", reads = FX + {.Type, .Frequency, .Q, .Rolloff, .Gain}, defaults = {{.Wet, 1}, {.Type, f32(dsp.Filter_Type.Lowpass)}, {.Frequency, 350}, {.Q, 1}, {.Rolloff, -12}}, effect = effect_filter, state = size_of(Fx_Filter), memory = .Filter},
+	.EQ3 = {name = "EQ3", reads = FX + {.Low, .Mid, .High, .Low_Frequency, .High_Frequency}, defaults = {{.Wet, 1}, {.Low_Frequency, 400}, {.High_Frequency, 2500}}, effect = effect_eq3, state = size_of(Fx_EQ3), memory = .Crossover},
+	.Compressor = {name = "Compressor", reads = FX + {.Threshold, .Ratio, .Knee, .Attack, .Release}, defaults = {{.Wet, 1}, {.Threshold, -24}, {.Ratio, 12}, {.Knee, 30}, {.Attack, 0.003}, {.Release, 0.25}}, effect = effect_compressor, state = size_of(Fx_Compressor), memory = .Envelope},
+	.Limiter = {name = "Limiter", reads = FX + {.Threshold, .Release}, defaults = {{.Wet, 1}, {.Threshold, -12}, {.Release, 0.1}}, effect = effect_limiter, state = size_of(Fx_Limiter), clock = true, init = init_limiter, effect_latency = latency_limiter, memory = .Envelope},
+	.Gate = {name = "Gate", reads = FX + {.Threshold, .Attack, .Release}, defaults = {{.Wet, 1}, {.Threshold, -40}, {.Attack, 0.001}, {.Release, 0.1}}, effect = effect_gate, state = size_of(Fx_Gate), memory = .Gate},
+	.Reverb = {name = "Reverb", reads = FX + {.Decay, .Pre_Delay}, defaults = {{.Wet, 1}, {.Decay, 1.5}, {.Pre_Delay, 0.01}}, effect = effect_reverb, state = size_of(Fx_Reverb), rings = rings_reverb, clock = true, init = init_reverb, memory = .Reverb},
+	.Feedback_Delay = {name = "FeedbackDelay", reads = FX + {.Delay_Time, .Feedback}, defaults = {{.Wet, 1}, {.Delay_Time, 0.25}, {.Feedback, 0.125}}, effect = effect_feedback_delay, state = size_of(Fx_Delay), rings = rings_feedback_delay, clock = true, memory = .Echo},
+	.Ping_Pong_Delay = {name = "PingPongDelay", reads = FX + {.Delay_Time, .Feedback}, defaults = {{.Wet, 1}, {.Delay_Time, 0.25}, {.Feedback, 0.125}}, effect = effect_ping_pong_delay, state = size_of(Fx_Delay), rings = rings_ping_pong_delay, clock = true, memory = .Echo},
+	.Chorus = {name = "Chorus", reads = FX + {.Frequency, .Delay_Time, .Depth}, defaults = {{.Wet, 0.5}, {.Frequency, 1.5}, {.Delay_Time, 0.0035}, {.Depth, 0.7}}, effect = effect_chorus, state = size_of(Fx_Delay), rings = rings_chorus, clock = true, memory = .Chorus},
+	.Distortion = {name = "Distortion", reads = FX + {.Distortion}, defaults = {{.Wet, 1}, {.Distortion, 0.4}}, effect = effect_distortion, state = size_of(Fx_Distortion), effect_latency = latency_distortion, memory = .Oversampler},
+	.Bit_Crusher = {name = "BitCrusher", reads = FX + {.Bits}, defaults = {{.Wet, 1}, {.Bits, 4}}, effect = effect_bit_crusher, state = 0, memory = .Stateless},
+	.Stereo_Widener = {name = "StereoWidener", reads = FX + {.Width}, defaults = {{.Wet, 1}, {.Width, 0.5}}, effect = effect_stereo_widener, state = 0, memory = .Stateless},
+	.Auto_Filter = {name = "AutoFilter", reads = FX + {.Frequency, .Depth, .Base_Frequency, .Octaves, .Filter_Type, .Filter_Q, .Filter_Rolloff}, defaults = {{.Wet, 1}, {.Frequency, 1}, {.Depth, 1}, {.Base_Frequency, 200}, {.Octaves, 2.6}, {.Filter_Type, f32(dsp.Filter_Type.Lowpass)}, {.Filter_Q, 1}, {.Filter_Rolloff, -12}}, effect = effect_auto_filter, state = size_of(Fx_Auto_Filter), clock = true, memory = .Swept_Filter},
 }
 
 device_from_name :: proc(name: string) -> (Device_Kind, bool) {
@@ -282,8 +323,13 @@ note_tail :: proc(p: ^Params, n: Note, env: ^Voice_Env = nil) -> f64 {
 	return clamp(tail_graph(p, n, env), 0, max(30, n.duration))
 }
 
-effect_tail :: proc(kind: Device_Kind, p: ^Params) -> f64 {
-	row := &DEVICE_TABLE[kind]
-	return row.effect_tail != nil ? row.effect_tail(p) : 0
+// An effect's memory by its row's rule (an effect without one is a bug in
+// its row: the tests name it).
+effect_memory :: proc(kind: Device_Kind, p: ^Params) -> Effect_Memory {
+	rule := DEVICE_TABLE[kind].memory
+	assert(rule != .Unset, "an effect row without a memory rule")
+	m := MEMORY_RULES[rule](p)
+	m.state = max(m.state, m.ring)
+	return m
 }
 

@@ -78,7 +78,7 @@ rings_from_song :: proc(s: ^song.Song, allocator := context.allocator) -> []f64 
 				after = max(after, ring[x.to])
 			}
 		}
-		ring[k] = node_memory(s, int(k)) + after
+		ring[k] = node_memory(s, int(k)).ring + after
 	}
 	return ring
 }
@@ -113,26 +113,27 @@ prerolls_from_song :: proc(s: ^song.Song, order: []i32, looped: []bool, allocato
 				after = max(after, pre[x.to])
 			}
 		}
-		memory := node_memory(s, int(k))
+		memory := node_memory(s, int(k)).state
 		own := memory > 0 ? i64(math.round(min(memory + 0.5, 8) * RATE)) : 0
 		pre[k] = min(own + after, 12 * RATE)
 	}
 	return pre
 }
 
-// Seconds node k's chain rings after its input (the master's chain runs
-// apart, in its Master_Run: none here).
-node_memory :: proc(s: ^song.Song, k: int) -> f64 {
-	return s.nodes[k].kind == .Master ? 0 : chain_tail(s, song.node_chain(s, k))
+// What node k's chain holds of its input (the master's chain runs apart, in
+// its Master_Run: nothing here): its effects' rings and memories in a row.
+node_memory :: proc(s: ^song.Song, k: int) -> device.Effect_Memory {
+	return s.nodes[k].kind == .Master ? {} : chain_memory(s, song.node_chain(s, k))
 }
 
-chain_tail :: proc(s: ^song.Song, c: base.Span) -> f64 {
-	t := 0.0
+chain_memory :: proc(s: ^song.Song, c: base.Span) -> (m: device.Effect_Memory) {
 	for d in s.chain[c.first:base.span_end(c)] {
 		p := s.params[d]
-		t += device.effect_tail(s.devices[d], &p)
+		e := device.effect_memory(s.devices[d], &p)
+		m.ring += e.ring
+		m.state += e.state
 	}
-	return t
+	return
 }
 
 note_from_row :: proc(s: ^song.Song, i: int) -> device.Note {

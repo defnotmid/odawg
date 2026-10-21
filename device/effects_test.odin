@@ -290,7 +290,7 @@ test_reverb_decay :: proc(t: ^testing.T) {
 	for decay in ([]f32{0.8, 2.5}) {
 		p := params_from_kind(.Reverb)
 		p[.Decay] = decay
-		tail := effect_tail(.Reverb, &p)
+		tail := effect_memory(.Reverb, &p).ring
 		n := int((tail + 0.5) * RATE)
 		l := make([]f32, n)
 		r := make([]f32, n)
@@ -429,18 +429,72 @@ test_filter_responses :: proc(t: ^testing.T) {
 	testing.expectf(t, got < -8 && got > -14, "an octave above the cutoff: %.2f dB", got)
 }
 
-// The tails: a reverb's is its pre-delay and decay, a delay's lasts until
-// its echoes are 60 dB down, the limiter and filters add none.
+// The rings: a reverb's is its pre-delay and decay, a delay's lasts until
+// its echoes are 60 dB down; a level follower rings not at all but
+// remembers its releases.
 @(test)
-test_effect_tails :: proc(t: ^testing.T) {
+test_effect_rings :: proc(t: ^testing.T) {
 	p := params_from_kind(.Reverb)
-	testing.expect_value(t, f32(effect_tail(.Reverb, &p)), f32(1.51))
+	testing.expect_value(t, f32(effect_memory(.Reverb, &p).ring), f32(1.51))
 	d := params_from_kind(.Feedback_Delay)
-	tail := effect_tail(.Feedback_Delay, &d)
+	ring := effect_memory(.Feedback_Delay, &d).ring
 	echoes := math.ln(f64(1e-3)) / math.ln(f64(0.125))
-	testing.expectf(t, tail >= 0.25 * (echoes + 1) && tail < 60, "delay tail %v", tail)
-	l := params_from_kind(.Limiter)
-	testing.expect_value(t, effect_tail(.Limiter, &l), 0)
-	f := params_from_kind(.Filter)
-	testing.expect_value(t, effect_tail(.Filter, &f), 0)
+	testing.expectf(t, ring >= 0.25 * (echoes + 1) && ring < 60, "delay ring %v", ring)
+	c := params_from_kind(.Compressor)
+	m := effect_memory(.Compressor, &c)
+	testing.expect(t, m.ring == 0 && m.state >= 9 * f64(c[.Release]))
+}
+
+// Every effect row names its memory, and keeps to it: two instances heard
+// different pasts (loud noise, silence), then the same input; once its
+// memory has passed they agree (within 40 dB of the past's peak), and once
+// its ring and latency have passed after its input stops, it is silent.
+@(test)
+test_effect_memory :: proc(t: ^testing.T) {
+	for row, kind in DEVICE_TABLE {
+		if row.effect == nil {
+			continue
+		}
+		testing.expectf(t, row.memory != .Unset, "%s names no memory rule", row.name)
+		if row.memory == .Unset {
+			continue
+		}
+		p := params_from_kind(kind)
+		m := effect_memory(kind, &p)
+		latency := row.effect_latency != nil ? int(row.effect_latency(&p)) : 0
+		past := int(RATE) // a second of it
+		same := int(math.ceil(m.state * RATE)) + latency + int(0.1 * RATE)
+		quiet := int(math.ceil(m.ring * RATE)) + latency + int(0.1 * RATE)
+		n := past + same + quiet
+		noise_l, noise_r := fx_test_noise(7, n, 0.7)
+		defer delete(noise_l)
+		defer delete(noise_r)
+		al, ar := make([]f32, n), make([]f32, n)
+		bl, br := make([]f32, n), make([]f32, n)
+		defer delete(al)
+		defer delete(ar)
+		defer delete(bl)
+		defer delete(br)
+		for i in 0 ..< past {
+			al[i], ar[i] = noise_l[i], noise_r[i] // a loud past; b's is silence
+		}
+		for i in past ..< past + same {
+			v := 0.25 * f32(math.sin(math.TAU * 220 * f64(i) / RATE))
+			al[i], ar[i] = v + 0.1 * noise_l[i], v + 0.1 * noise_r[i]
+			bl[i], br[i] = al[i], ar[i]
+		}
+		fx_test_stream(kind, &p, al, ar, 512)
+		fx_test_stream(kind, &p, bl, br, 512)
+		from := past + int(math.ceil(m.state * RATE)) + latency
+		worst: f32
+		for i in from ..< past + same {
+			worst = max(worst, abs(al[i] - bl[i]), abs(ar[i] - br[i]))
+		}
+		testing.expectf(t, base.gain_to_db(f64(worst)) < base.gain_to_db(0.7) - 40, "%s still remembers its past %.3f s on: %.1f dB", row.name, m.state, base.gain_to_db(f64(worst)))
+		loud: f32
+		for i in n - int(0.1 * RATE) ..< n {
+			loud = max(loud, abs(bl[i]), abs(br[i]))
+		}
+		testing.expectf(t, base.gain_to_db(f64(loud)) < base.gain_to_db(0.25) - 40, "%s still sounds %.3f s after its input: %.1f dB", row.name, m.ring, base.gain_to_db(f64(loud)))
+	}
 }

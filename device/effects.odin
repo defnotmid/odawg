@@ -152,6 +152,61 @@ fx_time_coef :: proc "contextless" (seconds: f32) -> f64 {
 	return seconds > 0 ? math.exp(-1 / (f64(seconds) * RATE)) : 0
 }
 
+// ---- memory (MEMORY_RULES) -----------------------------------------------------------
+
+// Time constants a state takes to forget what it held by 80 dB: ln(1e4).
+@(private)
+FX_FORGET :: 9.21
+
+// Seconds `stages` SVFs in a row at `hz` and `q` take to forget their input
+// by 80 dB: FX_FORGET of their slower pole's time constants (an overdamped
+// stage's slow pole is slower than its cutoff), and one more a stage.
+@(private = "file")
+fx_svf_memory :: proc(hz, q: f64, stages: int) -> f64 {
+	d := 1 / (2 * max(q, 0.01))
+	sigma := 2 * math.PI * max(hz, 1) * (d - math.sqrt(max(d * d - 1, 0)))
+	return (FX_FORGET + f64(max(stages, 1) - 1)) / sigma
+}
+
+@(private)
+memory_filter :: proc(p: ^Params) -> Effect_Memory {
+	t := fx_svf_memory(f64(p[.Frequency]), f64(p[.Q]), dsp.rolloff_stages(p[.Rolloff]))
+	return {t, t}
+}
+
+// The low band's chain is the slowest: two Butterworth stages at
+// .Low_Frequency, then the high crossover's allpass.
+@(private)
+memory_crossover :: proc(p: ^Params) -> Effect_Memory {
+	t := fx_svf_memory(f64(p[.Low_Frequency]), math.SQRT_TWO / 2, 3)
+	return {t, t}
+}
+
+// At its lowest cutoff, .Base_Frequency, where it rings longest.
+@(private)
+memory_swept_filter :: proc(p: ^Params) -> Effect_Memory {
+	t := fx_svf_memory(f64(p[.Base_Frequency]), f64(p[.Filter_Q]), dsp.rolloff_stages(p[.Filter_Rolloff]))
+	return {t, t}
+}
+
+// A level follower makes no sound of its own once its input stops, but
+// what it holds forgets over its time constants.
+@(private)
+memory_envelope :: proc(p: ^Params) -> Effect_Memory {
+	return {0, FX_FORGET * f64(max(p[.Attack], 0) + max(p[.Release], 0))}
+}
+
+@(private)
+memory_gate :: proc(p: ^Params) -> Effect_Memory {
+	return {0, FX_FORGET * (0.02 + f64(max(p[.Attack], 0) + max(p[.Release], 0)))}
+}
+
+@(private)
+memory_oversampler :: proc(p: ^Params) -> Effect_Memory {
+	t := f64(FX_DISTORTION_LATENCY) / RATE
+	return {t, t}
+}
+
 // A choice param's index as its enum.
 @(private = "file")
 fx_filter_type :: proc "contextless" (v: f32) -> dsp.Filter_Type {

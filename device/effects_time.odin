@@ -99,9 +99,11 @@ init_reverb :: proc(state: []u8) {
 	fx_header(state, Fx_Reverb).wobble_at = -1
 }
 
-// The reverb's decay (to -60 dB) after its pre-delay.
-tail_reverb :: proc(p: ^Params) -> f64 {
-	return f64(max(p[.Pre_Delay], 0)) + f64(max(p[.Decay], 0.01))
+// The reverb's decay (to -60 dB) after its pre-delay: it rings and
+// remembers as long.
+memory_reverb :: proc(p: ^Params) -> Effect_Memory {
+	t := f64(max(p[.Pre_Delay], 0)) + f64(max(p[.Decay], 0.01))
+	return {t, t}
 }
 
 @(private = "file")
@@ -345,12 +347,13 @@ effect_ping_pong_delay :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_
 
 // A delay's echoes until they are 60 dB down (at most a minute). Counted
 // at two delay times an echo, which a ping-pong needs; a FeedbackDelay is
-// padded more than it sounds.
-tail_delay :: proc(p: ^Params) -> f64 {
+// padded more than it sounds. It remembers as long as it rings.
+memory_echo :: proc(p: ^Params) -> Effect_Memory {
 	d := f64(max(p[.Delay_Time], 0))
 	fb := clamp(f64(p[.Feedback]), 0, 0.99)
 	echoes := fb > 0.001 ? math.ceil(math.ln(f64(1e-3)) / math.ln(fb)) : 0
-	return min(d + 2 * d * (echoes + 1), 60)
+	t := min(d + 2 * d * (echoes + 1), 60)
+	return {t, t}
 }
 
 // ---- Chorus ------------------------------------------------------------------------
@@ -391,6 +394,7 @@ effect_chorus :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32,
 }
 
 // The chorus's longest delay.
-tail_chorus :: proc(p: ^Params) -> f64 {
-	return f64(max(p[.Delay_Time], 0)) * (1 + f64(clamp(p[.Depth], 0, 1)))
+memory_chorus :: proc(p: ^Params) -> Effect_Memory {
+	t := f64(max(p[.Delay_Time], 0)) * (1 + f64(clamp(p[.Depth], 0, 1)))
+	return {t, t}
 }

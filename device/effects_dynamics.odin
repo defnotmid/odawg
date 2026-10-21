@@ -179,9 +179,6 @@ init_limiter :: proc(state: []u8) {
 // The lookahead: 247 samples (5.1 ms) at 48 kHz.
 latency_limiter :: proc(p: ^Params) -> int {return FX_LIMITER_LATENCY}
 
-// The limiter adds nothing after its input beyond its latency.
-tail_limiter :: proc(p: ^Params) -> f64 {return 0}
-
 // A lookahead brickwall limiter whose output's true peak stays at
 // .Threshold (dB), FX_LIMITER_LATENCY samples late (the dry signal is
 // delayed to match). Stages per chunk: the input into the ring; each

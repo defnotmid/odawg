@@ -262,7 +262,7 @@ engine_init :: proc(e: ^Engine, s: ^song.Song) -> bool {
 	pres := prerolls_from_song(s, e.order, looped, context.temp_allocator)
 	for &nd, k in e.nodes {
 		nd.pre = pres[k]
-		nd.tail = i64(math.ceil(node_memory(s, k) * RATE)) + DORMANT_MARGIN
+		nd.tail = i64(math.ceil(node_memory(s, k).state * RATE)) + DORMANT_MARGIN
 	}
 	e.blocks = make([]f32, 2 * BLOCK * len(s.nodes))
 	e.keys = make([]f32, 2 * BLOCK)
