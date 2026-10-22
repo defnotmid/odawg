@@ -135,10 +135,13 @@ FX_LIMITER_RING :: 1024 // a chunk, the latency and the kernel's span
 FX_LIMITER_MASK :: FX_LIMITER_RING - 1
 
 @(private = "file")
-fx_peak_kernel :: proc() -> (kernel: [3][2 * FX_TAPS]f32) {
+FX_PEAK_KERNEL: [3][2 * FX_TAPS]f32
+
+@(init)
+init_fx_peak_kernel :: proc "contextless" () {
 	for ph in 0 ..< 3 {
 		frac := f64(ph + 1) / 4
-		for &v, k in kernel[ph] {
+		for &v, k in FX_PEAK_KERNEL[ph] {
 			x := f64(k - FX_TAPS + 1) - frac
 			v = 1
 			if x != 0 {
@@ -147,7 +150,6 @@ fx_peak_kernel :: proc() -> (kernel: [3][2 * FX_TAPS]f32) {
 			}
 		}
 	}
-	return
 }
 
 @(private)
@@ -195,7 +197,6 @@ effect_limiter :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32
 		f := fx_header(state, Fx_Limiter)
 		n := len(l)
 		ceiling := f32(base.db_to_gain(f64(p[.Threshold])))
-		kernel := fx_peak_kernel()
 		gain := scratch.d[:n]
 
 		for i in 0 ..< n {
@@ -210,7 +211,7 @@ effect_limiter :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32
 				x := &f.input[c]
 				for ph in 0 ..< 3 {
 					sum: f32
-					for tap, k in kernel[ph] {
+					for tap, k in FX_PEAK_KERNEL[ph] {
 						sum += x[(j - FX_TAPS + 1 + i64(k)) & M] * tap
 					}
 					inter = max(inter, abs(sum))

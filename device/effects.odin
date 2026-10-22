@@ -380,19 +380,21 @@ FX_DISTORTION_RING :: 512 // a chunk and both filters' spans
 FX_DISTORTION_MASK :: FX_DISTORTION_RING - 1
 
 @(private = "file")
-fx_halfband :: proc() -> (h: [FX_HALFBAND_TAPS]f64) {
+FX_HALFBAND: [FX_HALFBAND_TAPS]f64
+
+@(init)
+init_fx_halfband :: proc "contextless" () {
 	sum: f64
 	span := f64(FX_HALFBAND_TAPS) + 0.5
-	for &v, k in h {
+	for &v, k in FX_HALFBAND {
 		x := f64(k) + 0.5
 		win := 0.42 + 0.5 * math.cos(math.PI * x / span) + 0.08 * math.cos(2 * math.PI * x / span)
 		v = math.sin(math.PI * x) / (math.PI * x) * win
 		sum += 2 * v
 	}
-	for &v in h {
+	for &v in FX_HALFBAND {
 		v /= sum
 	}
-	return
 }
 
 // Tone's Distortion curve (its WaveShaper clamps the input to -1..1 first).
@@ -424,7 +426,7 @@ effect_distortion :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []
 		D :: FX_DISTORTION_MASK
 		d := fx_header(state, Fx_Distortion)
 		k := f64(p[.Distortion]) * 100
-		h := fx_halfband()
+		h := FX_HALFBAND
 		dry := [2][]f32{scratch.dry_l[:len(l)], scratch.dry_r[:len(l)]}
 		for x, c in ([2][]f32{l, r}) {
 			input := &d.input[c]

@@ -3,6 +3,7 @@ package odawg_song
 import "core:math"
 import "core:strings"
 import base "../base"
+import device "../device"
 import tempo "../tempo"
 import theory "../theory"
 
@@ -268,20 +269,20 @@ matcher_from_filter :: proc(song: ^Song, f: Note_Filter) -> (m: Matcher, ok: boo
 
 @(private = "file")
 matches :: proc(song: ^Song, m: Matcher, i: i32) -> bool {
-	n := song.notes[i]
-	if n.kind != .Attack && !m.made {
+	if song.notes.kind[i] != .Attack && !m.made {
 		return false
 	}
-	if m.part >= 0 && song.tracks[n.track].part != m.part {
+	if m.part >= 0 && song.tracks[song.notes.track[i]].part != m.part {
 		return false
 	}
-	if m.pad != 0 && n.pad != m.pad {
+	if m.pad != 0 && song.notes.pad[i] != m.pad {
 		return false
 	}
-	if m.pitch >= 0 && math.abs(n.pitch - m.pitch) > 0.01 {
+	if m.pitch >= 0 && math.abs(song.notes.pitch[i] - m.pitch) > 0.01 {
 		return false
 	}
-	return n.time >= m.from - 1e-9 && n.time < m.to - 1e-9
+	t := song.notes.time[i]
+	return t >= m.from - 1e-9 && t < m.to - 1e-9
 }
 
 // The notes a track plays as written (not the ones compose made: an SFZ's
@@ -299,6 +300,9 @@ track_note_count :: proc(song: ^Song, track: int) -> int {
 notes_from_filter :: proc(song: ^Song, f: Note_Filter, out: ^[dynamic]i32) -> bool {
 	m := matcher_from_filter(song, f) or_return
 	for i in song.by_time {
+		if song.notes.time[i] >= m.to - 1e-9 {
+			break
+		}
 		if matches(song, m, i) {
 			append(out, i)
 		}
@@ -327,4 +331,77 @@ pulse_from_seconds :: proc(song: ^Song, t: f64, f: Note_Filter, decay: f64) -> f
 		return 0
 	}
 	return math.exp(-decay * (tempo.beat_from_seconds(&song.tempo, t) - last))
+}
+
+// A note's pad name (when pad != 0) or its pitch as a note string.
+note_name :: proc(s: ^Song, pad: u32, pitch: f32) -> string {
+	if pad != 0 {
+		return pad_name(s, pad)
+	}
+	return theory.string_from_pitch(pitch)
+}
+
+// A note sounding at a moment in the song (`held` while its gate is open,
+// ringing during its release tail).
+Sounding_Note :: struct {
+	part:     string,
+	note:     string,
+	time:     f64,
+	velocity: f32,
+	held:     bool,
+}
+
+// All written notes sounding at song seconds `t` (held or in their release tail).
+notes_at :: proc(s: ^Song, t: f64, allocator := context.temp_allocator) -> []Sounding_Note {
+	out := make([dynamic]Sounding_Note, allocator)
+	env := voice_env(s)
+	for tr in s.tracks {
+		p := s.params[tr.instrument]
+		for i in tr.notes.first ..< base.span_end(tr.notes) {
+			if s.notes.kind[i] != .Attack || s.notes.time[i] > t {
+				continue
+			}
+			n := note_of(s, int(i))
+			if t < n.time + device.note_tail(&p, n, &env) {
+				append(&out, Sounding_Note{s.parts[tr.part], note_name(s, s.notes.pad[i], n.pitch), n.time, n.velocity, t < n.time + n.duration})
+			}
+		}
+	}
+	return out[:]
+}
+
+// How far song seconds `t` is from the nearest 8th-note grid point in a
+// section that has drum pad hits, and the beat duration at `t`.
+off_grid :: proc(s: ^Song, t: f64) -> (off, beat: f64, ok: bool) {
+	beaten := false
+	for sec in s.sections {
+		if t < sec.start || t >= sec.stop {
+			continue
+		}
+		for i in 0 ..< len(s.notes) {
+			if s.notes.pad[i] != 0 && s.notes.time[i] >= sec.start && s.notes.time[i] < sec.stop {
+				beaten = true
+				break
+			}
+		}
+		if beaten {
+			break
+		}
+	}
+	if !beaten {
+		return
+	}
+	snapped := seconds_snapped(s, t, "8n") or_return
+	b := tempo.beat_from_seconds(&s.tempo, t)
+	return t - snapped, 60 / tempo.bpm_from_beat(&s.tempo, b), true
+}
+
+// Song seconds of every integer beat from 0 to total_beats(s).
+beat_seconds :: proc(s: ^Song, allocator := context.temp_allocator) -> []f64 {
+	out := make([dynamic]f64, allocator)
+	total := total_beats(s)
+	for b := 0.0; b < total - 1e-9; b += 1 {
+		append(&out, tempo.seconds_from_beat(&s.tempo, b))
+	}
+	return out[:]
 }

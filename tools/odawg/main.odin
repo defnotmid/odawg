@@ -438,8 +438,7 @@ run_show :: proc(a: ^Args) -> bool {
 				}
 				for i in tr.notes.first ..< base.span_end(tr.notes) {
 					n := s.notes[i]
-					what := n.pad != 0 ? song.pad_name(s, n.pad) : theory.string_from_pitch(n.pitch)
-					fmt.printfln("  %8.3fs  beat %7.2f  %-8s %.3fs  vel %.2f", n.time, n.beat, what, n.duration, n.velocity)
+					fmt.printfln("  %8.3fs  beat %7.2f  %-8s %.3fs  vel %.2f", n.time, n.beat, song.note_name(s, n.pad, n.pitch), n.duration, n.velocity)
 				}
 			}
 		}
@@ -476,18 +475,8 @@ run_at :: proc(a: ^Args) -> bool {
 	}
 	b := tempo.beat_from_seconds(&s.tempo, t)
 	fmt.printfln("%.3fs  section %s bar %d beat %.2f (%.0f%% through)  %.1f bpm  chord %s", t, place.name, place.bar + 1, place.beat + 1, place.progress * 100, tempo.bpm_from_beat(&s.tempo, b), chord_name(song.chord_from_beat(s, b)))
-	env := song.voice_env(s)
-	for tr in s.tracks {
-		p := s.params[tr.instrument]
-		for i in tr.notes.first ..< base.span_end(tr.notes) {
-			n := s.notes[i]
-			note := song.note_of(s, int(i))
-			if n.time <= t && t < n.time + device.note_tail(&p, note, &env) {
-				what := n.pad != 0 ? song.pad_name(s, n.pad) : theory.string_from_pitch(n.pitch)
-				state := t < n.time + n.duration ? "held" : "ringing"
-				fmt.printfln("  %-10s %-8s from %.3fs  %s", s.parts[tr.part], what, n.time, state)
-			}
-		}
+	for n in song.notes_at(s, t) {
+		fmt.printfln("  %-10s %-8s from %.3fs  %s", n.part, n.note, n.time, n.held ? "held" : "ringing")
 	}
 	return true
 }

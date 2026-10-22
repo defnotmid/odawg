@@ -200,26 +200,19 @@ k_coefficients :: proc(rate: int) -> (shelf, hp: K_Biquad) {
 // samples of the ends.
 @(private = "file")
 true_peak :: proc(x: []f32) -> f32 {
-	TAPS :: 8
+	TAPS :: TRUE_PEAK_TAPS
 	n := len(x)
 	peak: f32
-	// Kernel for the three in-between phases.
-	kernel: [3][2 * TAPS]f32
-	for ph in 0 ..< 3 {
-		frac := f64(ph + 1) / 4
-		for k in 0 ..< 2 * TAPS {
-			kernel[ph][k] = f32(lanczos(f64(k - TAPS + 1) - frac, TAPS))
-		}
-	}
 	for i in 0 ..< n {
 		peak = max(peak, abs(x[i]))
 		if i + TAPS >= n || i < TAPS - 1 {
 			continue
 		}
+		win := x[i - TAPS + 1:][:2 * TAPS]
 		for ph in 0 ..< 3 {
 			sum: f32
 			for k in 0 ..< 2 * TAPS {
-				sum += x[i - TAPS + 1 + k] * kernel[ph][k]
+				sum += win[k] * TRUE_PEAK_KERNEL[ph][k]
 			}
 			peak = max(peak, abs(sum))
 		}

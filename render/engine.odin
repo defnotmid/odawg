@@ -222,15 +222,15 @@ engine_init :: proc(e: ^Engine, s: ^song.Song, pool: ^common.Work_Pool = nil, ma
 			fx_total += int(song.node_chain(s, k).count)
 		}
 	}
+	max_bufs := 0
+	for prog in s.programs.programs {
+		max_bufs = max(max_bufs, int(prog.bufs))
+	}
 	bytes_total, graph_total := 0, 0
 	for t, ti in s.tracks {
 		p := s.params[t.instrument]
 		bytes_total += int(e.tracks[ti].slots.count) * device.voice_bytes(&p, &e.env)
-		bufs := 0
-		for prog in s.programs.programs {
-			bufs = max(bufs, int(prog.bufs))
-		}
-		graph_total = max(graph_total, int(e.tracks[ti].slots.count) * bufs * 2 * device.NODE_CHUNK)
+		graph_total = max(graph_total, int(e.tracks[ti].slots.count) * max_bufs * 2 * device.NODE_CHUNK)
 	}
 	e.voices, _ = mem.make_aligned([]u8, bytes_total, 16)
 	e.slot_at_byte = make([]int, slots_total)
@@ -1925,16 +1925,16 @@ duck :: proc(s: ^song.Song, sc: song.Sidechain, at: i64, l, r: []f32) {
 	}
 	for idx in lo ..< len(s.by_time) {
 		i := s.by_time[idx]
-		n := s.notes[i]
-		if n.time > to_t {
+		nt := s.notes.time[i]
+		if nt > to_t {
 			break
 		}
-		if s.tracks[n.track].part != sc.part || (sc.pad != 0 && n.pad != sc.pad) || (sc.pitch >= 0 && math.abs(n.pitch - sc.pitch) > 0.01) {
+		if s.tracks[s.notes.track[i]].part != sc.part || (sc.pad != 0 && s.notes.pad[i] != sc.pad) || (sc.pitch >= 0 && math.abs(s.notes.pitch[i] - sc.pitch) > 0.01) {
 			continue
 		}
-		j0 := i64(math.floor(n.time * RATE / B))
+		j0 := i64(math.floor(nt * RATE / B))
 		for k in max(j0, k0) ..= min(k1, j0 + i64(0.5 * RATE / B)) {
-			dt := max(f64(k * B) / RATE - n.time, 0)
+			dt := max(f64(k * B) / RATE - nt, 0)
 			g[k - k0] = min(g[k - k0], f32(1 - sc.depth * math.exp(-dt / sc.release)))
 		}
 	}

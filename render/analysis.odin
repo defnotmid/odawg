@@ -3,6 +3,7 @@ package odawg_render
 import "core:math"
 import "core:slice"
 import analyze "../analyze"
+import song "../song"
 
 // What a song's sound is made of, as rows the tables hold (Table_Kind
 // .Bands, .Stereo, .Crest) and an Analyzer streams: every picture of it (a
@@ -23,6 +24,11 @@ BANDS_FFT :: 8192
 // With BAND_HZ, BANDS_FFT and RATE, the whole contract a band row keeps
 // (a shader filling rows matches these).
 BAND_BINS: [len(BAND_HZ)][2]i32
+
+@(private = "file")
+BANDS_HANN: [BANDS_FFT]f64
+@(private = "file")
+BANDS_HANN_POWER: [BANDS_FFT + 1]f64
 
 @(init, private = "file")
 band_bins_init :: proc "contextless" () {
@@ -48,6 +54,14 @@ band_bins_init :: proc "contextless" () {
 			b = {k, k}
 		}
 	}
+	power: f64
+	for k in 0 ..< BANDS_FFT {
+		w := 0.5 * (1 - math.cos(2 * math.PI * f64(k) / BANDS_FFT))
+		BANDS_HANN[k] = w
+		BANDS_HANN_POWER[k] = power
+		power += w * w
+	}
+	BANDS_HANN_POWER[BANDS_FFT] = power
 }
 
 // The floor every level in dB is held above (silence).
@@ -64,13 +78,11 @@ db_from_power :: #force_inline proc "contextless" (p: f64) -> f32 {
 fill_bands :: proc(t: ^Table, row: []f32, l, r: []f32) {
 	N :: BANDS_FFT
 	re, im: [N]f32
-	window_power: f64
 	n := min(len(l), len(r), N)
 	for k in 0 ..< n {
-		w := 0.5 * (1 - math.cos(2 * math.PI * f64(k) / N))
-		re[k] = f32(0.5 * (f64(l[k]) + f64(r[k])) * w)
-		window_power += w * w
+		re[k] = f32(0.5 * (f64(l[k]) + f64(r[k])) * BANDS_HANN[k])
 	}
+	window_power := BANDS_HANN_POWER[n]
 	analyze.fft(re[:], im[:])
 	for bins, b in BAND_BINS {
 		power: f64
@@ -334,4 +346,27 @@ masking_from :: proc(mix: Measures, stems: []Measures, section: string, keep: in
 	}
 	slice.sort_by(rows[:], proc(a, b: Masking_Row) -> bool {return a.overlap_db > b.overlap_db})
 	return slice.clone(rows[:min(len(rows), keep)], allocator)
+}
+
+// Onsets directly from a composed song's notes in time order (merging notes
+// within 0.5 ms to the loudest velocity, normalised to 0..1).
+onsets_from_song :: proc(s: ^song.Song, allocator := context.allocator) -> (r: analyze.Onsets) {
+	r.onsets = make([dynamic]analyze.Onset, allocator)
+	loudest: f32
+	for i in s.by_time {
+		loudest = max(loudest, s.notes.velocity[i])
+	}
+	for i in s.by_time {
+		t := f32(s.notes.time[i])
+		v := s.notes.velocity[i] / max(loudest, 1e-6)
+		if n := len(r.onsets); n > 0 && abs(r.onsets[n - 1].time - t) < 0.5e-3 {
+			r.onsets[n - 1].strength = max(r.onsets[n - 1].strength, v)
+			continue
+		}
+		append(&r.onsets, analyze.Onset{t, v})
+	}
+	if len(s.sections) > 0 {
+		r.bpm = f32(s.sections[0].bpm0)
+	}
+	return
 }

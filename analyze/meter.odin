@@ -9,6 +9,18 @@ package odawg_analyze
 
 TRUE_PEAK_TAPS :: 8
 
+TRUE_PEAK_KERNEL: [3][2 * TRUE_PEAK_TAPS]f32
+
+@(init)
+init_true_peak_kernel :: proc "contextless" () {
+	for ph in 0 ..< 3 {
+		frac := f64(ph + 1) / 4
+		for k in 0 ..< 2 * TRUE_PEAK_TAPS {
+			TRUE_PEAK_KERNEL[ph][k] = f32(lanczos(f64(k - TRUE_PEAK_TAPS + 1) - frac, TRUE_PEAK_TAPS))
+		}
+	}
+}
+
 Meter :: struct {
 	rate, step:  int,
 	shelf, hp:   K_Biquad,
@@ -18,8 +30,7 @@ Meter :: struct {
 	energy:      [dynamic]f64, // each finished step's mean square
 	sample_peak: f32,
 	true_peak:   f32,
-	kernel:      [3][2 * TRUE_PEAK_TAPS]f32,
-	history:     [2][2 * TRUE_PEAK_TAPS]f32, // the last samples, oldest first
+	history:     [2][4 * TRUE_PEAK_TAPS]f32, // mirrored 16-sample ring buffer per channel
 	pushed:      i64, // samples taken
 }
 
@@ -27,12 +38,6 @@ meter_init :: proc(m: ^Meter, rate: int, allocator := context.allocator) {
 	m^ = {rate = rate, step = rate / 10}
 	m.energy = make([dynamic]f64, allocator)
 	m.shelf, m.hp = k_coefficients(rate)
-	for ph in 0 ..< 3 {
-		frac := f64(ph + 1) / 4
-		for k in 0 ..< 2 * TRUE_PEAK_TAPS {
-			m.kernel[ph][k] = f32(lanczos(f64(k - TRUE_PEAK_TAPS + 1) - frac, TRUE_PEAK_TAPS))
-		}
-	}
 }
 
 meter_destroy :: proc(m: ^Meter) {
@@ -43,10 +48,12 @@ meter_destroy :: proc(m: ^Meter) {
 // Takes the next samples of the stream.
 meter_push :: proc(m: ^Meter, l, r: []f32) {
 	TAPS :: TRUE_PEAK_TAPS
+	MASK :: 2 * TAPS - 1
 	n := min(len(l), len(r))
 	for i in 0 ..< n {
 		x := [2]f32{l[i], r[i]}
 		g := m.pushed
+		pos := int(g) & MASK
 		e: f64
 		for c in 0 ..< 2 {
 			v := x[c]
@@ -65,14 +72,15 @@ meter_push :: proc(m: ^Meter, l, r: []f32) {
 			e += w * w
 			// true peak: the sample TAPS back is between its 8 before and 8 after
 			h := &m.history[c]
-			copy(h[:], h[1:])
-			h[2 * TAPS - 1] = v
+			h[pos] = v
+			h[pos + 2 * TAPS] = v
 			at := g - TAPS // the sample whose in-betweens are now known
 			if at >= TAPS - 1 {
+				win := h[pos + 1:][:2 * TAPS]
 				for ph in 0 ..< 3 {
 					sum: f32
 					for k in 0 ..< 2 * TAPS {
-						sum += h[k] * m.kernel[ph][k]
+						sum += win[k] * TRUE_PEAK_KERNEL[ph][k]
 					}
 					m.true_peak = max(m.true_peak, abs(sum))
 				}

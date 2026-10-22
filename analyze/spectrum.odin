@@ -24,6 +24,37 @@ WINDOW_TABLE := [Window]proc(k, n: int) -> f32 {
 // The largest spectrum: 2048 samples, 1024 magnitudes.
 SPECTRUM_MAX :: 2048
 
+// The largest FFT: the bands' (render's BANDS_FFT).
+FFT_MAX :: 8192
+
+// Hann at SPECTRUM_MAX: every smaller power of two reads it at a stride (k /
+// n is k * stride / SPECTRUM_MAX, both exact). The FFT's twiddles, each
+// size's half at [half, size).
+@(private = "file")
+HANN: [SPECTRUM_MAX]f32
+@(private = "file")
+FFT_TWIDDLE_RE: [FFT_MAX]f32
+@(private = "file")
+FFT_TWIDDLE_IM: [FFT_MAX]f32
+
+@(init, private = "file")
+init_spectrum_tables :: proc "contextless" () {
+	for k in 0 ..< SPECTRUM_MAX {
+		HANN[k] = 0.5 * (1 - math.cos(2 * math.PI * f32(k) / f32(SPECTRUM_MAX))) // WINDOW_TABLE's
+	}
+	for size := 2; size <= FFT_MAX; size <<= 1 {
+		half := size >> 1
+		ang := -2 * math.PI / f64(size)
+		wr, wi := math.cos(ang), math.sin(ang)
+		cr, ci: f64 = 1, 0
+		for k in 0 ..< half {
+			FFT_TWIDDLE_RE[half + k] = f32(cr)
+			FFT_TWIDDLE_IM[half + k] = f32(ci)
+			cr, ci = cr * wr - ci * wi, cr * wi + ci * wr
+		}
+	}
+}
+
 // The magnitudes of the `2 * len(out)` samples from `at` of the mono mix
 // `0.707 * (L + R)`, windowed; silence when they run outside the buffer.
 // `2 * len(out)` is a power of two up to SPECTRUM_MAX.
@@ -32,9 +63,16 @@ spectrum_from_samples :: proc(l, r: []f32, at: int, window: Window, out: []f32) 
 	re_buf, im_buf: [SPECTRUM_MAX]f32
 	re, im := re_buf[:n], im_buf[:n]
 	if at >= 0 && at + n <= min(len(l), len(r)) {
-		w := WINDOW_TABLE[window]
-		for k in 0 ..< n {
-			re[k] = (l[at + k] + r[at + k]) * 0.70710678 * w(k, n)
+		if window == .Hann {
+			stride := SPECTRUM_MAX / n
+			for k in 0 ..< n {
+				re[k] = (l[at + k] + r[at + k]) * 0.70710678 * HANN[k * stride]
+			}
+		} else {
+			w := WINDOW_TABLE[window]
+			for k in 0 ..< n {
+				re[k] = (l[at + k] + r[at + k]) * 0.70710678 * w(k, n)
+			}
 		}
 	}
 	fft(re, im)
@@ -80,9 +118,10 @@ energy_from_samples :: proc(l, r: []f32, at, n: int) -> (e: Energy) {
 	return
 }
 
-// In-place iterative radix-2 FFT (len a power of two).
+// In-place iterative radix-2 FFT (len a power of two up to FFT_MAX).
 fft :: proc(re, im: []f32) {
 	n := len(re)
+	assert(n <= FFT_MAX)
 	j := 0
 	for i in 1 ..< n {
 		bit := n >> 1
@@ -97,20 +136,21 @@ fft :: proc(re, im: []f32) {
 		}
 	}
 	for size := 2; size <= n; size <<= 1 {
-		ang := -2 * math.PI / f64(size)
-		wr, wi := math.cos(ang), math.sin(ang)
+		half := size >> 1
+		w_re := FFT_TWIDDLE_RE[half:size]
+		w_im := FFT_TWIDDLE_IM[half:size]
 		for start := 0; start < n; start += size {
-			cr, ci: f64 = 1, 0
-			for k in 0 ..< size / 2 {
+			#no_bounds_check for k in 0 ..< half {
 				a := start + k
-				b := a + size / 2
-				tr := f32(cr) * re[b] - f32(ci) * im[b]
-				ti := f32(cr) * im[b] + f32(ci) * re[b]
+				b := a + half
+				wr, wi := w_re[k], w_im[k]
+				rb, ib := re[b], im[b]
+				tr := wr * rb - wi * ib
+				ti := wr * ib + wi * rb
 				re[b] = re[a] - tr
 				im[b] = im[a] - ti
 				re[a] += tr
 				im[a] += ti
-				cr, ci = cr * wr - ci * wi, cr * wi + ci * wr
 			}
 		}
 	}
