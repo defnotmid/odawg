@@ -638,10 +638,35 @@ what was measured (min and max per bucket, a frame's energy or magnitudes), neve
 and is filled from one streamed export on every core.
 
 Edits are command rows (`COMMAND_KINDS`: `Part_Gain_Set`, `Part_Pan_Set`, `Part_Mute_Set`,
-`Pad_Gain_Set`, `Param_Set`, `Master_Gain_Set`, and their `_Step`s), each kind's row saying
-what it touches; `command_apply` moves the versions of the part it changed and of the mix,
-so tables of other parts stay good. "Make the kick louder" is `{.Pad_Gain_Step,
+`Pad_Gain_Set`, `Param_Set`, `Master_Gain_Set`, and their `_Step`s; `Send_Set` on
+`"keys/sends/hall"`, `Effect_Param_Set` on `"keys/effects/Filter/frequency"` or
+`"returns/hall/Reverb/wet"`, in automation's path grammar). Each kind's row says what it
+touches. `command_apply` moves the versions of the part it changed and of the mix, so
+tables of other parts stay good. "Make the kick louder" is `{.Pad_Gain_Step,
 "drums/kick", 3}`.
+
+Edits while a song plays (a mixer's fader, a knob): the host applies the row to its song,
+then hands it to the playing engine.
+
+```odin
+song.command_apply(&g, row)   // the song (what a new export plays)
+render.engine_sync(&e, row)   // the engine playing it, from any thread
+```
+
+- An engine plays its own copies of what a command changes: each effect's params, each
+  track's fader, pan and mute, each send, each placement's level, the pads' levels, the
+  master's gain and chain, and the instruments. A host editing its song never races a
+  render.
+- `engine_sync` copies what the row changed from the song when it is called, and queues
+  it. The engine takes the queue at the start of its next walk (`engine_process`,
+  `engine_stream`, a seek), when no node is rendering.
+- A fader, a pan, a send or a placement's level glides to its new value over 10 ms, so
+  there's no click. The master's gain ramps over its next block.
+- An effect's param, an instrument's value and a mute change at once. A note playing hears
+  an instrument value its field reads per sample; one read when a note starts waits for the
+  next note.
+- A lane on the same value still wins: automation is what a song says, and an edit is
+  where it stands between lanes.
 
 ### The project document (`.odawg`, JSON, stable ids)
 
@@ -671,6 +696,8 @@ odawg.subscribe(&project, proc)
 - The engine processes in blocks with sample-accurate events, so offline render, realtime
   playback and any block size all give the same samples.
 - Tracks render in parallel and are summed in a fixed order.
+- A host's edits reach a playing engine through `engine_sync` (§5, the commands): the
+  engine reads only its own copies of what can change.
 - Realtime output is `deps:odawg/sdl`. onimite's preview plays through it in phase 3.
 
 ### CLI

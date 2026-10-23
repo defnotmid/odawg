@@ -82,11 +82,92 @@ Engine :: struct {
 	no_master: bool, // its host runs the master itself, over what the engine gives in order
 	stem_gain: []f32, // per stem (stem_count): its placement's level, so a stem is what the master hears of it
 	lanes:     Lanes,
-	// The instruments as this engine plays them: the song's, its own copy
-	// when a lane moves a control (written as the song plays, never the
-	// song's own).
+	// What it plays of the song's values a host may change while it plays
+	// (song.command_apply, then engine_sync): its own copies, so an edit to
+	// the song never races a render, each reaching here through `edits` at
+	// the start of a walk; and its own copy of the instruments (a lane or an
+	// edit writes them).
+	mix:       Mix,
 	programs:  device.Programs,
+	edits:     Edits,
 	arena:     virtual.Arena,
+}
+
+// The values a command changes, as the engine plays them: each device's
+// params, each track's fader, pan and mute, each edge's gain, each
+// placement's level, the pads' levels. A level a command moves glides there.
+Mix :: struct {
+	params:     []device.Params, // per song.devices
+	tracks:     []Track_Mix,
+	edges:      []Level, // per song.edges: linear
+	placements: []Level, // per song.placements: linear
+	pad_gains:  [dynamic]song.Pad_Gain,
+}
+
+Track_Mix :: struct {
+	gain:  Level, // linear
+	pan:   Level,
+	muted: bool,
+}
+
+// A level gliding from `from` to `to` over GLIDE samples from node sample
+// `at` (an edit's: no click), else held at `to`.
+Level :: struct {
+	from, to: f64,
+	at:       i64,
+}
+
+GLIDE :: RATE / 100 // 10 ms
+
+level_at :: #force_inline proc(l: Level, t: i64) -> f64 {
+	if t >= l.at + GLIDE {
+		return l.to
+	}
+	if t <= l.at {
+		return l.from
+	}
+	return l.from + (l.to - l.from) * f64(t - l.at) / GLIDE
+}
+
+// Whether it moves over n samples from t.
+level_moving :: #force_inline proc(l: Level, t: i64, n: int) -> bool {
+	return l.from != l.to && t < l.at + GLIDE && t + i64(n) > l.at
+}
+
+// Edits waiting for the next walk: a host's thread adds them (engine_sync),
+// the engine applies them before it renders on (no node runs then). What
+// they carry is copied from the song when they are made.
+Edits :: struct {
+	mutex:   sync.Mutex,
+	pending: [dynamic]Edit,
+	arena:   virtual.Arena, // what they carry (programs, pad gains)
+}
+
+Edit_Kind :: enum u8 {
+	Track, // ref's fader (dB), pan, mute
+	Edge, // ref's gain (linear)
+	Placement, // ref's level (dB)
+	Params, // device ref's params
+	Pad_Gains, // the whole table
+	Program, // program ref's rows: its nodes, mods, inputs, controls
+	Master, // the master's gain (dB)
+}
+
+Edit :: struct {
+	kind:     Edit_Kind,
+	ref:      i32,
+	value:    f64,
+	pan:      f64,
+	muted:    bool,
+	params:   device.Params,
+	pads:     []song.Pad_Gain,
+	program:  device.Program,
+	nodes:    []device.Graph_Node,
+	mods:     []device.Mod, // from mods_at in Programs.mods
+	mods_at:  i32,
+	inputs:   []device.Graph_Input, // from inputs_at
+	inputs_at: i32,
+	controls: []device.Control_Row,
 }
 
 // The song's automation rows (song.automation) by what reads them: an
@@ -379,19 +460,185 @@ engine_init :: proc(e: ^Engine, s: ^song.Song, pool: ^common.Work_Pool = nil, ma
 		w.gains = make([]f32, BLOCK)
 		_ = virtual.arena_init_growing(&w.temp)
 	}
+	mix_init(e)
 	lanes_init(e)
 	flow_init(e, looped)
 	engine_seek(e, 0, false)
 	return true
 }
 
-// The lanes by what reads them (counted, then filled), and the programs
-// the engine plays: its own copy of what a control writes when a lane
-// moves one.
+// The engine's copies of what an edit changes, and of the instruments.
+@(private = "file")
+mix_init :: proc(e: ^Engine) {
+	s := e.song
+	m := &e.mix
+	m.params = slice.clone(s.params[:])
+	m.tracks = make([]Track_Mix, len(s.tracks))
+	for t, ti in s.tracks {
+		g := base.db_to_gain(t.gain_db)
+		m.tracks[ti] = {gain = {g, g, 0}, pan = {t.pan, t.pan, 0}, muted = t.muted}
+	}
+	m.edges = make([]Level, len(s.edges))
+	for x, i in s.edges {
+		m.edges[i] = {f64(x.gain), f64(x.gain), 0}
+	}
+	m.placements = make([]Level, len(s.placements))
+	for pl, i in s.placements {
+		g := base.db_to_gain(pl.gain_db)
+		m.placements[i] = {g, g, 0}
+	}
+	m.pad_gains = slice.clone_to_dynamic(s.pad_gains[:])
+	e.programs = s.programs
+	e.programs.programs = slice.clone_to_dynamic(s.programs.programs[:])
+	e.programs.nodes = slice.clone_to_dynamic(s.programs.nodes[:])
+	e.programs.mods = slice.clone_to_dynamic(s.programs.mods[:])
+	e.programs.inputs = slice.clone_to_dynamic(s.programs.inputs[:])
+	e.programs.controls = slice.clone_to_dynamic(s.programs.controls[:])
+	e.env.programs = &e.programs
+	e.edits.pending = make([dynamic]Edit, runtime.heap_allocator())
+	_ = virtual.arena_init_growing(&e.edits.arena)
+}
+
+// What `row` (applied to the song: song.command_apply) changed, copied from
+// the song now (on the host's thread, which edits it) and queued for the
+// engine's next walk. A level glides there over GLIDE; an effect's or an
+// instrument's value steps there. A lane on the same value still wins.
+engine_sync :: proc(e: ^Engine, row: song.Command_Row) {
+	s := e.song
+	sync.mutex_lock(&e.edits.mutex)
+	defer sync.mutex_unlock(&e.edits.mutex)
+	carry := virtual.arena_allocator(&e.edits.arena)
+	push :: proc(e: ^Engine, x: Edit) {append(&e.edits.pending, x)}
+	tracks_of :: proc(s: ^song.Song, path: string) -> []int {
+		part, _ := song.part_from_path(s, path)
+		out := make([dynamic]int, context.temp_allocator)
+		for t, ti in s.tracks {
+			if part >= 0 && int(t.part) == part {
+				append(&out, ti)
+			}
+		}
+		return out[:]
+	}
+	switch row.kind {
+	case .None:
+	case .Part_Gain_Set, .Part_Gain_Step, .Part_Pan_Set, .Part_Mute_Set:
+		for ti in tracks_of(s, row.path) {
+			t := s.tracks[ti]
+			push(e, {kind = .Track, ref = i32(ti), value = t.gain_db, pan = t.pan, muted = t.muted})
+		}
+	case .Pad_Gain_Set, .Pad_Gain_Step:
+		push(e, {kind = .Pad_Gains, pads = slice.clone(s.pad_gains[:], carry)})
+	case .Param_Set:
+		// the instrument's programs (its layers' and pads' too), whole
+		done := make([dynamic]i32, context.temp_allocator)
+		for ti in tracks_of(s, row.path) {
+			reach :: proc(progs: ^device.Programs, program: i32, out: ^[dynamic]i32) {
+				if program < 0 || slice.contains(out[:], program) {
+					return
+				}
+				append(out, program)
+				p := progs.programs[program]
+				for pr in progs.layers[p.layers.first:base.span_end(p.layers)] {
+					reach(progs, pr.program, out)
+				}
+			}
+			reach(&s.programs, i32(s.params[s.tracks[ti].instrument][.Program]), &done)
+		}
+		for pi in done {
+			p := s.programs.programs[pi]
+			x := Edit{kind = .Program, ref = pi, program = p}
+			x.nodes = slice.clone(s.programs.nodes[p.nodes.first:base.span_end(p.nodes)], carry)
+			mods_first, mods_end := i32(len(s.programs.mods)), i32(0)
+			inputs_first, inputs_end := i32(len(s.programs.inputs)), i32(0)
+			for n in x.nodes {
+				if n.mods.count > 0 {
+					mods_first, mods_end = min(mods_first, n.mods.first), max(mods_end, base.span_end(n.mods))
+				}
+				if n.inputs.count > 0 {
+					inputs_first, inputs_end = min(inputs_first, n.inputs.first), max(inputs_end, base.span_end(n.inputs))
+				}
+			}
+			if mods_end > mods_first {
+				x.mods, x.mods_at = slice.clone(s.programs.mods[mods_first:mods_end], carry), mods_first
+			}
+			if inputs_end > inputs_first {
+				x.inputs, x.inputs_at = slice.clone(s.programs.inputs[inputs_first:inputs_end], carry), inputs_first
+			}
+			x.controls = slice.clone(s.programs.controls[p.controls.first:base.span_end(p.controls)], carry)
+			push(e, x)
+		}
+	case .Master_Gain_Set, .Master_Gain_Step:
+		push(e, {kind = .Master, value = s.master_gain_db})
+	case .Send_Set:
+		for x, i in s.edges {
+			if e.mix.edges[i].to != f64(x.gain) {
+				push(e, {kind = .Edge, ref = i32(i), value = f64(x.gain)})
+			}
+		}
+	case .Effect_Param_Set:
+		for d in song.command_devices(s, row) {
+			push(e, {kind = .Params, ref = d, params = s.params[d]})
+		}
+	}
+}
+
+// The edits waiting, applied (at a walk's start: nothing renders).
+@(private = "file")
+edits_apply :: proc(e: ^Engine) {
+	ed := &e.edits
+	if !sync.mutex_try_lock(&ed.mutex) {
+		return // a host adding one now: the next walk takes them
+	}
+	defer sync.mutex_unlock(&ed.mutex)
+	if len(ed.pending) == 0 {
+		return
+	}
+	glide :: proc(l: ^Level, to: f64, at: i64) {
+		l^ = {level_at(l^, at), to, at}
+	}
+	m := &e.mix
+	for x in ed.pending {
+		switch x.kind {
+		case .Track:
+			at := e.cursor + e.ahead + e.nodes[x.ref].lead
+			tm := &m.tracks[x.ref]
+			glide(&tm.gain, base.db_to_gain(x.value), at)
+			glide(&tm.pan, x.pan, at)
+			tm.muted = x.muted
+		case .Edge:
+			glide(&m.edges[x.ref], x.value, e.cursor + e.ahead + e.nodes[e.song.edges[x.ref].to].lead)
+		case .Placement:
+			glide(&m.placements[x.ref], base.db_to_gain(x.value), e.cursor + e.ahead)
+		case .Params:
+			m.params[x.ref] = x.params
+		case .Pad_Gains:
+			clear(&m.pad_gains)
+			append(&m.pad_gains, ..x.pads)
+		case .Program:
+			progs := &e.programs
+			p := x.program
+			progs.programs[x.ref] = p
+			copy(progs.nodes[p.nodes.first:], x.nodes)
+			copy(progs.mods[x.mods_at:], x.mods)
+			copy(progs.inputs[x.inputs_at:], x.inputs)
+			copy(progs.controls[p.controls.first:], x.controls)
+			for &t in e.tracks {
+				t.lane_cell = -1 // a lane on it sets it again
+			}
+		case .Master:
+			if e.master.songs {
+				e.master.gain_to = x.value
+			}
+		}
+	}
+	clear(&ed.pending)
+	virtual.arena_free_all(&ed.arena)
+}
+
+// The lanes by what reads them (counted, then filled).
 @(private = "file")
 lanes_init :: proc(e: ^Engine) {
 	s := e.song
-	e.programs = s.programs
 	l := &e.lanes
 	l.fx = make([]base.Span, len(e.fx))
 	l.tracks = make([]base.Span, len(s.tracks))
@@ -457,14 +704,7 @@ lanes_init :: proc(e: ^Engine) {
 		l.rows[sp.first + filled[sp.first]] = i32(i)
 		filled[sp.first] += 1
 	}
-	if controls {
-		e.programs.programs = slice.clone_to_dynamic(s.programs.programs[:])
-		e.programs.nodes = slice.clone_to_dynamic(s.programs.nodes[:])
-		e.programs.mods = slice.clone_to_dynamic(s.programs.mods[:])
-		e.programs.inputs = slice.clone_to_dynamic(s.programs.inputs[:])
-		e.programs.controls = slice.clone_to_dynamic(s.programs.controls[:])
-	}
-	e.env.programs = &e.programs
+	_ = controls
 }
 
 // Track ti's controls set from its lanes for the cell song sample `at` is
@@ -517,13 +757,15 @@ cell_piece :: #force_inline proc(at: i64, n: int, stepped: bool) -> int {
 	return int(min(i64(n), song.automation_cell(at) + song.AUTOMATION_CELL - at))
 }
 
-// A moving level (a lane in dB, or the fixed `db` when lane < 0) over n
-// samples from song sample `at`, linear, in w.gains.
+// A moving level (a lane in dB, or the engine's `level` when lane < 0)
+// over n samples from song sample `at`, linear, in w.gains.
 @(private = "file")
-lane_gains :: proc(e: ^Engine, w: ^Worker, lane: i32, db: f64, at: i64, n: int) -> []f32 {
+lane_gains :: proc(e: ^Engine, w: ^Worker, lane: i32, level: Level, at: i64, n: int) -> []f32 {
 	g := w.gains[:n]
 	if lane < 0 {
-		slice.fill(g, f32(base.db_to_gain(db)))
+		for i in 0 ..< n {
+			g[i] = f32(level_at(level, at + i64(i)))
+		}
 		return g
 	}
 	a := e.song.automation[lane]
@@ -534,6 +776,8 @@ lane_gains :: proc(e: ^Engine, w: ^Worker, lane: i32, db: f64, at: i64, n: int) 
 }
 
 engine_destroy :: proc(e: ^Engine) {
+	delete(e.edits.pending)
+	virtual.arena_destroy(&e.edits.arena)
 	for slab in e.buffers.slabs {
 		delete(slab, runtime.heap_allocator())
 	}
@@ -924,6 +1168,7 @@ Walk_Out :: struct {
 // to `out` as the last node makes it. On the caller's pool, one map of loops.
 @(private = "file")
 walk :: proc(e: ^Engine, n: int, master: bool, out: ^Walk_Out) {
+	edits_apply(e)
 	f := &e.flow
 	chunks := (n + CHUNK - 1) / CHUNK
 	f.chunks, f.frames, f.master, f.out = chunks, n, master, out
@@ -1020,7 +1265,7 @@ node_chunk :: proc(e: ^Engine, w: ^Worker, k: int) {
 	if !node_may_write(e, w, k) {
 		slice.zero(dirty)
 		switch {
-		case kind == .Track && e.song.tracks[k].muted:
+		case kind == .Track && e.mix.tracks[k].muted:
 			track_skip(e, w, k, n)
 		case kind == .Track:
 			e.tracks[k].cursor += i64(n)
@@ -1053,7 +1298,7 @@ node_may_write :: proc(e: ^Engine, w: ^Worker, k: int) -> bool {
 	case .Master:
 		return true
 	case .Track:
-		if s.tracks[k].muted {
+		if e.mix.tracks[k].muted {
 			return false
 		}
 		// as track_block sleeps: awake at its start, a voice sounding, or a
@@ -1119,7 +1364,7 @@ track_node_start :: proc(e: ^Engine, w: ^Worker, k: int, at: i64) {
 
 @(private = "file")
 track_node_block :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32) -> bool {
-	if e.song.tracks[k].muted {
+	if e.mix.tracks[k].muted {
 		track_skip(e, w, k, len(l))
 		return false
 	}
@@ -1275,9 +1520,10 @@ node_keys :: proc(e: ^Engine, w: ^Worker, k, j, n: int) -> ([]f32, []f32) {
 			continue
 		}
 		sl, sr := node_block(e, w, int(x.from), j, n)
+		g := f32(e.mix.edges[i].to)
 		for i in 0 ..< n {
-			kl[i] += sl[i] * x.gain
-			kr[i] += sr[i] * x.gain
+			kl[i] += sl[i] * g
+			kr[i] += sr[i] * g
 		}
 	}
 	if !found {
@@ -1308,10 +1554,15 @@ node_inputs :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32) -> (hea
 		if x.kind != .Audio || run.looped {
 			continue
 		}
-		// a send a lane moves: its level per sample, at this node's input time
+		// a send a lane or an edit moves: its level per sample, at this node's input time
 		gains: []f32
+		edge_at := block_at(w, j) + e.nodes[k].lead + e.nodes[k].latency
+		level := e.mix.edges[i]
+		x.gain = f32(level.to)
 		if lanes := lane_rows(e, e.lanes.edges[i]); len(lanes) > 0 {
-			gains = lane_gains(e, w, lanes[0], 0, block_at(w, j) + e.nodes[k].lead + e.nodes[k].latency, n)
+			gains = lane_gains(e, w, lanes[0], {}, edge_at, n)
+		} else if level_moving(level, edge_at, n) {
+			gains = lane_gains(e, w, -1, level, edge_at, n)
 		}
 		sounds := dirty_at(e, w, int(x.from), j)
 		sl, sr: []f32
@@ -1377,13 +1628,19 @@ placement_block :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32) {
 	at := block_at(w, j) + e.nodes[k].lead
 	if lanes := lane_rows(e, e.lanes.placements[s.nodes[k].ref]); len(lanes) > 0 {
 		// its level moving (a song's `master/gain_db`), from where it is placed
-		g := lane_gains(e, w, lanes[0], 0, at, len(l))
+		g := lane_gains(e, w, lanes[0], {}, at, len(l))
 		for i in 0 ..< len(l) {
 			l[i] *= g[i]
 			r[i] *= g[i]
 		}
 	}
-	if g := f32(base.db_to_gain(pl.gain_db)); g != 1 {
+	if level := e.mix.placements[s.nodes[k].ref]; level_moving(level, at, len(l)) {
+		g := lane_gains(e, w, -1, level, at, len(l))
+		for i in 0 ..< len(l) {
+			l[i] *= g[i]
+			r[i] *= g[i]
+		}
+	} else if g := f32(level.to); g != 1 {
 		for i in 0 ..< len(l) {
 			l[i] *= g
 			r[i] *= g
@@ -1530,7 +1787,7 @@ chase_to :: proc(e: ^Engine, w: ^Worker, ti: int, at: i64, jump: bool) {
 // LFOs swing as they do alone.
 @(private = "file")
 reset_fx :: proc(e: ^Engine, k: int, f: Fx_Run, at: i64) {
-	p := e.song.params[f.device]
+	p := e.mix.params[f.device]
 	state := e.fx_bytes[f.state.first:base.span_end(f.state)]
 	device.effect_reset(e.song.devices[f.device], state, &p, at - e.nodes[k].origin)
 }
@@ -1743,14 +2000,14 @@ layer_cuts :: proc(e: ^Engine, run: ^Track_Run, ni: i32, layer: i32, n: device.N
 // once it is done.
 @(private = "file")
 play_slot :: proc(e: ^Engine, w: ^Worker, ti: int, slot: int, l, r: []f32) -> bool {
-	return play_graph(e, w, slot, pad_level(e.song, ti, e.song.notes.pad[e.slot_note[slot]]), l, r)
+	return play_graph(e, w, slot, pad_level(e, ti, e.song.notes.pad[e.slot_note[slot]]), l, r)
 }
 
 // A pad's level on track `ti` (Pad_Gain_Set; 1: its own).
 @(private = "file")
-pad_level :: proc(s: ^song.Song, ti: int, pad: u32) -> f32 {
+pad_level :: proc(e: ^Engine, ti: int, pad: u32) -> f32 {
 	if pad != 0 {
-		for g in s.pad_gains {
+		for g in e.mix.pad_gains {
 			if g.track == i32(ti) && g.pad == pad && g.db != 0 {
 				return f32(base.db_to_gain(f64(g.db)))
 			}
@@ -1837,12 +2094,12 @@ play_graphs :: proc(e: ^Engine, w: ^Worker, ti: int, l, r: []f32) {
 	for x in sounding[:n_sounding] {
 		k := x.slot
 		if e.slot_choke[k] != 0 {
-			play_graph(e, w, k, pad_level(s, ti, s.notes.pad[e.slot_note[k]]), l, r)
+			play_graph(e, w, k, pad_level(e, ti, s.notes.pad[e.slot_note[k]]), l, r)
 			continue
 		}
 		n := note_from_row(s, int(e.slot_note[k]))
 		state := slot_state(e, k)
-		voices[count] = {state = state, note = n, seed = s.notes.seed[e.slot_note[k]], at = e.slot_at[k], out_l = l, out_r = r, gain = pad_level(s, ti, n.pad)}
+		voices[count] = {state = state, note = n, seed = s.notes.seed[e.slot_note[k]], at = e.slot_at[k], out_l = l, out_r = r, gain = pad_level(e, ti, n.pad)}
 		slots[count], plays[count] = k, x.play
 		count += 1
 	}
@@ -1989,9 +2246,10 @@ finish_segment :: proc(e: ^Engine, w: ^Worker, ti: int, at: i64, l, r: []f32, ke
 			pan_lane = i
 		}
 	}
-	if gain_lane < 0 && pan_lane < 0 {
-		gain := base.db_to_gain(t.gain_db)
-		pl, pr := song.PAN_LAW_TABLE[t.pan_law](t.pan)
+	tm := e.mix.tracks[ti]
+	if gain_lane < 0 && pan_lane < 0 && !level_moving(tm.gain, at, n) && !level_moving(tm.pan, at, n) {
+		gain := tm.gain.to
+		pl, pr := song.PAN_LAW_TABLE[t.pan_law](tm.pan.to)
 		gl, gr := f32(gain * pl), f32(gain * pr)
 		for i in 0 ..< n {
 			l[i] *= gl
@@ -2003,9 +2261,9 @@ finish_segment :: proc(e: ^Engine, w: ^Worker, ti: int, at: i64, l, r: []f32, ke
 		// moving: the fader's gain and the pan's law per sample
 		for start := 0; start < n; start += BLOCK {
 			m := min(BLOCK, n - start)
-			g := lane_gains(e, w, gain_lane, t.gain_db, at + i64(start), m)
+			g := lane_gains(e, w, gain_lane, tm.gain, at + i64(start), m)
 			for i in 0 ..< m {
-				pan := t.pan
+				pan := level_at(tm.pan, at + i64(start + i))
 				if pan_lane >= 0 {
 					pan = f64(clamp(song.automation_value(s, s.automation[pan_lane], at + i64(start + i)), -1, 1))
 				}
@@ -2063,7 +2321,7 @@ run_fx :: proc(e: ^Engine, w: ^Worker, c: base.Span, at: i64, l, r: []f32, key_l
 	piece :: #force_inline proc(k: []f32, a, b: int) -> []f32 {return k != nil ? k[a:b] : nil}
 	for f, i in e.fx[c.first:base.span_end(c)] {
 		lanes := lane_rows(e, e.lanes.fx[int(c.first) + i])
-		p := s.params[f.device]
+		p := e.mix.params[f.device]
 		state := e.fx_bytes[f.state.first:base.span_end(f.state)]
 		effect := device.DEVICE_TABLE[s.devices[f.device]].effect
 		for a := 0; a < len(l); {

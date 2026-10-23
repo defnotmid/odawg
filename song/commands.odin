@@ -16,7 +16,11 @@ import spec "../spec"
 //
 // Paths are the song's: "drums" (a part, every track it has), "drums/kick"
 // (a pad of it), "bass/filter/frequency" (a control of its instrument,
-// else a node's value: "bass/ladder/frequency"; a clip's: "music/clip/fade_in"), "master".
+// else a node's value: "bass/ladder/frequency"; a clip's: "music/clip/fade_in"),
+// "keys/sends/hall" (a send), "keys/effects/Filter/frequency" or
+// "returns/hall/Reverb/wet" (an effect's param, as automation names them),
+// "master". A host playing the song applies a row here, then hands it to
+// its engine (render.engine_sync).
 
 Command_Kind :: enum u8 {
 	None,
@@ -29,6 +33,8 @@ Command_Kind :: enum u8 {
 	Param_Set,
 	Master_Gain_Set,
 	Master_Gain_Step,
+	Send_Set,
+	Effect_Param_Set,
 }
 
 // What a command changes, for the versions it moves: a part's own sound
@@ -96,6 +102,78 @@ COMMAND_KINDS := [Command_Kind]Command_Kind_Row {
 		s.master_gain_db += row.value
 		return true
 	}},
+	.Send_Set = {"send/gain_db", "a part's send to a return or a bus, dB (\"keys/sends/hall\")", .Part, proc(s: ^Song, row: Command_Row, tracks: []int) -> bool {
+		rows := command_rows(s, row)
+		g := f32(base.db_to_gain(row.value))
+		for a in rows {
+			if a.kind != .Send {
+				continue
+			}
+			if a.from.kind == .Track {
+				t := s.tracks[a.from.ref]
+				for &snd in s.sends[t.sends.first:base.span_end(t.sends)] {
+					if snd.ret == a.to.ref {
+						snd.gain = g
+					}
+				}
+			}
+			for &rt in s.routes {
+				if rt.from == a.from && rt.to == a.to {
+					rt.gain = g
+				}
+			}
+			from, to := node_index(s, a.from), node_index(s, a.to)
+			for &x in s.edges {
+				if x.from == from && x.to == to && x.kind == .Audio {
+					x.gain = g
+				}
+			}
+		}
+		return len(rows) > 0
+	}},
+	.Effect_Param_Set = {"effect", "an effect's param, in its unit (\"keys/effects/Filter/frequency\", \"returns/hall/Reverb/wet\")", .Part, proc(s: ^Song, row: Command_Row, tracks: []int) -> bool {
+		devices := command_devices(s, row)
+		rows := command_rows(s, row)
+		for a in rows {
+			s.params[a.ref][a.param] = f32(row.value)
+		}
+		return len(devices) > 0
+	}},
+}
+
+// The automation rows a Send_Set's or an Effect_Param_Set's path names
+// (automation's grammar under the part: "keys/sends/hall" is
+// "parts/keys/sends/hall"; "returns/..." and "buses/..." as they are).
+command_rows :: proc(s: ^Song, row: Command_Row) -> []Automation {
+	out := make([dynamic]Automation, context.temp_allocator)
+	want := row.kind == .Send_Set ? "/sends/" : "/effects/"
+	if !strings.contains(row.path, want) && !(row.kind == .Effect_Param_Set && command_on_mix(row.path)) {
+		return nil // only a send's or an effect's: never an instrument's value made a control
+	}
+	name := row.path
+	if !command_on_mix(row.path) {
+		name = strings.concatenate({"parts/", row.path}, context.temp_allocator)
+	}
+	unheard := make(base.Findings, context.temp_allocator) // a row naming nothing is command_apply's finding
+	automation_targets(s, name, row.path, {}, f32(row.value), f32(row.value), &out, &unheard)
+	return out[:]
+}
+
+// The devices an Effect_Param_Set's path names.
+command_devices :: proc(s: ^Song, row: Command_Row) -> []i32 {
+	out := make([dynamic]i32, context.temp_allocator)
+	for a in command_rows(s, row) {
+		if a.kind == .Param {
+			append(&out, a.ref)
+		}
+	}
+	return out[:]
+}
+
+// Whether a path names a return's or a bus's value, not a part's.
+@(private = "file")
+command_on_mix :: proc(path: string) -> bool {
+	return strings.has_prefix(path, "returns/") || strings.has_prefix(path, "buses/")
 }
 
 // Applies `row`: the tracks of the part its path names (a Part kind), its
@@ -108,7 +186,7 @@ command_apply :: proc(s: ^Song, row: Command_Row) -> bool {
 	}
 	tracks := make([dynamic]int, context.temp_allocator)
 	part := -1
-	if k.touches == .Part {
+	if k.touches == .Part && !command_on_mix(row.path) {
 		part, _ = part_from_path(s, row.path)
 		for t, ti in s.tracks {
 			if int(t.part) == part {
@@ -116,7 +194,7 @@ command_apply :: proc(s: ^Song, row: Command_Row) -> bool {
 			}
 		}
 	}
-	if (k.touches == .Part && part < 0) || !k.apply(s, row, tracks[:]) {
+	if (k.touches == .Part && part < 0 && !command_on_mix(row.path)) || !k.apply(s, row, tracks[:]) {
 		base.report(&s.findings, "bad_command", .Warning, row.path, "%s %s: nothing in the song to change", k.name, row.path)
 		return false
 	}

@@ -43,16 +43,15 @@ Mastering :: struct {
 }
 
 // A master as it runs over the mix in order: its gain, its chain, its
-// lookahead, what it measured. Its rows are the song's (`song` set: read
-// through, so a command changing the master's gain or an effect's value is
-// what the next block runs) or its own (a target's: Mastering). An
-// engine's master, and an export owner's.
+// lookahead, what it measured. Its rows are its own: the song's master
+// copied when it starts (a command reaches it through engine_sync), or a
+// target's (Mastering). An engine's master, and an export owner's.
 Master_Run :: struct {
-	song:      ^song.Song, // nil: its own rows
-	devices:   []i32, // into song.devices (and params)
+	songs:     bool, // its rows are the song's (else a target's)
 	own_kinds: []device.Device_Kind,
 	own:       []device.Params,
 	own_gain:  f64,
+	gain_to:   f64, // an edit's: the next block ramps there
 	states:    [][]u8,
 	scratch:   ^device.Fx_Scratch,
 	latency:   int,
@@ -71,10 +70,15 @@ master_run_init :: proc(m: ^Master_Run, s: ^song.Song, mastering: Mastering, all
 			m.own_kinds[0], m.own[0] = .Limiter, p
 		}
 	} else {
-		m.song = s
-		m.devices = make([]i32, s.master.count)
-		copy(m.devices, s.chain[s.master.first:base.span_end(s.master)])
+		m.songs = true
+		m.own_gain = s.master_gain_db
+		m.own_kinds = make([]device.Device_Kind, s.master.count)
+		m.own = make([]device.Params, s.master.count)
+		for d, i in s.chain[s.master.first:base.span_end(s.master)] {
+			m.own_kinds[i], m.own[i] = s.devices[d], s.params[d]
+		}
 	}
+	m.gain_to = m.own_gain
 	m.scratch = new(device.Fx_Scratch)
 	m.states = make([][]u8, master_run_rows(m))
 	for i in 0 ..< len(m.states) {
@@ -94,7 +98,6 @@ master_run_destroy :: proc(m: ^Master_Run, allocator := context.allocator) {
 	}
 	delete(m.states)
 	free(m.scratch)
-	delete(m.devices)
 	delete(m.own_kinds)
 	delete(m.own)
 	m^ = {}
@@ -102,27 +105,23 @@ master_run_destroy :: proc(m: ^Master_Run, allocator := context.allocator) {
 
 @(private = "file")
 master_run_rows :: proc(m: ^Master_Run) -> int {
-	return m.song != nil ? len(m.devices) : len(m.own_kinds)
+	return len(m.own_kinds)
 }
 
 // Row i: its kind and its values now.
 @(private = "file")
 master_run_row :: proc(m: ^Master_Run, i: int) -> (device.Device_Kind, device.Params) {
-	if m.song != nil {
-		d := m.devices[i]
-		return m.song.devices[d], m.song.params[d]
-	}
 	return m.own_kinds[i], m.own[i]
 }
 
 @(private = "file")
 master_run_gain :: proc(m: ^Master_Run) -> f64 {
-	return m.song != nil ? m.song.master_gain_db : m.own_gain
+	return m.own_gain
 }
 
 // Whether it does anything to the mix.
 master_run_active :: proc(m: ^Master_Run) -> bool {
-	return master_run_rows(m) > 0 || master_run_gain(m) != 0
+	return master_run_rows(m) > 0 || master_run_gain(m) != 0 || m.gain_to != m.own_gain
 }
 
 // Its chain put at song sample `at`, its measurements cleared.
@@ -137,10 +136,24 @@ master_run_reset :: proc(m: ^Master_Run, at: i64) {
 // A block of the mix through it: its gain, what it measures, its chain.
 master_run_block :: proc(m: ^Master_Run, l, r: []f32) {
 	g := f32(base.db_to_gain(master_run_gain(m)))
+	// an edit's gain: ramped to over this block
+	to := f32(base.db_to_gain(m.gain_to))
+	ramp := m.gain_to != m.own_gain
+	m.own_gain = m.gain_to
+	if ramp {
+		for i in 0 ..< len(l) {
+			x := g + (to - g) * f32(i + 1) / f32(len(l))
+			l[i] *= x
+			r[i] *= x
+		}
+	} else {
+		for i in 0 ..< len(l) {
+			l[i] *= g
+			r[i] *= g
+		}
+	}
 	peak: f32
 	for i in 0 ..< len(l) {
-		l[i] *= g
-		r[i] *= g
 		a := max(abs(l[i]), abs(r[i]))
 		peak = max(peak, a)
 		if a > 1 {

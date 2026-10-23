@@ -138,7 +138,8 @@ automation_from_spec :: proc(s: ^spec.Spec, song: ^Song) {
 			continue
 		}
 		first := len(song.automation)
-		automation_targets(song, lane.path, path, points)
+		lo, hi := automation_range(song, points)
+		automation_targets(song, lane.path, path, points, lo, hi, &song.automation, &song.findings)
 		if len(song.automation) == first {
 			continue
 		}
@@ -222,23 +223,23 @@ automation_unit :: proc(song: ^Song, a: Automation) -> device.Unit {
 	return .Number
 }
 
-// Rows for what `name` names, appended.
-@(private = "file")
-automation_targets :: proc(song: ^Song, name, path: string, points: Span) {
-	add :: proc(song: ^Song, a: Automation) {
+// Rows for what `name` names, appended to `out` (an instrument's value
+// checked to move between lo and hi); a finding at `path` for what it can't.
+automation_targets :: proc(song: ^Song, name, path: string, points: Span, lo, hi: f32, out: ^[dynamic]Automation, findings: ^base.Findings) {
+	add :: proc(out: ^[dynamic]Automation, a: Automation) {
 		x := a
 		x.path = strings.clone(a.path)
-		append(&song.automation, x)
+		append(out, x)
 	}
-	bad :: proc(song: ^Song, path, format: string, args: ..any) {
-		base.report(&song.findings, "unknown_key", .Error, path, format, ..args)
+	bad :: proc(findings: ^base.Findings, path, format: string, args: ..any) {
+		base.report(findings, "unknown_key", .Error, path, format, ..args)
 	}
 	row := Automation{path = name, points = points}
 	switch {
 	case strings.has_prefix(name, "parts/"):
 		part, rest := part_from_path(song, name[len("parts/"):])
 		if part < 0 || rest == "" {
-			bad(song, path, "%s: no part's value is named %q (parts/<part>/gain_db, pan, sends/<name>, effects/<effect>/<param>, an option or node/field; the parts: %s)", path, name, names_joined(song.parts[:]))
+			bad(findings, path, "%s: no part's value is named %q (parts/<part>/gain_db, pan, sends/<name>, effects/<effect>/<param>, an option or node/field; the parts: %s)", path, name, names_joined(song.parts[:]))
 			return
 		}
 		tracks := make([dynamic]i32, context.temp_allocator)
@@ -251,48 +252,47 @@ automation_targets :: proc(song: ^Song, name, path: string, points: Span) {
 		case rest == "gain_db" || rest == "pan":
 			for ti in tracks {
 				row.kind, row.ref = rest == "pan" ? .Track_Pan : .Track_Gain, ti
-				add(song, row)
+				add(out, row)
 			}
 		case strings.has_prefix(rest, "sends/"):
 			to, ok := node_ref_from_name(song, rest[len("sends/"):])
 			if !ok || (to.kind != .Return && to.kind != .Bus) {
-				bad(song, path, "%s: there is no return or bus %q (there are: %s)", path, rest[len("sends/"):], sinks_of(song))
+				bad(findings, path, "%s: there is no return or bus %q (there are: %s)", path, rest[len("sends/"):], sinks_of(song))
 				return
 			}
 			row.kind, row.to = .Send, to
 			if to.kind == .Bus {
 				// a send to a bus is a route from the part
 				row.from = {.Part, i32(part)}
-				add(song, row)
+				add(out, row)
 				return
 			}
 			for ti in tracks {
 				for snd in song.sends[song.tracks[ti].sends.first:base.span_end(song.tracks[ti].sends)] {
 					if snd.ret == to.ref {
 						row.from = {.Track, ti}
-						add(song, row)
+						add(out, row)
 					}
 				}
 			}
 		case strings.has_prefix(rest, "effects/"):
 			for ti in tracks {
-				automation_effect(song, &row, song.tracks[ti].chain, rest[len("effects/"):], path)
+				automation_effect(song, &row, song.tracks[ti].chain, rest[len("effects/"):], path, out, findings)
 			}
 		case:
 			for ti in tracks {
 				program := i32(song.params[song.tracks[ti].instrument][.Program])
 				c := device.control_from_path(&song.programs, program, rest)
 				if c < 0 {
-					bad(song, path, "%s: the instrument of part %s has no option or node/field %q (its options: %s; or gain_db, pan, sends/<name>, effects/<effect>/<param>)", path, song.parts[part], rest, options_of(song, program))
+					bad(findings, path, "%s: the instrument of part %s has no option or node/field %q (its options: %s; or gain_db, pan, sends/<name>, effects/<effect>/<param>)", path, song.parts[part], rest, options_of(song, program))
 					return
 				}
-				lo, hi := automation_range(song, points)
 				if !device.control_moves(&song.programs, program, c, lo, hi) {
-					base.report(&song.findings, "fixed_value", .Error, path, "%s: %q can't move (it is read once, or between %g and %g it would change the instrument's shape)", path, rest, lo, hi)
+					base.report(findings, "fixed_value", .Error, path, "%s: %q can't move (it is read once, or between %g and %g it would change the instrument's shape)", path, rest, lo, hi)
 					return
 				}
 				row.kind, row.ref, row.track = .Control, c, ti
-				add(song, row)
+				add(out, row)
 			}
 		}
 	case strings.has_prefix(name, "returns/") || strings.has_prefix(name, "buses/"):
@@ -300,20 +300,20 @@ automation_targets :: proc(song: ^Song, name, path: string, points: Span) {
 		rest := name[slash + 1:]
 		at := strings.index_byte(rest, '/')
 		if at < 0 {
-			bad(song, path, "%s: name an effect's param (%s<name>/<effect>/<param>)", path, name[:slash + 1])
+			bad(findings, path, "%s: name an effect's param (%s<name>/<effect>/<param>)", path, name[:slash + 1])
 			return
 		}
 		node, ok := node_ref_from_name(song, rest[:at])
 		if !ok || (node.kind != .Return && node.kind != .Bus) {
-			bad(song, path, "%s: there is no %s %q (there are: %s)", path, name[:slash], rest[:at], sinks_of(song))
+			bad(findings, path, "%s: there is no %s %q (there are: %s)", path, name[:slash], rest[:at], sinks_of(song))
 			return
 		}
-		automation_effect(song, &row, NODE_CHAIN[node.kind](song, node.ref), rest[at + 1:], path)
+		automation_effect(song, &row, NODE_CHAIN[node.kind](song, node.ref), rest[at + 1:], path, out, findings)
 	case name == "master/gain_db":
 		row.kind, row.ref = .Placement_Gain, 0
-		add(song, row)
+		add(out, row)
 	case:
-		bad(song, path, "%s: %q moves nothing (parts/..., returns/..., buses/..., master/gain_db)", path, name)
+		bad(findings, path, "%s: %q moves nothing (parts/..., returns/..., buses/..., master/gain_db)", path, name)
 	}
 }
 
@@ -349,10 +349,10 @@ options_of :: proc(song: ^Song, program: i32) -> string {
 // An effect's param in `chain` (`Filter/frequency`, `2/frequency`: the
 // second effect, `Filter#2/frequency`: the second Filter).
 @(private = "file")
-automation_effect :: proc(song: ^Song, row: ^Automation, chain: Span, rest, path: string) {
+automation_effect :: proc(song: ^Song, row: ^Automation, chain: Span, rest, path: string, out: ^[dynamic]Automation, findings: ^base.Findings) {
 	at := strings.index_byte(rest, '/')
 	if at < 0 {
-		base.report(&song.findings, "unknown_key", .Error, path, "%s: name the effect and its param (effects/Filter/frequency)", path)
+		base.report(findings, "unknown_key", .Error, path, "%s: name the effect and its param (effects/Filter/frequency)", path)
 		return
 	}
 	which, param_path := rest[:at], rest[at + 1:]
@@ -378,13 +378,13 @@ automation_effect :: proc(song: ^Song, row: ^Automation, chain: Span, rest, path
 				continue
 			}
 			if p in device.PARAM_FIXED || pr.unit == .Choice || pr.unit == .Asset || pr.unit == .Table {
-				base.report(&song.findings, "fixed_value", .Error, path, "%s: %s's %s is read once (it shapes the effect) and can't move", path, device.DEVICE_TABLE[kind].name, param_path)
+				base.report(findings, "fixed_value", .Error, path, "%s: %s's %s is read once (it shapes the effect) and can't move", path, device.DEVICE_TABLE[kind].name, param_path)
 				return
 			}
 			row.kind, row.ref, row.param = .Param, d, p
 			x := row^
 			x.path = strings.clone(row.path)
-			append(&song.automation, x)
+			append(out, x)
 			return
 		}
 		params := make([dynamic]string, context.temp_allocator)
@@ -393,14 +393,14 @@ automation_effect :: proc(song: ^Song, row: ^Automation, chain: Span, rest, path
 				append(&params, pr.path)
 			}
 		}
-		base.report(&song.findings, "unknown_key", .Error, path, "%s: %s has no param %q (it moves: %s)", path, device.DEVICE_TABLE[kind].name, param_path, names_joined(params[:]))
+		base.report(findings, "unknown_key", .Error, path, "%s: %s has no param %q (it moves: %s)", path, device.DEVICE_TABLE[kind].name, param_path, names_joined(params[:]))
 		return
 	}
 	effects := make([dynamic]string, context.temp_allocator)
 	for d in song.chain[chain.first:base.span_end(chain)] {
 		append(&effects, device.DEVICE_TABLE[song.devices[d]].name)
 	}
-	base.report(&song.findings, "unknown_key", .Error, path, "%s: no effect %q in the chain (it has: %s)", path, which, names_joined(effects[:]))
+	base.report(findings, "unknown_key", .Error, path, "%s: no effect %q in the chain (it has: %s)", path, which, names_joined(effects[:]))
 }
 
 // The smallest and largest value a lane's points reach.
