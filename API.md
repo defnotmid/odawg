@@ -433,6 +433,59 @@ parts = {
   of it remember. A dry track feeding a reverb return pre-rolls the reverb's tail. A dry
   track feeding a dry part pre-rolls nothing.
 
+### 3.9 Automation
+
+Values that move over song time: a filter sweeping open into a drop, a fader riding a part
+up, a send thrown on the last word, a song fading out. `automation` holds a lane per value,
+named by its path, each a list of points `{ at, value, curve }`:
+
+```lua
+automation = {
+  ["parts/pad/cutoff"]                    = { { "build", 400 }, { "drop", 6000 }, { "break", 900, "step" } },
+  ["parts/lead/sends/echo"]               = { { "drop", -30 }, { "drop@7m", -8 }, { "drop@8m", -30, "step" } },
+  ["parts/keys/effects/Filter/frequency"] = { { "verse", 800 }, { "chorus", 5000 } },
+  ["returns/hall/Reverb/wet"]             = { { "break", 0.2 }, { "drop", 0.5 } },
+  ["master/gain_db"]                      = { { "outro@2m", 0 }, { "end", -60 } },
+}
+```
+
+- What a path names:
+  - `parts/<part>/gain_db` and `parts/<part>/pan`: the part's fader and pan.
+  - `parts/<part>/sends/<return or bus>`: a send's level.
+  - `parts/<part>/effects/<effect>/<param>`: an effect in the part's chain, by name
+    (`Filter`), by name and count (`Filter#2`) or by place (`2`).
+  - `parts/<part>/<option>` or `parts/<part>/<node>/<field>[/<modulator field>]`: the
+    instrument's options (`cutoff`) and fields (`lp/frequency`, `lp/frequency/octaves`,
+    `pads/kick/body/decay`).
+  - `returns/<name>/<effect>/<param>` and `buses/<name>/<effect>/<param>`.
+  - `master/gain_db`: the song's level, before the master's effects.
+
+  A part a style supplies works as one the song declares: the path names every track the
+  part has.
+- Each point's `at` is a position (`"drop"`, `"drop@2m"`, `"1:2:0"`, `"end"`) or seconds on
+  the outside clock, as a marker's is (the song's `start` subtracted). Its `value` is in the
+  field's unit: dB, Hz, seconds, 0..1. Points go in time order.
+- The curve is how the value travels from the point before:
+  - `"linear"`: the default.
+  - `"exp"`: geometrically, the default for Hz and seconds. It needs values above 0.
+  - `"step"`: holds, then jumps at the point.
+
+  Before the first point a lane holds the first point's value, and after the last it holds
+  the last.
+- A lane's value is a function of song time alone (`song.automation_value`; a host reads it
+  with `song.automation_at(s, path, seconds)`, the same function, so a picture following a
+  sweep agrees with the sound). Effects and instruments read it per 64-sample cell of song
+  time (1.3 ms), taken at the cell's start. Faders, pans and sends move every sample. The same
+  samples come out on any thread count, in any block size, and from any exact seek.
+- An instrument value moves inside a held note where its field moves per sample (a filter's
+  cutoff and q, an oscillator's frequency, a node's gain). A field read when a note starts
+  (an envelope's times) takes the lane's value at each note's start.
+- An effect's delay lines and memory are sized for the largest value a lane reaches. A param
+  that shapes its effect (`rolloff`, a filter's `type`) can't move, nor can an instrument
+  value that would change the instrument's shape, such as a node going from mono to stereo.
+  Each is a `fixed_value` finding. A path that names nothing is `unknown_key`, and a bad
+  point is `bad_value` at `automation/<path>/<n>`.
+
 ---
 
 ## 4. onimite's Lua API

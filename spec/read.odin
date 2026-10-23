@@ -50,6 +50,7 @@ Field_Kind :: enum u8 {
 	Parts, // the spec: parts by name
 	Returns, // the spec: returns by name
 	Markers, // the spec: markers
+	Automation, // the spec: lanes by path
 	Room, // the spec: room spans
 	Styles, // the spec: its own styles by name
 	Instruments, // the spec: its instruments by name
@@ -92,6 +93,7 @@ FIELD_READERS := [Field_Kind]Field_Reader {
 	.Parts     = read_parts_field,
 	.Returns   = read_returns_field,
 	.Markers   = read_markers_field,
+	.Automation = read_automation_field,
 	.Room      = read_room_field,
 	.Styles    = read_styles_field,
 	.Instruments = read_instruments_field,
@@ -120,6 +122,7 @@ SPEC_FIELDS := []Field_Row {
 	{"parts", .Parts, 0},
 	{"returns", .Returns, 0},
 	{"markers", .Markers, 0},
+	{"automation", .Automation, 0},
 	{"room", .Room, 0},
 	{"styles", .Styles, 0},
 	{"instruments", .Instruments, 0},
@@ -844,6 +847,52 @@ read_markers_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr)
 		} else if m.name == "" {
 			base.report(r.findings, "bad_value", .Error, mp, "%s: a marker needs a name", mp)
 		}
+	}
+}
+
+// automation = { ["parts/pad/cutoff"] = { { "build", 400 }, { "drop", 6000, "exp" } } }:
+// a lane per path, each point { at, value, curve }.
+@(private = "file")
+read_automation_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
+	o, names, ok := named_records(r, v, path, "{ path = { { at, value, curve }, ... } } per lane")
+	if !ok {
+		return
+	}
+	for name in names {
+		lp := base.path_join(path, name, context.allocator)
+		a, is_list := o[name].(json.Array)
+		if !is_list || len(a) == 0 {
+			bad(r, lp, "a list of points { at, value, curve }")
+			continue
+		}
+		lane := Automation_Spec{path = strings.clone(name), points = {i32(len(r.spec.automation_points)), 0}}
+		for x, i in a {
+			pp := base.path_index(lp, i + 1, context.allocator)
+			p, is_point := x.(json.Array)
+			if !is_point || len(p) < 2 || len(p) > 3 {
+				bad(r, pp, "a point { at, value, curve }")
+				continue
+			}
+			pt := Automation_Point_Spec{}
+			read_time_field(r, p[0], base.path_index(pp, 1), &pt.at)
+			value, is_number := number_from_value(p[1])
+			if !is_number {
+				bad(r, base.path_index(pp, 2), "a number")
+				continue
+			}
+			pt.value = value
+			if len(p) == 3 {
+				curve, is_string := p[2].(json.String)
+				if !is_string {
+					bad(r, base.path_index(pp, 3), "a curve: \"linear\", \"exp\" or \"step\"")
+					continue
+				}
+				pt.curve = strings.clone(curve)
+			}
+			append(&r.spec.automation_points, pt)
+			lane.points.count += 1
+		}
+		append(&r.spec.automation, lane)
 	}
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "night_drive",
-  "description": "instruments/synths.json's voices in a song: a slow-opening pad and FM keys in the intro, a plucked arpeggio and a ladder bass over a 909 in the verse, swelling brass into the drop, a gliding lead over chord stabs and the pad pumping under the kick, a reese and a bell in the break.",
+  "description": "instruments/synths.json's voices in a song: a slow-opening pad and FM keys in the intro, a plucked arpeggio and a ladder bass over a 909 in the verse, swelling brass into the drop, a gliding lead over chord stabs and the pad pumping under the kick, a reese and a bell in the break. Automation: the pad's filter opens through the build into the drop and shuts at the break, the drums ride up into the drop, the lead's echo is thrown on the last bar of each drop, the hall swells in the break, and the song fades out.",
   "instruments": "instruments/synths.json",
   "key": "D minor",
   "seed": 7,
@@ -21,6 +21,13 @@
   },
   "buses": {
     "drumbus": { "effects": [ { "name": "Compressor", "threshold": -14, "ratio": 3, "attack": 0.01, "release": 0.12 } ] }
+  },
+  "automation": {
+    "parts/pad/cutoff": [ [ "intro", 250 ], [ "verse", 450 ], [ "build", 500 ], [ "drop", 2200 ], [ "break", 400, "step" ], [ "drop2", 1800 ], [ "outro", 300 ] ],
+    "parts/lead/sends/echo": [ [ "drop", -14 ], [ "drop@7m", -14, "step" ], [ "drop@7m", -4 ], [ "drop@8m", -14, "step" ], [ "drop2@7m", -14, "step" ], [ "drop2@7m", -4 ], [ "drop2@8m", -14, "step" ] ],
+    "parts/drums/gain_db": [ [ "build", -6 ], [ "build@4m", 0 ] ],
+    "returns/hall/Reverb/wet": [ [ "break", 1 ], [ "break@4m", 0.7 ] ],
+    "master/gain_db": [ [ "outro", 0 ], [ "end", -24 ] ]
   },
   "parts": {
     "drums": {

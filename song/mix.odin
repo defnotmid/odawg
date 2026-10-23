@@ -38,6 +38,7 @@ append_song :: proc(m: ^Song, s: ^Song, at: f64, prefix: string, gain_db: f64 = 
 	for p in s.parts {
 		append(&m.parts, strings.concatenate({prefix, "/", p}))
 	}
+	ctl0 := i32(len(m.programs.controls))
 	prog0 := programs_append(&m.programs, &s.programs)
 	for n in s.pad_names {
 		pad_intern(m, n)
@@ -132,6 +133,37 @@ append_song :: proc(m: ^Song, s: ^Song, at: f64, prefix: string, gain_db: f64 = 
 	}
 	for r in s.room {
 		append(&m.room, Room_Span{r.placement + place0, r.start + at, r.stop + at})
+	}
+	// its lanes, on what moved here and from where it starts; paths under
+	// the prefix as its parts are
+	at_sample := i64(at * base.RATE + 0.5)
+	point0 := i32(len(m.automation_points))
+	for pt in s.automation_points {
+		x := pt
+		x.at += at_sample
+		append(&m.automation_points, x)
+	}
+	for a in s.automation {
+		x := a
+		x.path = strings.concatenate({prefix, "/", a.path})
+		x.points = shift(a.points, point0)
+		switch a.kind {
+		case .Track_Gain, .Track_Pan:
+			x.ref += track0
+		case .Control:
+			x.ref += ctl0
+			x.track += track0
+		case .Param:
+			x.ref += dev0
+		case .Placement_Gain:
+			x.ref += place0
+		case .Send:
+			x.from, x.to = moved(a.from, part0, ret0, bus0), moved(a.to, part0, ret0, bus0)
+			if a.from.kind == .Track {
+				x.from.ref += track0
+			}
+		}
+		append(&m.automation, x)
 	}
 	m.duration = max(m.duration, at + s.duration)
 	return place0

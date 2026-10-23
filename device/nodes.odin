@@ -592,7 +592,8 @@ FILTER_GAIN :: 7
 @(private = "file")
 Filter_State :: struct {
 	chain: dsp.Filter_Chain,
-	fixed: dsp.Svf, // a cutoff and q nothing moves: their coefficients, once a note
+	fixed: dsp.Svf, // a cutoff and q nothing moves: their coefficients, computed again only when they change (a lane)
+	fixed_at: [3]f32, // the cutoff, q and gain they are for
 }
 
 @(private = "file")
@@ -601,6 +602,7 @@ start_filter :: proc(c: ^Node_Call, lane: ^Lane) {
 	s := node_state(c, lane, Filter_State)
 	s.chain = dsp.filter_chain_init(dsp.Filter_Type(u8(v[FILTER_TYPE])), v[FILTER_Q], v[FILTER_ROLLOFF], v[FILTER_GAIN])
 	s.fixed = dsp.svf_coefficients(s.chain.type, v[FILTER_FREQUENCY], v[FILTER_Q], v[FILTER_GAIN])
+	s.fixed_at = {v[FILTER_FREQUENCY], v[FILTER_Q], v[FILTER_GAIN]}
 }
 
 @(private = "file")
@@ -623,8 +625,13 @@ process_filter :: proc(c: ^Node_Call) {
 			// one setting for the chunk: the note's (computed at its start), or
 			// another a steady modulator gives
 			coefficient := s.fixed
-			if cutoff != v[FILTER_FREQUENCY] || res != v[FILTER_Q] {
+			if cutoff != s.fixed_at[0] || res != s.fixed_at[1] || v[FILTER_GAIN] != s.fixed_at[2] {
+				s.chain.gain = v[FILTER_GAIN]
 				coefficient = dsp.svf_coefficients(s.chain.type, cutoff, res, s.chain.gain)
+				if cutoff == v[FILTER_FREQUENCY] && res == v[FILTER_Q] {
+					// the base moved (a lane): kept for the chunks after
+					s.fixed, s.fixed_at = coefficient, {cutoff, res, s.chain.gain}
+				}
 			}
 			for side in 0 ..< sides {
 				x := side == 0 ? l : r
@@ -718,15 +725,17 @@ ONE_POLE_FREQUENCY :: 3
 
 @(private = "file")
 One_Pole_State :: struct {
-	y: [2]f32,
-	k: f32, // its coefficient at a fixed cutoff
+	y:  [2]f32,
+	k:  f32, // its coefficient at a fixed cutoff
+	hz: f32, // the cutoff k is for (a lane moving it: k again)
 }
 
 @(private = "file")
 start_one_pole :: proc(c: ^Node_Call, lane: ^Lane) {
 	s := node_state(c, lane, One_Pole_State)
 	s.y = {}
-	s.k = f32(dsp.one_pole_k(f64(node_values(c, lane)[ONE_POLE_FREQUENCY])))
+	s.hz = node_values(c, lane)[ONE_POLE_FREQUENCY]
+	s.k = f32(dsp.one_pole_k(f64(s.hz)))
 }
 
 @(private = "file")
@@ -744,8 +753,10 @@ process_one_pole :: proc(c: ^Node_Call) {
 			for i in 0 ..< n {
 				ks[i] = 1 - dsp.exp_decay(-math.TAU * min(hz[i], 0.49 * RATE) / RATE)
 			}
-		} else if cutoff != base_hz {
-			s.k = 1 - dsp.exp_decay(-math.TAU * min(cutoff, 0.49 * RATE) / RATE) // a steady modulator's
+		} else if cutoff != s.hz {
+			// a steady modulator's, or a lane moved its base
+			s.k = 1 - dsp.exp_decay(-math.TAU * min(cutoff, 0.49 * RATE) / RATE)
+			s.hz = cutoff
 		}
 		for side in 0 ..< (c.node.stereo ? 2 : 1) {
 			x, out := side == 0 ? il : ir, side == 0 ? l : r

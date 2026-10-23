@@ -244,6 +244,10 @@ Song :: struct {
 	voices:   [dynamic][2]f64, // the voice tracks' spans, sorted (a spans sidechain ducks under them)
 	sidechains: [dynamic]Sidechain,
 	pad_gains: [dynamic]Pad_Gain,
+	// Values moving over song time (automation.odin): a row per thing moved,
+	// each lane's points once.
+	automation:        [dynamic]Automation,
+	automation_points: [dynamic]Automation_Point,
 	// The master: its gain, then its chain (into chain; a mix's limiter).
 	master_gain_db: f64,
 	master:   Span,
@@ -306,6 +310,7 @@ song_from_spec :: proc(s: ^spec.Spec, out: ^Song, bank: ^device.Bank = nil) -> b
 	spec.drafts_init(&work.drafts)
 	arrange(s, out, &work)
 	add_transitions(s, out, &work)
+	automation_from_spec(s, out)
 	layered_notes(out, &work)
 	index_notes(out, &work)
 	sort_regions(out)

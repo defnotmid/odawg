@@ -73,6 +73,10 @@ Param_Row :: struct {
 	choices: []string,
 }
 
+// What shapes an effect (its stages, its program): read once, no lane moves
+// it (a Choice, an Asset or a Table neither).
+PARAM_FIXED :: Param_Set{.Filter_Rolloff, .Rolloff, .Program}
+
 WAVE_CHOICES := []string{"sine", "triangle", "sawtooth", "square", "pulse", "fatsine", "fattriangle", "fatsawtooth", "fatsquare"}
 FILTER_CHOICES := []string{"lowpass", "highpass", "bandpass", "lowshelf", "highshelf", "notch", "allpass", "peaking"}
 NOISE_CHOICES := []string{"white", "pink", "brown"}

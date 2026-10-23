@@ -323,7 +323,20 @@ Timeline :: struct {
 	sections: []Timeline_Section,
 	tracks:   []Timeline_Track,
 	markers:  []song.Marker,
+	lanes:    []Timeline_Lane,
 	findings: []base.Finding,
+}
+
+// A lane as written: its path and its points (seconds, value, curve).
+Timeline_Lane :: struct {
+	path:   string,
+	points: []Timeline_Point,
+}
+
+Timeline_Point :: struct {
+	seconds: f64,
+	value:   f32,
+	curve:   string,
 }
 
 timeline_from_song :: proc(l: ^Loaded) -> Timeline {
@@ -341,7 +354,18 @@ timeline_from_song :: proc(l: ^Loaded) -> Timeline {
 	for tr, ti in s.tracks {
 		append(&tracks, Timeline_Track{s.parts[tr.part], song.style_name(s, tr.style), s.labels[tr.instrument], song.track_note_count(s, ti), tr.gain_db})
 	}
-	t.sections, t.tracks = sections[:], tracks[:]
+	lanes := make([dynamic]Timeline_Lane)
+	for a in s.automation {
+		if len(lanes) > 0 && lanes[len(lanes) - 1].path == a.path {
+			continue // a part's lane is a row per track: listed once
+		}
+		points := make([dynamic]Timeline_Point)
+		for pt in s.automation_points[a.points.first:base.span_end(a.points)] {
+			append(&points, Timeline_Point{f64(pt.at) / base.RATE, pt.value, song.AUTOMATION_CURVE_NAMES[pt.curve]})
+		}
+		append(&lanes, Timeline_Lane{a.path, points[:]})
+	}
+	t.sections, t.tracks, t.lanes = sections[:], tracks[:], lanes[:]
 	return t
 }
 
@@ -374,6 +398,13 @@ run_timeline :: proc(a: ^Args) -> bool {
 	}
 	for tr in t.tracks {
 		fmt.printfln("  track   %-10s %-10s %-14s %-11s %+.1f dB", tr.part, tr.variant, tr.instrument, fmt.tprintf("%d notes", tr.notes), tr.gain_db)
+	}
+	for lane in t.lanes {
+		b := strings.builder_make()
+		for pt, i in lane.points {
+			fmt.sbprintf(&b, "%s%.2fs %g%s", i > 0 ? ", " : "", pt.seconds, pt.value, pt.curve != "linear" ? fmt.tprintf(" (%s)", pt.curve) : "")
+		}
+		fmt.printfln("  lane    %-34s %s", lane.path, strings.to_string(b))
 	}
 	print_findings(t.findings)
 	return true

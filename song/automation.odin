@@ -1,0 +1,375 @@
+package odawg_song
+
+import "core:math"
+import "core:slice"
+import "core:strconv"
+import "core:strings"
+import base "../base"
+import device "../device"
+import spec "../spec"
+import tempo "../tempo"
+
+// Automation: values moving over song time. A lane names one settable value
+// by its path (`parts/pad/cutoff`) and holds points; each row here is one
+// thing the engine moves (a part's lane is a row per track). A lane's value
+// is a function of the song sample alone (automation_value), so a preview, an
+// export, a seek and any thread count hear the same.
+
+// What a row moves.
+Automation_Kind :: enum u8 {
+	Track_Gain, // a track's fader (dB): ref the track
+	Track_Pan, // its pan (-1..1): ref the track
+	Send, // a send's level (dB): the edge from `from` to `to`
+	Param, // an effect's param: ref the device, param it
+	Control, // an instrument's control (an option, or a field's own): ref the control in programs, track the track playing it
+	Placement_Gain, // a placed song's level (dB; `master/gain_db`): ref the placement
+}
+
+Automation :: struct {
+	path:     string, // as written: every row of a lane has it
+	kind:     Automation_Kind,
+	ref:      i32,
+	track:    i32, // a Control's track (its program's)
+	param:    device.Param,
+	from, to: Node, // a Send's
+	points:   Span, // into automation_points: the lane's
+}
+
+// How a value travels from the point before to this one.
+Automation_Curve :: enum u8 {
+	Linear,
+	Exp, // geometrically (a frequency, a time)
+	Step, // holds, then jumps here
+}
+
+AUTOMATION_CURVE_NAMES := [Automation_Curve]string {
+	.Linear = "linear",
+	.Exp    = "exp",
+	.Step   = "step",
+}
+
+Automation_Point :: struct {
+	at:    i64, // song sample
+	value: f32,
+	curve: Automation_Curve,
+}
+
+// A lane's value holds over each cell of this many samples of song time,
+// taken at its start: what an effect or an instrument reads steps at the
+// cells' edges (1.3 ms), wherever a block, a note or a seek cuts. Levels
+// (a fader, a pan, a send) move every sample.
+AUTOMATION_CELL :: 64
+
+// Lane `a`'s value at song sample t: the first point's before it, the last's
+// after, between two the later one's curve.
+automation_value :: proc(s: ^Song, a: Automation, t: i64) -> f32 {
+	pts := s.automation_points[a.points.first:base.span_end(a.points)]
+	if len(pts) == 0 {
+		return 0
+	}
+	if t <= pts[0].at {
+		return pts[0].value
+	}
+	// the first point after t
+	k, _ := slice.binary_search_by(pts, t, proc(p: Automation_Point, t: i64) -> slice.Ordering {
+		return p.at <= t ? .Less : .Greater
+	})
+	if k >= len(pts) {
+		return pts[len(pts) - 1].value
+	}
+	a0, a1 := pts[k - 1], pts[k]
+	x := f64(t - a0.at) / f64(a1.at - a0.at)
+	switch a1.curve {
+	case .Step:
+		return a0.value
+	case .Exp:
+		return f32(f64(a0.value) * math.pow(f64(a1.value) / f64(a0.value), x))
+	case .Linear:
+	}
+	return a0.value + (a1.value - a0.value) * f32(x)
+}
+
+// Its value held over the cell sample t is in.
+automation_cell_value :: proc(s: ^Song, a: Automation, t: i64) -> f32 {
+	return automation_value(s, a, automation_cell(t))
+}
+
+// The start of the cell sample t is in.
+automation_cell :: #force_inline proc(t: i64) -> i64 {
+	return t - (t %% AUTOMATION_CELL)
+}
+
+// A lane's value by its path at `seconds` of song time (a host's picture
+// following a sweep): the engine's own function.
+automation_at :: proc(s: ^Song, path: string, seconds: f64) -> (value: f32, ok: bool) {
+	for a in s.automation {
+		if a.path == path {
+			return automation_value(s, a, i64(math.round(seconds * base.RATE))), true
+		}
+	}
+	return 0, false
+}
+
+// Device d's params with every lane on it at its largest value: what its
+// state, delay lines and memory are sized for, so no value a lane reaches
+// outgrows them.
+params_largest :: proc(s: ^Song, d: i32) -> device.Params {
+	p := s.params[d]
+	for a in s.automation {
+		if a.kind != .Param || a.ref != d {
+			continue
+		}
+		for pt in s.automation_points[a.points.first:base.span_end(a.points)] {
+			p[a.param] = max(p[a.param], pt.value)
+		}
+	}
+	return p
+}
+
+// ---- from the spec -------------------------------------------------------------------
+
+// The spec's lanes resolved into rows (after the tracks and their chains
+// are built): each path once, a finding for what it can't move.
+automation_from_spec :: proc(s: ^spec.Spec, song: ^Song) {
+	for lane in s.automation {
+		path := base.path_join("automation", lane.path, context.allocator)
+		points, ok := automation_points_from_spec(s, song, lane, path)
+		if !ok {
+			continue
+		}
+		first := len(song.automation)
+		automation_targets(song, lane.path, path, points)
+		if len(song.automation) == first {
+			continue
+		}
+		// a lane's values are in its field's unit: a frequency or a time
+		// travels geometrically unless written otherwise, and only through
+		// values above 0 then
+		unit := automation_unit(song, song.automation[first])
+		pts := song.automation_points[points.first:base.span_end(points)]
+		for &pt, i in pts {
+			ps := s.automation_points[lane.points.first + i32(i)]
+			if ps.curve == "" && (unit == .Hz || unit == .Seconds) {
+				pt.curve = .Exp
+			}
+			if pt.curve == .Exp && i > 0 && (pt.value <= 0 || pts[i - 1].value <= 0) {
+				base.report(&song.findings, "bad_value", .Error, base.path_index(path, i + 1), "%s: an exp curve moves through values above 0 (%g to %g); give the point \"linear\"", base.path_index(path, i + 1), pts[i - 1].value, pt.value)
+				pt.curve = .Linear
+			}
+		}
+	}
+}
+
+@(private = "file")
+automation_points_from_spec :: proc(s: ^spec.Spec, song: ^Song, lane: spec.Automation_Spec, path: string) -> (sp: Span, ok: bool) {
+	sp = {i32(len(song.automation_points)), 0}
+	last := min(i64)
+	for ps, i in s.automation_points[lane.points.first:base.span_end(lane.points)] {
+		pp := base.path_index(path, i + 1)
+		b: f64
+		found: bool
+		if math.is_nan(ps.at.seconds) {
+			b, found = beat_from_position(song, ps.at.text)
+		} else {
+			b, found = tempo.beat_from_seconds(&song.tempo, ps.at.seconds - s.start), true
+		}
+		if !found {
+			base.report(&song.findings, "bad_value", .Error, pp, "%s: %q is not a position in the song", pp, ps.at.text)
+			return sp, false
+		}
+		at := i64(math.round(tempo.seconds_from_beat(&song.tempo, b) * base.RATE))
+		if at < last {
+			base.report(&song.findings, "bad_value", .Error, pp, "%s: points go in time order (this one is before the one before it)", pp)
+			return sp, false
+		}
+		last = at
+		curve := Automation_Curve.Linear
+		if ps.curve != "" {
+			known := false
+			for name, c in AUTOMATION_CURVE_NAMES {
+				if name == ps.curve {
+					curve, known = c, true
+				}
+			}
+			if !known {
+				base.report(&song.findings, "bad_value", .Error, pp, "%s: %q is not a curve (linear, exp, step)", pp, ps.curve)
+			}
+		}
+		append(&song.automation_points, Automation_Point{at, f32(ps.value), curve})
+		sp.count += 1
+	}
+	return sp, sp.count > 0
+}
+
+// The unit a row's values are in.
+@(private = "file")
+automation_unit :: proc(song: ^Song, a: Automation) -> device.Unit {
+	#partial switch a.kind {
+	case .Param:
+		return device.PARAM_TABLE[a.param].unit
+	case .Control:
+		progs := &song.programs
+		c := progs.controls[a.ref]
+		if c.targets.count > 0 {
+			t := progs.control_targets[c.targets.first]
+			if t.mod < 0 && t.op == .Set {
+				if f := device.field_of_slot(progs.nodes[t.node].kind, int(t.slot)); f != nil {
+					return f.unit
+				}
+			}
+		}
+	}
+	return .Number
+}
+
+// Rows for what `name` names, appended.
+@(private = "file")
+automation_targets :: proc(song: ^Song, name, path: string, points: Span) {
+	add :: proc(song: ^Song, a: Automation) {
+		x := a
+		x.path = strings.clone(a.path)
+		append(&song.automation, x)
+	}
+	bad :: proc(song: ^Song, path, format: string, args: ..any) {
+		base.report(&song.findings, "unknown_key", .Error, path, format, ..args)
+	}
+	row := Automation{path = name, points = points}
+	switch {
+	case strings.has_prefix(name, "parts/"):
+		part, rest := part_from_path(song, name[len("parts/"):])
+		if part < 0 || rest == "" {
+			bad(song, path, "%s: no part's value is named %q (parts/<part>/gain_db, pan, sends/<name>, effects/<effect>/<param>, an option or node/field)", path, name)
+			return
+		}
+		tracks := make([dynamic]i32, context.temp_allocator)
+		for t, i in song.tracks {
+			if int(t.part) == part {
+				append(&tracks, i32(i))
+			}
+		}
+		switch {
+		case rest == "gain_db" || rest == "pan":
+			for ti in tracks {
+				row.kind, row.ref = rest == "pan" ? .Track_Pan : .Track_Gain, ti
+				add(song, row)
+			}
+		case strings.has_prefix(rest, "sends/"):
+			to, ok := node_ref_from_name(song, rest[len("sends/"):])
+			if !ok || (to.kind != .Return && to.kind != .Bus) {
+				bad(song, path, "%s: there is no return or bus %q", path, rest[len("sends/"):])
+				return
+			}
+			row.kind, row.to = .Send, to
+			if to.kind == .Bus {
+				// a send to a bus is a route from the part
+				row.from = {.Part, i32(part)}
+				add(song, row)
+				return
+			}
+			for ti in tracks {
+				for snd in song.sends[song.tracks[ti].sends.first:base.span_end(song.tracks[ti].sends)] {
+					if snd.ret == to.ref {
+						row.from = {.Track, ti}
+						add(song, row)
+					}
+				}
+			}
+		case strings.has_prefix(rest, "effects/"):
+			for ti in tracks {
+				automation_effect(song, &row, song.tracks[ti].chain, rest[len("effects/"):], path)
+			}
+		case:
+			for ti in tracks {
+				program := i32(song.params[song.tracks[ti].instrument][.Program])
+				c := device.control_from_path(&song.programs, program, rest)
+				if c < 0 {
+					bad(song, path, "%s: the instrument of part %s has no option or node/field %q", path, song.parts[part], rest)
+					return
+				}
+				lo, hi := automation_range(song, points)
+				if !device.control_moves(&song.programs, program, c, lo, hi) {
+					base.report(&song.findings, "fixed_value", .Error, path, "%s: %q can't move (it is read once, or between %g and %g it would change the instrument's shape)", path, rest, lo, hi)
+					return
+				}
+				row.kind, row.ref, row.track = .Control, c, ti
+				add(song, row)
+			}
+		}
+	case strings.has_prefix(name, "returns/") || strings.has_prefix(name, "buses/"):
+		slash := strings.index_byte(name, '/')
+		rest := name[slash + 1:]
+		at := strings.index_byte(rest, '/')
+		if at < 0 {
+			bad(song, path, "%s: name an effect's param (%s<name>/<effect>/<param>)", path, name[:slash + 1])
+			return
+		}
+		node, ok := node_ref_from_name(song, rest[:at])
+		if !ok || (node.kind != .Return && node.kind != .Bus) {
+			bad(song, path, "%s: there is no %s %q", path, name[:slash], rest[:at])
+			return
+		}
+		automation_effect(song, &row, NODE_CHAIN[node.kind](song, node.ref), rest[at + 1:], path)
+	case name == "master/gain_db":
+		row.kind, row.ref = .Placement_Gain, 0
+		add(song, row)
+	case:
+		bad(song, path, "%s: %q moves nothing (parts/..., returns/..., buses/..., master/gain_db)", path, name)
+	}
+}
+
+// An effect's param in `chain` (`Filter/frequency`, `2/frequency`: the
+// second effect, `Filter#2/frequency`: the second Filter).
+@(private = "file")
+automation_effect :: proc(song: ^Song, row: ^Automation, chain: Span, rest, path: string) {
+	at := strings.index_byte(rest, '/')
+	if at < 0 {
+		base.report(&song.findings, "unknown_key", .Error, path, "%s: name the effect and its param (effects/Filter/frequency)", path)
+		return
+	}
+	which, param_path := rest[:at], rest[at + 1:]
+	name, nth := which, 1
+	if hash := strings.index_byte(which, '#'); hash >= 0 {
+		name = which[:hash]
+		nth, _ = strconv.parse_int(which[hash + 1:])
+	}
+	index, by_index := strconv.parse_int(which)
+	seen := 0
+	for d, i in song.chain[chain.first:base.span_end(chain)] {
+		kind := song.devices[d]
+		if by_index ? i + 1 != index : device.DEVICE_TABLE[kind].name != name {
+			continue
+		}
+		seen += 1
+		if !by_index && seen != nth {
+			continue
+		}
+		for p in device.Param {
+			pr := device.PARAM_TABLE[p]
+			if pr.path != param_path || p not_in device.DEVICE_TABLE[kind].reads {
+				continue
+			}
+			if p in device.PARAM_FIXED || pr.unit == .Choice || pr.unit == .Asset || pr.unit == .Table {
+				base.report(&song.findings, "fixed_value", .Error, path, "%s: %s's %s is read once (it shapes the effect) and can't move", path, device.DEVICE_TABLE[kind].name, param_path)
+				return
+			}
+			row.kind, row.ref, row.param = .Param, d, p
+			x := row^
+			x.path = strings.clone(row.path)
+			append(&song.automation, x)
+			return
+		}
+		base.report(&song.findings, "unknown_key", .Error, path, "%s: %s has no param %q", path, device.DEVICE_TABLE[kind].name, param_path)
+		return
+	}
+	base.report(&song.findings, "unknown_key", .Error, path, "%s: no effect %q in the chain", path, which)
+}
+
+// The smallest and largest value a lane's points reach.
+@(private = "file")
+automation_range :: proc(song: ^Song, points: Span) -> (lo, hi: f32) {
+	lo, hi = max(f32), min(f32)
+	for pt in song.automation_points[points.first:base.span_end(points)] {
+		lo, hi = min(lo, pt.value), max(hi, pt.value)
+	}
+	return
+}

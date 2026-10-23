@@ -48,6 +48,8 @@ Spec :: struct {
 	sends:             [dynamic]Send_Spec,
 	returns:           [dynamic]Return_Spec,
 	markers:           [dynamic]Marker_Spec,
+	automation:        [dynamic]Automation_Spec, // by path, sorted
+	automation_points: [dynamic]Automation_Point_Spec,
 	room:              [dynamic][2]f64, // spans (outside clock) another sound needs room in
 	room_from:         string, // or a sound the host places, by name ("voice"): its spans
 	strings:           [dynamic]string, // an `.Asset` param's name ("vcsl/upright_piano"): its value is the index here
@@ -311,6 +313,21 @@ Return_Spec :: struct {
 Marker_Spec :: struct {
 	name: string,
 	at:   Time_Spec,
+}
+
+// A lane: what it moves (`parts/pad/cutoff`) and its points, in order.
+Automation_Spec :: struct {
+	path:   string,
+	points: Span, // into automation_points
+}
+
+// A point of a lane: where (a position, or seconds on the outside clock as
+// a marker's), its value in the field's unit, how it is reached from the
+// point before ("": the unit's way).
+Automation_Point_Spec :: struct {
+	at:    Time_Spec,
+	value: f64,
+	curve: string,
 }
 
 // A number (seconds) or a string (a Tone length or a position), as written.

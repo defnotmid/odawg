@@ -959,6 +959,112 @@ control_set :: proc(progs: ^Programs, program: i32, name: u32, value: f32) -> bo
 	return true
 }
 
+// The control a path names in program: its own (`cutoff`), or one made for
+// a field (`lp/frequency`, `lp/frequency/octaves`, `pads/kick/body/decay`:
+// set as written, in the field's unit) reaching the field's nodes in the
+// program and its layers' programs. -1: it names nothing there.
+control_from_path :: proc(progs: ^Programs, program: i32, path: string) -> i32 {
+	if program < 0 {
+		return -1
+	}
+	p := progs.programs[program]
+	for c, i in progs.controls[p.controls.first:base.span_end(p.controls)] {
+		if c.name == base.name_id(path) {
+			return p.controls.first + i32(i)
+		}
+	}
+	parts := strings.split(path, "/", context.temp_allocator)
+	if len(parts) < 2 {
+		return -1
+	}
+	row := Control_Row{name = base.name_id(path), targets = {i32(len(progs.control_targets)), 0}}
+	// the programs it reaches: a pad's (`pads/kick/...`), else the program
+	// and every program its layers play (an SFZ's regions share theirs), once
+	programs := make([dynamic]i32, context.temp_allocator)
+	reach :: proc(progs: ^Programs, program: i32, pad: u32, out: ^[dynamic]i32) {
+		p := progs.programs[program]
+		if pad == 0 && !slice.contains(out[:], program) {
+			append(out, program)
+		}
+		for pr in progs.layers[p.layers.first:base.span_end(p.layers)] {
+			if pr.program >= 0 && pr.program != program && (pad == 0 || progs.pads[pr.row].pad == pad) {
+				reach(progs, pr.program, 0, out)
+			}
+		}
+	}
+	if parts[0] == "pads" {
+		if len(parts) < 4 {
+			return -1
+		}
+		reach(progs, program, base.name_id(parts[1]), &programs)
+		parts = parts[2:]
+	} else {
+		reach(progs, program, 0, &programs)
+	}
+	if len(parts) > 3 {
+		return -1
+	}
+	mf := Mod_Field.None
+	if len(parts) == 3 {
+		f, is_field := mod_field_from_name(parts[2])
+		if !is_field {
+			return -1
+		}
+		mf = f
+	}
+	name := base.name_id(parts[0])
+	for pi in programs {
+		p := progs.programs[pi]
+		for &g, j in progs.nodes[p.nodes.first:base.span_end(p.nodes)] {
+			field, slot, known := node_field_from_name(g.kind, parts[1])
+			if g.name != name || !known || field.list > 0 {
+				continue
+			}
+			x := Control_Target{node = p.nodes.first + i32(j), mod = -1, slot = u8(slot), field = mf, op = .Set, scale = 1}
+			if mf != .None {
+				for mi in g.mods.first ..< base.span_end(g.mods) {
+					if int(progs.mods[mi].slot) == slot {
+						x.mod = mi
+						break
+					}
+				}
+				if x.mod < 0 {
+					continue
+				}
+			}
+			x.base = control_target_value(progs, x)
+			append(&progs.control_targets, x)
+			row.targets.count += 1
+		}
+	}
+	if row.targets.count == 0 {
+		return -1
+	}
+	row.value = control_read(progs, &row)
+	append(&progs.controls, row)
+	append(&progs.control_names, strings.clone(path))
+	return i32(len(progs.controls) - 1)
+}
+
+// Whether control c of program may move between lo and hi: it isn't read
+// only at compile, and neither end changes the program's shape. Its value
+// is put back.
+control_moves :: proc(progs: ^Programs, program: i32, c: i32, lo, hi: f32) -> bool {
+	row := &progs.controls[c]
+	if row.fixed {
+		return false
+	}
+	old := row.value
+	moves := true
+	for v in ([2]f32{lo, hi}) {
+		control_apply(progs, row, v)
+		moves &&= !program_derive(progs, program)
+	}
+	control_apply(progs, row, old)
+	program_derive(progs, program)
+	return moves
+}
+
 // A node's field (by the node's name; its pads' programs' too) set to
 // value, and what follows derived. False: none, or its shape would change.
 node_field_set :: proc(progs: ^Programs, program: i32, node: u32, field: string, value: f32) -> bool {
