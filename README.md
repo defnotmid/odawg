@@ -14,7 +14,10 @@ noise, a slew, a comb, a sampler, a clip; a host registers its own kinds)
 wired by name, with options (knobs) that set or scale its fields, or a
 machine of pads, each such a row. Tone.js's synths are built-in rows;
 examples/ writes out the TR-808 and TR-909 (machines/), a TB-303 (accent,
-slide), onimite's synth.lua voices (instruments/classic.json) and seven
+slide), voices built as a synth programmer would (instruments/synths.json:
+a pad, pluck, lead, bass, reese, stab, brass, FM keys and bell, each with
+its filter envelope, unison and velocity and key tracking; night_drive.json
+plays them all), onimite's synth.lua voices (instruments/classic.json) and seven
 styles (styles/: ambient, house, lofi, synthwave, chicago_house,
 booty_house, acid_house) as files to copy. A `Sampler` plays
 licence-checked sample sets downloaded on first use, or your own (a set
