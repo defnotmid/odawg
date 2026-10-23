@@ -64,6 +64,11 @@ roles instead of imitating them.
   for pads and leads. A high-pass on a return keeps its low end clean.
 - **Pumping.** `sidechain` from `drums/kick` ducks pads, basses and stabs in
   dance music; a song that isn't dance music usually shouldn't pump.
+- **One reference level.** Every voice in `synths.json` reaches −18 LUFS
+  max momentary (its loudest 400 ms) for one note at velocity 0.8, played
+  alone (C4; the basses C2). Swapping one voice for another keeps the
+  part's level. A voice of your own set to the same reference drops in the
+  same way. A chord of four notes comes out about 6 dB louder.
 - **Levels by measurement.** `odawg analyze` reports each part's loudness
   per section. The drums and bass anchor the mix, the melody sits clearly
   above the comping, and a part more than about 15 LU under the mix is

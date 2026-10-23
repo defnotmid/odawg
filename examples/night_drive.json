@@ -48,7 +48,7 @@
     },
     "pad": {
       "instrument": "pad",
-      "gain_db": -4,
+      "gain_db": -1.3,
       "sends": { "hall": -10 },
       "sidechain": { "name": "drums/kick", "depth": 0.5, "release": 0.16 },
       "play": [
@@ -63,7 +63,7 @@
     },
     "keys": {
       "instrument": "keys",
-      "gain_db": -3,
+      "gain_db": -0.6,
       "effects": [ { "name": "Chorus", "frequency": 0.8, "delay_time": 0.004, "depth": 0.5, "wet": 0.35 } ],
       "sends": { "hall": -14 },
       "play": [
@@ -74,7 +74,7 @@
     },
     "arp": {
       "instrument": "pluck",
-      "gain_db": -2,
+      "gain_db": -5.2,
       "sends": { "echo": -12, "hall": -18 },
       "sidechain": { "name": "drums/kick", "depth": 0.35, "release": 0.1 },
       "play": [
@@ -85,7 +85,7 @@
     },
     "bass": {
       "instrument": "bass",
-      "gain_db": -2,
+      "gain_db": 3.8,
       "sidechain": { "name": "drums/kick", "depth": 0.6, "release": 0.12 },
       "play": [
         { "name": "verse", "degrees": "1 . 1 1 . 1 . 8", "subdivision": "8n", "duration": "16n", "octave": 2, "velocity": 0.6 },
@@ -96,18 +96,18 @@
     },
     "reese": {
       "instrument": "reese",
-      "gain_db": -5,
+      "gain_db": -0.7,
       "play": [ { "name": "break", "degrees": "1 - - - - - - -", "subdivision": "8n", "octave": 2, "velocity": 0.7 } ]
     },
     "brass": {
       "instrument": "brass",
-      "gain_db": -3,
+      "gain_db": -2.6,
       "sends": { "hall": -12 },
       "play": [ { "name": "build", "chords": { "voicing": "close", "rhythm": "x.......x......." }, "duration": "4n.", "octave": 4, "velocity": 0.75 } ]
     },
     "stabs": {
       "instrument": "stab",
-      "gain_db": 2,
+      "gain_db": -8.7,
       "sends": { "hall": -14 },
       "sidechain": { "name": "drums/kick", "depth": 0.5, "release": 0.1 },
       "play": [
@@ -117,7 +117,7 @@
     },
     "lead": {
       "instrument": "lead",
-      "gain_db": -3,
+      "gain_db": 0.3,
       "sends": { "echo": -10, "hall": -14 },
       "play": [
         { "name": "drop", "notes": "D5 - F5 A5 G5 - F5 E5 D5 - - - C5 D5 - - F5 - D5 F5 A5 - C6 A5 G5 - - - E5 - - -", "subdivision": "8n", "velocity": 0.8, "pickup": "A4 C5", "vary": [ {}, { "octave": -1, "velocity": 0.9 } ] },
@@ -126,7 +126,7 @@
     },
     "bell": {
       "instrument": "bell",
-      "gain_db": -6,
+      "gain_db": -0.6,
       "sends": { "hall": -6, "echo": -14 },
       "play": [
         { "name": "break", "notes": "A5 - - - F5 - - - D6 - - - C6 - - -", "subdivision": "4n", "velocity": 0.55 },
