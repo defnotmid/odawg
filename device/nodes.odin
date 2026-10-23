@@ -633,12 +633,7 @@ process_filter :: proc(c: ^Node_Call) {
 					s.fixed, s.fixed_at = coefficient, {cutoff, res, s.chain.gain}
 				}
 			}
-			for side in 0 ..< sides {
-				x := side == 0 ? l : r
-				for k in 0 ..< s.chain.stages {
-					dsp.svf_run(coefficient, &s.chain.state[side][k], x)
-				}
-			}
+			dsp.filter_chain_run_sides(&s.chain, {coefficient}, l, r, sides, true)
 			continue
 		}
 		if !swept {
@@ -659,9 +654,7 @@ process_filter :: proc(c: ^Node_Call) {
 		} else {
 			dsp.filter_chain_coefficients(&s.chain, hz[:n], coefficients[:n])
 		}
-		for side in 0 ..< sides {
-			dsp.filter_chain_run_swept(&s.chain, coefficients[:n], side == 0 ? l : r, side)
-		}
+		dsp.filter_chain_run_sides(&s.chain, coefficients[:n], l, r, sides, false)
 	}
 }
 

@@ -95,36 +95,6 @@ svf_coefficients :: proc "contextless" (type: Filter_Type, hz, q, gain: f32) -> 
 	return {f32(c.a1), f32(c.a2), f32(c.a3), f32(c.m0), f32(c.m1), f32(c.m2)}
 }
 
-// Runs a slice through one SVF in place, at fixed coefficients.
-svf_run :: proc "contextless" (c: Svf, s: ^Svf_State, x: []f32) {
-	ic1, ic2 := s.ic1, s.ic2
-	for i in 0 ..< len(x) {
-		v0 := x[i]
-		v3 := v0 - ic2
-		v1 := c.a1 * ic1 + c.a2 * v3
-		v2 := ic2 + c.a2 * ic1 + c.a3 * v3
-		ic1 = 2 * v1 - ic1
-		ic2 = 2 * v2 - ic2
-		x[i] = c.m0 * v0 + c.m1 * v1 + c.m2 * v2
-	}
-	s.ic1, s.ic2 = ic1, ic2
-}
-
-// Runs a slice through one SVF in place, with each sample's own coefficients.
-svf_run_swept :: proc "contextless" (c: []Svf, s: ^Svf_State, x: []f32) {
-	ic1, ic2 := s.ic1, s.ic2
-	for i in 0 ..< min(len(x), len(c)) {
-		v0 := x[i]
-		v3 := v0 - ic2
-		v1 := c[i].a1 * ic1 + c[i].a2 * v3
-		v2 := ic2 + c[i].a2 * ic1 + c[i].a3 * v3
-		ic1 = 2 * v1 - ic1
-		ic2 = 2 * v2 - ic2
-		x[i] = c[i].m0 * v0 + c[i].m1 * v1 + c[i].m2 * v2
-	}
-	s.ic1, s.ic2 = ic1, ic2
-}
-
 // Tone's rolloffs and how many 12 dB stages it cascades for each (its own
 // mapping: -48 is three, -96 four); anything else reads as the nearest. The
 // Filter node and the Filter effect both.
@@ -155,22 +125,60 @@ filter_chain_init :: proc "contextless" (type: Filter_Type, q, rolloff, gain: f3
 	return {type = type, q = q, gain = gain, stages = rolloff_stages(rolloff)}
 }
 
-// Filters a slice of `channel` in place with each sample's coefficients
-// (from filter_chain_coefficients), shared by every stage.
-filter_chain_run_swept :: proc "contextless" (f: ^Filter_Chain, c: []Svf, x: []f32, channel := 0) {
-	for s in 0 ..< f.stages {
-		svf_run_swept(c, &f.state[channel][s], x)
-	}
+// One sample through one SVF.
+svf_step :: #force_inline proc "contextless" (c: Svf, s: ^Svf_State, v0: f32) -> f32 {
+	v3 := v0 - s.ic2
+	v1 := c.a1 * s.ic1 + c.a2 * v3
+	v2 := s.ic2 + c.a2 * s.ic1 + c.a3 * v3
+	s.ic1 = 2 * v1 - s.ic1
+	s.ic2 = 2 * v2 - s.ic2
+	return c.m0 * v0 + c.m1 * v1 + c.m2 * v2
 }
 
-// Coefficients for a cutoff that moves every sample (`hz`, one per sample).
+// Filters l (and r, `sides` 2) in place with each sample's coefficients
+// (from filter_chain_coefficients; `fixed`: c[0] for every sample), every
+// stage and side in one pass over the samples: each recurrence waits on
+// its own last sample only, so the stages and sides run side by side (the
+// same samples as a stage at a time).
+filter_chain_run_sides :: proc "contextless" (f: ^Filter_Chain, c: []Svf, l, r: []f32, sides: int, fixed: bool) #no_bounds_check {
+	st := f.state
+	n := len(l)
+	stages := f.stages
+	step := fixed ? 0 : 1
+	if sides == 2 {
+		for i in 0 ..< n {
+			cc := c[i * step]
+			a, b := l[i], r[i]
+			for k in 0 ..< stages {
+				a = svf_step(cc, &st[0][k], a)
+				b = svf_step(cc, &st[1][k], b)
+			}
+			l[i], r[i] = a, b
+		}
+	} else {
+		for i in 0 ..< n {
+			cc := c[i * step]
+			a := l[i]
+			for k in 0 ..< stages {
+				a = svf_step(cc, &st[0][k], a)
+			}
+			l[i] = a
+		}
+	}
+	f.state = st
+}
+
+// Coefficients for a cutoff that moves every sample (`hz`, one per sample):
+// the shape (its q and gain hold) once, each cutoff's warp.
 filter_chain_coefficients :: proc "contextless" (f: ^Filter_Chain, hz: []f32, out: []Svf) {
+	shape := SVF_SHAPES[f.type](f64(f.q), f64(f.gain))
 	last: f32 = -1
 	c: Svf
 	for i in 0 ..< min(len(hz), len(out)) {
 		if hz[i] != last {
 			last = hz[i]
-			c = svf_coefficients(f.type, last, f.q, f.gain)
+			x := svf64(shape, f64(last))
+			c = {f32(x.a1), f32(x.a2), f32(x.a3), f32(x.m0), f32(x.m1), f32(x.m2)}
 		}
 		out[i] = c
 	}
