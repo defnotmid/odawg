@@ -26,7 +26,10 @@ Effects: Tone.js's, causal and
 streaming (reverb, delays, chorus, compressor, true-peak limiter, EQ, ...). A sibling
 of ovg, o3d, oksl, odecs and ottis; onimite binds it for its videos. MIT
 licensed. [API.md](API.md) is the design; [WORKFLOWS.md](WORKFLOWS.md) walks
-through using it.
+through using it; [SOUND_DESIGN.md](SOUND_DESIGN.md) is how to build voices
+by role and write songs that aren't the default one, with reference songs
+across genres (funk, a jazz waltz, a 6/8 ballad, boom bap, a Dorian groove,
+drum & bass).
 
 It builds against odecs (its audio decoding and WAV header) checked out beside it:
 `git clone -b v0.0.9 https://github.com/defnotmid/odecs ../odecs`.
