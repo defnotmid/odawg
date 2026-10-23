@@ -89,6 +89,10 @@ up and dropped. Choose each of these on purpose:
 - **Form.** Let sections be long enough for an idea to develop. Change
   something at each one: a part drops out, the bass pattern changes, the
   drums go half-time.
+- **Development.** A motif repeated unchanged is a loop. `vary` changes
+  each repeat (up a step, mirrored, thinned out, filled in), and `pickup`
+  leads a phrase in. `automation` moves what a loop can't: a filter opening
+  over a build, a send thrown on a phrase's last word, a fade.
 
 The reference songs each show one of these:
 

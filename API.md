@@ -201,6 +201,34 @@ A play entry is `{ range, ... }` with one of:
 
 Entries can also take `velocity`, `octave` and `humanize`.
 
+A `notes` or `degrees` entry can vary its repeats and lead into its range:
+
+```lua
+{ "drop", notes = "D5 - F5 A5 G5 - F5 E5", subdivision = "8n",
+  vary = { {}, { transpose = 2 }, { thin = 0.3 }, { invert = true, fill = true } },
+  pickup = "A4 C5" }
+```
+
+- `vary` is a list of variations, one per repeat of the pattern (each time its slots come
+  round), used in turn. `{}` plays the repeat as written. A variation's fields apply in
+  this order:
+  - `reverse`: the pitches backwards, the rhythm kept.
+  - `invert`: the pitches mirrored around the repeat's first note.
+  - `transpose = n`: n steps up the song's key (down when negative).
+  - `octave = n`
+  - `thin = 0..1`: that share of the notes after the first become rests.
+  - `fill`: each rest becomes a step from the note before toward the next.
+  - `velocity = x`: scales the velocity.
+
+  `invert`, `transpose` and `fill` move within the key, not the chord. A note outside the
+  key keeps its distance above the scale tone below it. `thin` draws from the song's seed,
+  the part, the entry and the repeat, so changing another part doesn't move its rests.
+- `pickup`: notes in the entry's subdivision played just before its range starts, ending
+  where it starts (an anacrusis). A pickup that would start before the song is a
+  `bad_value` finding. One that plays over the part's notes before it is a
+  `pickup_overlaps` warning.
+- A drum fill is a list of bar strings (`steps`), with the fill in the phrase's last bar.
+
 ### 3.4 Instruments
 
 An instrument is data, never code: a row of nodes wired by name, read into a program where

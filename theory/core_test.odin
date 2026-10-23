@@ -35,3 +35,18 @@ test_degrees :: proc(t: ^testing.T) {
 	e, _ := chord_from_string("E")
 	testing.expect_value(t, pitch_from_degree(k, e, 3, 3), 56)
 }
+
+// Steps within a key: up and down its scale across octaves, a note outside
+// it keeping its offset.
+@(test)
+test_key_steps :: proc(t: ^testing.T) {
+	c, _ := key_from_string("C major")
+	testing.expect_value(t, key_step(c, 60, 1), 62) // C4 -> D4
+	testing.expect_value(t, key_step(c, 64, 1), 65) // E4 -> F4
+	testing.expect_value(t, key_step(c, 71, 1), 72) // B4 -> C5
+	testing.expect_value(t, key_step(c, 60, -1), 59) // C4 -> B3
+	testing.expect_value(t, key_step(c, 60, 7), 72)
+	testing.expect_value(t, key_step(c, 61, 1), 63) // C#4 -> D#4
+	d, _ := key_from_string("D dorian")
+	testing.expect_value(t, key_step(d, 62, 5), 71) // D4 -> B4, the raised sixth
+}

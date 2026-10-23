@@ -532,6 +532,7 @@ Expand :: struct {
 	from_spec: ^spec.Spec,
 	play:     ^spec.Play_Spec,
 	from, to: f64,
+	lo:       f64, // the earliest beat a note may start: from, or a pickup's
 	octave:   int,
 	swing:    f64,
 	swing_at: f64, // beats of the swung subdivision
@@ -566,7 +567,7 @@ expand :: proc(song: ^Song, from_spec: ^spec.Spec, name: string, own: ^spec.Part
 	if !math.is_nan(pl.octave) {
 		octave = int(pl.octave)
 	}
-	x := Expand{song = song, from_spec = from_spec, play = pl, from = from, to = to, octave = octave, out = out}
+	x := Expand{song = song, from_spec = from_spec, play = pl, from = from, to = to, lo = from, octave = octave, out = out}
 	swing, sub := from_spec.swing, from_spec.swing_subdivision
 	if style != nil && from_spec != style && swing == 0 {
 		swing, sub = style.swing, style.swing_subdivision
@@ -587,13 +588,13 @@ bpb_at :: proc(song: ^Song, beat: f64) -> int {
 // Adds a note at `beat` lasting `beats`, swung and humanized.
 @(private = "file")
 emit :: proc(x: ^Expand, beat, beats: f64, pitch: f32, velocity: f64, pad: u32, accent: f32 = 0) {
-	if beat < x.from - 1e-9 || beat >= x.to - 1e-9 {
+	if beat < x.lo - 1e-9 || beat >= x.to - 1e-9 {
 		return
 	}
 	b := beat
 	if x.swing > 0 && x.swing_at > 0 {
 		q := (b - x.from) / x.swing_at
-		if n := math.round(q); math.abs(q - n) < 1e-6 && int(n) % 2 == 1 {
+		if n := math.round(q); math.abs(q - n) < 1e-6 && int(n) %% 2 == 1 { // a pickup's before the range too
 			b += x.swing * x.swing_at / 3
 		}
 	}
@@ -717,62 +718,62 @@ expand_steps :: proc(x: ^Expand) {
 // Beats a sliding note's gate stays open past the next note's start.
 SLIDE_OVERLAP :: 1.0 / 32
 
+// A sequence's slot as played: a note (its pitch, accent, slide, velocity),
+// a rest, or a hold of the note before; where it is in its cycle, in slots.
+@(private = "file")
+Cell :: struct {
+	at, length: f64,
+	kind:       enum u8 {Note, Rest, Hold},
+	pitch:      f32,
+	accent:     f32,
+	slide:      bool,
+	velocity:   f64,
+}
+
 @(private = "file")
 expand_sequence :: proc(x: ^Expand) {
-	degrees := x.play.kind == .Degrees
 	sub := x.play.subdivision != "" ? x.play.subdivision : "8n"
 	l, ok := tempo.length_from_string(sub, bpb_at(x.song, x.from))
 	if !ok || l.in_seconds || l.value <= 0 {
 		bad_play(x, "%s/subdivision: %q is not a Tone length (\"8n\", \"16n\")", x.play.path, sub)
 		return
 	}
-	tokens := x.from_spec.tokens[x.play.rows.first:base.span_end(x.play.rows)]
+	spec_ := x.from_spec
+	tokens := spec_.tokens[x.play.rows.first:base.span_end(x.play.rows)]
 	if len(tokens) == 0 || x.play.slots <= 0 {
 		return
 	}
 	cycle := x.play.slots * l.value
+	varies := spec_.varies[x.play.vary.first:base.span_end(x.play.vary)]
 	slides := make([dynamic]int, context.temp_allocator) // notes whose gate runs into the next
-	for c := x.from; c < x.to - 1e-9; c += cycle {
-		held := false
-		for t in tokens {
-			b := c + t.at * l.value
-			if b >= x.to - 1e-9 {
-				break
+	cells := make([dynamic]Cell, context.temp_allocator)
+	// the pickup: its notes ending where the range starts
+	if x.play.pickup.count > 0 {
+		from := x.from - x.play.pickup_slots * l.value
+		if from < -1e-9 {
+			bad_play(x, "%s/pickup: it would start %.2f beats before the song does", x.play.path, -from)
+		} else {
+			for n in x.out {
+				if n.beat < x.from - 1e-9 && tempo.beat_from_seconds(&x.song.tempo, n.time + n.duration) > from + 1e-9 {
+					base.report(&x.song.findings, "pickup_overlaps", .Warning, x.play.path, "%s/pickup: it plays over the part's notes before it (at beat %.2f)", x.play.path, n.beat)
+					break
+				}
 			}
-			switch t.text {
-			case ".", "~", "r":
-				held = false
-			case "-", "_":
-				if held {
-					extend_last(x, t.length * l.value)
-				}
-			case:
-				// "E5!" an accent, "E5~" its gate held into the next note (a mono
-				// voice slides), "E5!~" both
-				text, vel, beats := t.text, x.play.velocity, hit_length(x, t.length * l.value, b)
-				slide := false
-				accent: f32
-				for len(text) > 1 && (text[len(text) - 1] == '!' || text[len(text) - 1] == '~') {
-					if text[len(text) - 1] == '!' {
-						accent = 1
-					} else {
-						slide = true
-					}
-					text = text[:len(text) - 1]
-				}
-				p, is_pitch := token_pitch(x, text, b, degrees)
-				if !is_pitch {
-					bad_play(x, "%s: %q is not a %s", x.play.path, t.text, degrees ? "degree (1, 5, 8; ! accent, ~ slide)" : "note (\"E5\", \"E5!\" accented, \"E5~\" sliding) or rest (\".\")")
-					return
-				}
-				before := len(x.out)
-				emit(x, b, beats, p, vel, 0, accent)
-				held = len(x.out) > before
-				if held && slide {
-					append(&slides, len(x.out) - 1)
-				}
+			if cells_from_tokens(x, spec_.tokens[x.play.pickup.first:base.span_end(x.play.pickup)], from, l.value, &cells) {
+				x.lo = from
+				emit_cells(x, cells[:], from, l.value, &slides)
+				x.lo = x.from
 			}
 		}
+	}
+	for c, k := x.from, 0; c < x.to - 1e-9; c, k = c + cycle, k + 1 {
+		if !cells_from_tokens(x, tokens, c, l.value, &cells) {
+			return
+		}
+		if len(varies) > 0 {
+			vary_cells(x, varies[k % len(varies)], k, cells[:])
+		}
+		emit_cells(x, cells[:], c, l.value, &slides)
 	}
 	// a sliding note's gate runs to where the next note really starts
 	// (swung, humanized), and a little past
@@ -781,6 +782,155 @@ expand_sequence :: proc(x: ^Expand) {
 			n, next := &x.out[i], x.out[i + 1]
 			overlap := tempo.seconds_from_beat(&x.song.tempo, next.beat + SLIDE_OVERLAP) - tempo.seconds_from_beat(&x.song.tempo, next.beat)
 			n.duration = max(n.duration, next.time - n.time + overlap)
+		}
+	}
+}
+
+// A cycle's tokens from beat c as cells (a degree's pitch from the chord at
+// its beat). False: a token is neither, reported.
+@(private = "file")
+cells_from_tokens :: proc(x: ^Expand, tokens: []spec.Token_Spec, c, slot: f64, out: ^[dynamic]Cell) -> bool {
+	degrees := x.play.kind == .Degrees
+	clear(out)
+	for t in tokens {
+		cell := Cell{at = t.at, length = t.length, velocity = x.play.velocity}
+		switch t.text {
+		case ".", "~", "r":
+			cell.kind = .Rest
+		case "-", "_":
+			cell.kind = .Hold
+		case:
+			// "E5!" an accent, "E5~" its gate held into the next note (a mono
+			// voice slides), "E5!~" both
+			text := t.text
+			for len(text) > 1 && (text[len(text) - 1] == '!' || text[len(text) - 1] == '~') {
+				if text[len(text) - 1] == '!' {
+					cell.accent = 1
+				} else {
+					cell.slide = true
+				}
+				text = text[:len(text) - 1]
+			}
+			p, is_pitch := token_pitch(x, text, c + t.at * slot, degrees)
+			if !is_pitch {
+				bad_play(x, "%s: %q is not a %s", x.play.path, t.text, degrees ? "degree (1, 5, 8; ! accent, ~ slide)" : "note (\"E5\", \"E5!\" accented, \"E5~\" sliding) or rest (\".\")")
+				return false
+			}
+			cell.pitch = p
+		}
+		append(out, cell)
+	}
+	return true
+}
+
+// Repeat k of a sequence varied as v says (spec.Vary_Spec: its order).
+@(private = "file")
+vary_cells :: proc(x: ^Expand, v: spec.Vary_Spec, k: int, cells: []Cell) {
+	key := x.song.key
+	notes := make([dynamic]int, context.temp_allocator) // the cells that are notes
+	for c, i in cells {
+		if c.kind == .Note {
+			append(&notes, i)
+		}
+	}
+	if len(notes) == 0 {
+		return
+	}
+	if v.reverse {
+		for a, b := 0, len(notes) - 1; a < b; a, b = a + 1, b - 1 {
+			cells[notes[a]].pitch, cells[notes[b]].pitch = cells[notes[b]].pitch, cells[notes[a]].pitch
+		}
+	}
+	if v.invert {
+		around, _ := theory.key_position(key, cells[notes[0]].pitch)
+		for i in notes {
+			step, offset := theory.key_position(key, cells[i].pitch)
+			cells[i].pitch = theory.pitch_from_key_position(key, 2 * around - step, offset)
+		}
+	}
+	for i in notes {
+		if v.transpose != 0 {
+			cells[i].pitch = theory.key_step(key, cells[i].pitch, int(math.round(v.transpose)))
+		}
+		cells[i].pitch += f32(12 * math.round(v.octave))
+	}
+	if v.thin > 0 {
+		// seeded by the play and the repeat: another part's change moves nothing
+		for i in notes[1:] {
+			if base.hash_unit(base.hash_combine(x.seed, base.hash_combine(u64(k), u64(i)))) < v.thin {
+				cells[i].kind = .Rest
+			}
+		}
+	}
+	if v.fill {
+		// each run of rests steps from the note before toward the next (the
+		// cycle's first after its last)
+		for i := 0; i < len(cells); i += 1 {
+			if cells[i].kind != .Rest {
+				continue
+			}
+			prev, next := -1, -1
+			for j := i - 1; j >= 0; j -= 1 {
+				if cells[j].kind == .Note {
+					prev = j
+					break
+				}
+			}
+			for j := i + 1; j < len(cells) + i; j += 1 {
+				if cells[j % len(cells)].kind == .Note {
+					next = j % len(cells)
+					break
+				}
+			}
+			if prev < 0 || next < 0 {
+				continue
+			}
+			from, offset := theory.key_position(key, cells[prev].pitch)
+			to, _ := theory.key_position(key, cells[next].pitch)
+			dir := to > from ? 1 : -1
+			run := 0
+			for i < len(cells) && cells[i].kind == .Rest {
+				run += 1
+				step := from + dir * run
+				if to != from && (dir > 0 ? step >= to : step <= to) {
+					step = to - dir
+				}
+				cells[i] = Cell{at = cells[i].at, length = cells[i].length, kind = .Note, pitch = theory.pitch_from_key_position(key, step, offset), velocity = cells[prev].velocity * 0.85}
+				i += 1
+			}
+		}
+	}
+	if v.velocity != 1 {
+		for &c in cells {
+			c.velocity *= v.velocity
+		}
+	}
+}
+
+// A cycle's cells from beat c played: a note emitted (swung, humanized), a
+// hold extending the note before, a rest ending it.
+@(private = "file")
+emit_cells :: proc(x: ^Expand, cells: []Cell, c, slot: f64, slides: ^[dynamic]int) {
+	held := false
+	for cell in cells {
+		b := c + cell.at * slot
+		if b >= x.to - 1e-9 {
+			break
+		}
+		switch cell.kind {
+		case .Rest:
+			held = false
+		case .Hold:
+			if held {
+				extend_last(x, cell.length * slot)
+			}
+		case .Note:
+			before := len(x.out)
+			emit(x, b, hit_length(x, cell.length * slot, b), cell.pitch, cell.velocity, 0, cell.accent)
+			held = len(x.out) > before
+			if held && cell.slide {
+				append(slides, len(x.out) - 1)
+			}
 		}
 	}
 }

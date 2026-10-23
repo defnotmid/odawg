@@ -46,6 +46,8 @@ Field_Kind :: enum u8 {
 	Events, // the play: events
 	Arpeggio, // the play: its arpeggio options
 	Chords, // the play: its chord options (or true)
+	Vary, // the play: its repeats' variations
+	Pickup, // the play: notes before its range
 	Sections, // the spec: sections
 	Parts, // the spec: parts by name
 	Returns, // the spec: returns by name
@@ -93,6 +95,8 @@ FIELD_READERS := [Field_Kind]Field_Reader {
 	.Parts     = read_parts_field,
 	.Returns   = read_returns_field,
 	.Markers   = read_markers_field,
+	.Vary      = read_vary_field,
+	.Pickup    = read_pickup_field,
 	.Automation = read_automation_field,
 	.Room      = read_room_field,
 	.Styles    = read_styles_field,
@@ -181,6 +185,18 @@ PLAY_FIELDS := []Field_Row {
 	{"humanize", .Number, offset_of(Play_Spec, humanize)},
 	{"duration", .String, offset_of(Play_Spec, duration)},
 	{"energy", .Pair, offset_of(Play_Spec, energy)},
+	{"vary", .Vary, 0},
+	{"pickup", .Pickup, 0},
+}
+
+VARY_FIELDS := []Field_Row {
+	{"reverse", .Bool, offset_of(Vary_Spec, reverse)},
+	{"invert", .Bool, offset_of(Vary_Spec, invert)},
+	{"transpose", .Number, offset_of(Vary_Spec, transpose)},
+	{"octave", .Number, offset_of(Vary_Spec, octave)},
+	{"thin", .Number, offset_of(Vary_Spec, thin)},
+	{"fill", .Bool, offset_of(Vary_Spec, fill)},
+	{"velocity", .Number, offset_of(Vary_Spec, velocity)},
 }
 
 ARPEGGIO_FIELDS := []Field_Row {
@@ -597,8 +613,45 @@ read_steps_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
 	p.rows.count = i32(len(r.spec.lanes)) - p.rows.first
 }
 
+// vary = { {}, { transpose = 2 }, { thin = 0.3, fill = true } }: a repeat each.
+@(private = "file")
+read_vary_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
+	p := (^Play_Spec)(dst)
+	a, ok := v.(json.Array)
+	if !ok || len(a) == 0 {
+		bad(r, path, "a list of variations, one a repeat ({} as written)")
+		return
+	}
+	p.vary.first = i32(len(r.spec.varies))
+	for x, i in a {
+		vs := Vary_Spec{velocity = 1}
+		if _, empty := x.(json.Array); empty {
+			// a Lua `{}` arrives as an empty list
+		} else if !read_record(r, x, base.path_index(path, i + 1), VARY_FIELDS, &vs) {
+			continue
+		}
+		vs.thin = clamp(vs.thin, 0, 1)
+		append(&r.spec.varies, vs)
+	}
+	p.vary.count = i32(len(r.spec.varies)) - p.vary.first
+}
+
+// pickup = "A4 C5": notes in the play's subdivision ending where its range starts.
+@(private = "file")
+read_pickup_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
+	p := (^Play_Spec)(dst)
+	p.pickup, p.pickup_slots = read_tokens(r, v, path)
+}
+
 @(private = "file")
 read_sequence :: proc(r: ^Reader, v: json.Value, path: string, p: ^Play_Spec) {
+	p.rows, p.slots = read_tokens(r, v, path)
+}
+
+// A sequence's tokens (a string of notes or a list, a list's items each a
+// slot split among its own), and how many top-level slots it has.
+@(private = "file")
+read_tokens :: proc(r: ^Reader, v: json.Value, path: string) -> (rows: Span, slots_out: f64) {
 	flatten :: proc(r: ^Reader, v: json.Value, path: string, at, length: f64) {
 		#partial switch x in v {
 		case json.String:
@@ -642,10 +695,11 @@ read_sequence :: proc(r: ^Reader, v: json.Value, path: string, p: ^Play_Spec) {
 		bad(r, path, "a string of notes or a list")
 		return
 	}
-	p.rows.first = i32(len(r.spec.tokens))
-	p.slots = f64(slots)
+	rows.first = i32(len(r.spec.tokens))
+	slots_out = f64(slots)
 	flatten(r, v, path, 0, f64(slots))
-	p.rows.count = i32(len(r.spec.tokens)) - p.rows.first
+	rows.count = i32(len(r.spec.tokens)) - rows.first
+	return
 }
 
 @(private = "file")

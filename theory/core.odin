@@ -259,6 +259,38 @@ pitch_from_degree :: proc(k: Key, c: Chord, degree: int, octave: int) -> f32 {
 	return f32(base + up)
 }
 
+// Where a pitch sits in key k: its step up the scale counted from the
+// tonic below MIDI 0 (7 an octave), and how far above that step's tone it is
+// (a note outside the key keeps its offset).
+key_position :: proc(k: Key, pitch: f32) -> (step: int, offset: f32) {
+	rel := pitch - f32(k.tonic)
+	octave := int(rel / 12)
+	if f32(octave * 12) > rel {
+		octave -= 1
+	}
+	within := rel - f32(octave * 12)
+	d := 0
+	for x, i in k.scale {
+		if f32(x) <= within + 1e-4 {
+			d = i
+		}
+	}
+	return octave * 7 + d, within - f32(k.scale[d])
+}
+
+// The pitch at a step of key k (key_position's), `offset` above it.
+pitch_from_key_position :: proc(k: Key, step: int, offset: f32) -> f32 {
+	octave := step >= 0 ? step / 7 : (step - 6) / 7
+	d := step - octave * 7
+	return f32(k.tonic + octave * 12 + int(k.scale[d])) + offset
+}
+
+// A pitch moved `steps` up key k's scale (down when negative).
+key_step :: proc(k: Key, pitch: f32, steps: int) -> f32 {
+	step, offset := key_position(k, pitch)
+	return pitch_from_key_position(k, step + steps, offset)
+}
+
 // A progression: a chord per bar ("Am7 Fmaj7 C G", "|" ignored, "." holds
 // the bar before), cycling over the section.
 progression_from_string :: proc(s: string, out: ^[dynamic]Chord) -> bool {

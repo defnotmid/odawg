@@ -40,6 +40,7 @@ Spec :: struct {
 	lanes:             [dynamic]Lane_Spec,
 	bars:              [dynamic]string, // a lane's step strings, cycled per bar
 	tokens:            [dynamic]Token_Spec,
+	varies:            [dynamic]Vary_Spec, // a play's repeats, varied
 	events:            [dynamic]Event_Spec,
 	ranges:            [dynamic]string,
 	devices:           [dynamic]Device_Spec,
@@ -365,6 +366,24 @@ Play_Spec :: struct {
 	humanize:    f64,
 	duration:    string,
 	energy:      [2]f64,
+	vary:        Span, // into varies: repeat k of a sequence plays varies[k % count]
+	pickup:      Span, // into tokens: a sequence played just before its range (an anacrusis)
+	pickup_slots: f64,
+}
+
+// How one repeat of a sequence (notes, degrees) is varied, applied in this
+// order: its pitches reversed (the rhythm kept), mirrored around its first
+// note in the key, moved `transpose` steps up the key and `octave` octaves,
+// `thin` of its notes after the first made rests, each rest `fill`ed with a
+// step from the note before toward the next, its velocity scaled.
+Vary_Spec :: struct {
+	reverse:   bool,
+	invert:    bool,
+	transpose: f64,
+	octave:    f64,
+	thin:      f64,
+	fill:      bool,
+	velocity:  f64,
 }
 
 // Tone.Pattern's names ("up", "upDown", "random"), a note every interval.
