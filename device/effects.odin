@@ -2,6 +2,7 @@ package odawg_device
 
 import base "../base"
 import dsp "../dsp"
+import tempo "../tempo"
 import "core:math"
 import "core:mem"
 
@@ -38,6 +39,7 @@ Fx_Scratch :: struct #align (16) {
 	a, b:         [FX_CHUNK]f32,
 	d:            [FX_CHUNK]f64,
 	env:          ^Voice_Env,
+	tempo:        ^tempo.Tempo_Map, // the song's of the chain it runs (nil: 120 bpm)
 	graph:        [MAX_BUFS * 2 * NODE_CHUNK]f32,
 }
 

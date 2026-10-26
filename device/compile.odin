@@ -1443,6 +1443,12 @@ program_derive :: proc(progs: ^Programs, program: i32) -> (reshaped: bool) {
 		nodes[prog.out].fill = true
 	}
 	prog.memory = f32(memory)
+	prog.tempo = false
+	for g in nodes {
+		if sync := node_row(g.kind).sync; sync > 0 && g.values[sync] != 0 {
+			prog.tempo = true
+		}
+	}
 	prog.jump = len(nodes) > 0
 	for g in nodes {
 		prog.jump &&= node_row(g.kind).jump

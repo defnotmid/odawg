@@ -139,6 +139,17 @@ Return :: struct {
 // spec's gain, and a placement's), a duck under the voice (a spans
 // sidechain; .None: none) and a window. Its effects keep its clock: a
 // placed song sounds as it does alone.
+Tempo_Map :: tempo.Tempo_Map
+
+// A Tone length device `device` read once (its field's path), at `bpm`:
+// where the tempo it plays at differs, it drifts off the beat.
+Fixed_Length :: struct {
+	device: i32,
+	path:   string,
+	bpm:    f64,
+	rate:   bool, // a rate (a frequency), not a length
+}
+
 Placement :: struct {
 	name:    string, // the song's, or what a mix calls it ("score")
 	at:      f64, // seconds its clock starts on this one
@@ -268,6 +279,13 @@ Song :: struct {
 	// song joins adds its spans to `room` (append_song's caller).
 	room_from: string,
 	placements: [dynamic]Placement, // the songs it plays (its own: one)
+	placement_tempo: [dynamic]Tempo_Map, // per placement: its song's tempo map (what a voice's beats are on)
+	fixed_lengths: [dynamic]Fixed_Length, // Tone lengths a device read once, at its placing's tempo (tempo_fixed reads them)
+	// A mix's: the spec a host's chains (a clip's `effects`) name effect rows
+	// in, as a song's chains name its own: its `effects` tables and the
+	// texts of the files they name (spec_add_instrument_text; what to read:
+	// spec.instrument_files). nil: built-ins only.
+	host_rows: ^spec.Spec,
 	voices:   [dynamic][2]f64, // the voice tracks' spans, sorted (a spans sidechain ducks under them)
 	sidechains: [dynamic]Sidechain,
 	pad_gains: [dynamic]Pad_Gain,
@@ -346,8 +364,10 @@ song_from_spec :: proc(s: ^spec.Spec, out: ^Song, bank: ^device.Bank = nil) -> b
 		tracks = {0, i32(len(out.tracks))}, parts = {0, i32(len(out.parts))},
 		returns = {0, i32(len(out.returns))}, buses = {0, i32(len(out.buses))},
 	})
+	append(&out.placement_tempo, out.tempo)
 	graph_build(out)
 	notes_reach(out)
+	tempo_fixed(out)
 	default_song(out)
 	return true
 }

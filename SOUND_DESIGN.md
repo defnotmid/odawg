@@ -202,6 +202,10 @@ and places a row in any chain by its name, with its options:
     the rate (`fixed_value`). Choose it where the row is placed instead.
   - Depth, mix, feedback, center and q can all move:
     `"parts/pad/effects/phaser/depth"`, like any option.
+  - A rate written as a Tone length counts the song's beats instead:
+    `{ "name": "tremolo", "rate": "8n" }` pulses on every eighth, locked to
+    the bar, and stays there through a tempo ramp. A placed song in a mix
+    keeps its own beat.
 - **Where it goes.** A phaser or flanger that belongs to one sound goes in that
   part's `effects`. One over a loop of several parts goes on a bus, or on a
   return they send to (a `phaser6` return under the pads, sent at -6 dB).

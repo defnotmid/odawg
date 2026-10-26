@@ -407,6 +407,14 @@ Ctx :: struct {
 	findings:     ^base.Findings,
 	drafts:       ^Drafts, // rows already drafted (nil: none kept)
 	effect:       bool, // an effect row is read (its names are the `effects` tables'), not an instrument
+	fixed:        ^[dynamic]Fixed_Tone, // where a Tone length was read once at beat_seconds (nil: not asked)
+}
+
+// A Tone length read once at the tempo a row is placed at: where it was
+// written, and whether it is a rate (a frequency) or a length.
+Fixed_Tone :: struct {
+	path: string,
+	rate: bool,
 }
 
 // Instruments as drafted (a row's bases, files, built-ins and overrides
@@ -830,6 +838,9 @@ draft_option :: proc(c: ^Ctx, d: ^Draft, key: string, v: json.Value, path: strin
 		report(c, "unknown_key", .Warning, path, "%s: %s has no option %q", path, origin, key)
 		return
 	}
+	if syncs_written(c, d, x, v, path) {
+		return
+	}
 	if s, is_string := v.(json.String); is_string && len(x.targets) > 0 {
 		if f := target_field(d, x.targets[0].path); f != nil && f.unit == .Asset {
 			for t in x.targets {
@@ -842,6 +853,39 @@ draft_option :: proc(c: ^Ctx, d: ^Draft, key: string, v: json.Value, path: strin
 		}
 	}
 	x.value, x.value_path = v, path
+}
+
+// An option's value on a field that may follow the song's tempo (an Lfo's
+// rate), where the option only sets it: written into its nodes as if there,
+// so a Tone length keeps its beats (`sync`) and a number is Hz again. True:
+// written.
+@(private = "file")
+syncs_written :: proc(c: ^Ctx, d: ^Draft, x: ^Draft_Control, v: json.Value, path: string) -> bool {
+	if len(x.targets) == 0 {
+		return false
+	}
+	f := target_field(d, x.targets[0].path)
+	if f == nil || !f.syncs {
+		return false
+	}
+	for t in x.targets {
+		if t.op != .Set || (t.scale != 0 && t.scale != 1) || t.offset != 0 || strings.count(t.path, "/") != 1 {
+			return false
+		}
+	}
+	for t in x.targets {
+		parts := strings.split(t.path, "/", context.temp_allocator)
+		prefix := strings.has_suffix(parts[0], "*")
+		for &n in d.nodes {
+			if n.name != parts[0] && !(prefix && strings.has_prefix(n.name, parts[0][:len(parts[0]) - 1])) {
+				continue
+			}
+			if field, slot, known := device.node_field_from_name(n.kind, parts[1]); known {
+				draft_field(c, &n, field, slot, v, path, base_only = true)
+			}
+		}
+	}
+	return true
 }
 
 @(private = "file")
@@ -1246,6 +1290,14 @@ draft_desc :: proc(c: ^Ctx, d: ^Draft, written: string) -> ^device.Program_Desc 
 	if d.sfz_name != "" {
 		return sfz_desc(c, d, written)
 	}
+	if c.fixed != nil {
+		if d.length_beats {
+			append(c.fixed, Fixed_Tone{base.path_join(d.path != "" ? d.path : written, "length"), false})
+		}
+		if d.porta_beats {
+			append(c.fixed, Fixed_Tone{base.path_join(d.path != "" ? d.path : written, "portamento"), false})
+		}
+	}
 	desc := new(device.Program_Desc, context.temp_allocator)
 	desc^ = {
 		length     = f32(d.length * (d.length_beats ? c.beat_seconds : 1)),
@@ -1267,10 +1319,16 @@ draft_desc :: proc(c: ^Ctx, d: ^Draft, written: string) -> ^device.Program_Desc 
 				continue
 			}
 			f := device.field_of_slot(n.kind, slot)
-			if f != nil && f.unit == .Hz {
+			switch {
+			case f != nil && f.syncs:
+				// it keeps its beats, read against the song's tempo as it plays
+				x.values[device.node_row(n.kind).sync] = 1
+			case f != nil && f.unit == .Hz:
 				x.values[slot] = f32(f64(n.values[slot]) / c.beat_seconds) // cycles a beat
-			} else {
+				fixed_at(c, n.path, f)
+			case:
 				x.values[slot] = f32(f64(n.values[slot]) * c.beat_seconds)
+				fixed_at(c, n.path, f)
 			}
 		}
 		mods := make([]device.Mod_Desc, len(n.mods), context.temp_allocator)
@@ -1346,8 +1404,20 @@ control_value :: proc(c: ^Ctx, d: ^Draft, x: ^Draft_Control) -> (f32, bool) {
 	if beats {
 		// a length's beats, or a rate's cycles a beat, at the instrument's tempo
 		value = field.unit == .Hz ? f32(f64(value) / c.beat_seconds) : f32(f64(value) * c.beat_seconds)
+		if c.fixed != nil {
+			append(c.fixed, Fixed_Tone{x.value_path, field.unit == .Hz})
+		}
 	}
 	return value, true
+}
+
+// A node's field written as a Tone length and read once, at the tempo the
+// row is placed at.
+@(private = "file")
+fixed_at :: proc(c: ^Ctx, node_path: string, f: ^device.Node_Field) {
+	if c.fixed != nil {
+		append(c.fixed, Fixed_Tone{base.path_join(node_path, f != nil ? f.name : "?"), f != nil && f.unit == .Hz})
+	}
 }
 
 // The field a target's path names in the draft (its first node's).
@@ -1445,10 +1515,12 @@ sampler_keys :: proc(n: ^Draft_Node, out: ^[dynamic]device.Key_Desc) {
 
 // The program device d of s plays (a Voice's row, or a Row's: an effect
 // row, read and placed into progs at `beat_seconds` a beat, its Samplers'
-// sets the bank's). -1: none (findings say why).
-instrument_program :: proc(s: ^Spec, d: i32, beat_seconds: f64, bank: ^device.Bank, progs: ^device.Programs, findings: ^base.Findings, drafts: ^Drafts = nil) -> i32 {
+// sets the bank's), and where it read a Tone length once at that tempo
+// (appended to `fixed`: an Lfo's rate in beats isn't, it follows the
+// tempo). -1: none (findings say why).
+instrument_program :: proc(s: ^Spec, d: i32, beat_seconds: f64, bank: ^device.Bank, progs: ^device.Programs, findings: ^base.Findings, drafts: ^Drafts = nil, fixed: ^[dynamic]Fixed_Tone = nil) -> i32 {
 	dev := &s.devices[d]
-	c := Ctx{progs = progs, bank = bank, beat_seconds = beat_seconds, findings = findings, drafts = drafts, effect = dev.kind == .Row}
+	c := Ctx{progs = progs, bank = bank, beat_seconds = beat_seconds, findings = findings, drafts = drafts, effect = dev.kind == .Row, fixed = fixed}
 	path := strings.trim_prefix(dev.path, "song/")
 	draft, ok := drafted(&c, dev.row, path, s)
 	if !ok {

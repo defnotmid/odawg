@@ -49,7 +49,7 @@ effect_row :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32, sc
 		copy(scratch.dry_r[:m], cr)
 		slice_zero(cl)
 		slice_zero(cr)
-		v := [1]Graph_Voice{{state = voice, note = {velocity = 1, pitch = 60}, at = h.pos, out_l = cl, out_r = cr, gain = 1, in_l = scratch.dry_l[:m], in_r = scratch.dry_r[:m], clock = f.clock}}
+		v := [1]Graph_Voice{{state = voice, note = {velocity = 1, pitch = 60}, at = h.pos, out_l = cl, out_r = cr, gain = 1, in_l = scratch.dry_l[:m], in_r = scratch.dry_r[:m], clock = f.clock, tempo = scratch.tempo, seconds = f64(f.clock) / RATE}}
 		graph_run(env.programs, env, program, v[:], m, graph)
 	}
 }

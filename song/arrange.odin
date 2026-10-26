@@ -371,14 +371,21 @@ device_into_song :: proc(song: ^Song, from: ^spec.Spec, d: i32, beat_seconds: f6
 	if !ok && !plays_program {
 		base.report(&song.findings, "asset_unavailable", .Error, from.devices[d].path, "%s: a sample set it plays is not loaded (offline, or not in the register)", from.devices[d].path)
 	}
+	fixed := make([dynamic]spec.Fixed_Tone, context.temp_allocator)
 	if plays_program {
 		// its row (an instrument's, an effect row's), read into a program at
 		// this tempo: a program each placement
-		program := spec.instrument_program(from, d, beat_seconds, song.bank, &song.programs, &song.findings, drafts)
+		program := spec.instrument_program(from, d, beat_seconds, song.bank, &song.programs, &song.findings, drafts, &fixed)
 		if program < 0 {
 			return -1
 		}
 		p[.Program] = f32(program)
+	}
+	for q in from.devices[d].beats {
+		append(&fixed, spec.Fixed_Tone{base.path_join(from.devices[d].path, device.PARAM_TABLE[q].path), device.PARAM_TABLE[q].unit == .Hz})
+	}
+	for x in fixed {
+		append(&song.fixed_lengths, Fixed_Length{i32(len(song.devices)), strings.clone(strings.trim_prefix(x.path, "song/")), 60 / beat_seconds, x.rate})
 	}
 	append(&song.devices, from.devices[d].kind)
 	append(&song.params, p)

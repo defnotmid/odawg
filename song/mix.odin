@@ -116,7 +116,13 @@ append_song :: proc(m: ^Song, s: ^Song, at: f64, prefix: string, gain_db: f64 = 
 	}
 	// its placements (a composed song's one) moved here; this placing's
 	// level adds to theirs, its window and duck are theirs
-	for pl in s.placements {
+	for pl, i in s.placements {
+		// its tempo map kept (a copy: the song may go), its beats its own
+		if i < len(s.placement_tempo) {
+			append(&m.placement_tempo, Tempo_Map{slice.clone_to_dynamic(s.placement_tempo[i].segments[:])})
+		} else {
+			append(&m.placement_tempo, Tempo_Map{})
+		}
 		x := pl
 		x.name = prefix
 		x.at += at
@@ -193,8 +199,9 @@ Clip :: struct {
 		depth_db, attack, hold, release, merge: f64,
 	},
 	// its effects, as a part's `effects` is written ({ { "Reverb", wet =
-	// 0.2 }, ... }; nil: none). A clip has no tempo: a Tone length in them
-	// reads at 120 bpm.
+	// 0.2 }, "tremolo", ... }: a built-in, or a row the mix's host_rows
+	// names; nil: none). A clip has no tempo: a Tone length in them reads at
+	// 120 bpm.
 	effects:  json.Value,
 }
 
@@ -222,6 +229,7 @@ append_clip :: proc(m: ^Song, c: Clip) -> i32 {
 	if c.effects != nil {
 		fx := new(spec.Spec)
 		spec.spec_init(fx)
+		fx.outer = m.host_rows // the rows it names: the host's
 		chain := spec.effects_from_value(fx, c.effects, base.path_join(c.name, "effects"), &m.findings)
 		t.chain = chain_into_song(m, fx, chain, CLIP_BEAT_SECONDS)
 	}

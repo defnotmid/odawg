@@ -261,6 +261,7 @@ Node_Run :: struct {
 	awake_until: i64,
 	tail:    i64,
 	origin:  i64, // where its placement's clock starts (song samples): its effects run on its song's time
+	placement: i32, // its placement (-1: none, a clip's): its song's tempo map is what its beats are on
 }
 
 // An edge whose paths' latencies differ: the source's output delayed to its
@@ -354,7 +355,8 @@ engine_init :: proc(e: ^Engine, s: ^song.Song, pool: ^common.Work_Pool = nil, ma
 	bytes, fi := 0, 0
 	for _, k in s.nodes {
 		run := &e.nodes[k]
-		if pl := song.node_placement(s, k); pl >= 0 {
+		run.placement = song.node_placement(s, k)
+		if pl := run.placement; pl >= 0 {
 			run.origin = i64(math.round(s.placements[pl].at * RATE))
 		}
 		first := fi
@@ -466,6 +468,9 @@ engine_init :: proc(e: ^Engine, s: ^song.Song, pool: ^common.Work_Pool = nil, ma
 		w.fx_scratch.env = &e.env
 	}
 	e.master.scratch.env = &e.env
+	if len(s.placement_tempo) > 0 {
+		e.master.scratch.tempo = &s.placement_tempo[0] // the song's own (a mix's first)
+	}
 	lanes_init(e)
 	flow_init(e, looped)
 	engine_seek(e, 0, false)
@@ -1515,6 +1520,7 @@ node_chain_run :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32, hear
 		if kl != nil {
 			kl, kr = kl[i:x], kr[i:x]
 		}
+		w.fx_scratch.tempo = node_tempo(e, k)
 		run_fx(e, w, nd.chain, start + i64(i), l[i:x], r[i:x], kl, kr)
 		wrote = true
 		i = x
@@ -2024,7 +2030,27 @@ layer_cuts :: proc(e: ^Engine, run: ^Track_Run, ni: i32, layer: i32, n: device.N
 // once it is done.
 @(private = "file")
 play_slot :: proc(e: ^Engine, w: ^Worker, ti: int, slot: int, l, r: []f32) -> bool {
-	return play_graph(e, w, slot, pad_level(e, ti, e.song.notes.pad[e.slot_note[slot]]), l, r)
+	return play_graph(e, w, ti, slot, pad_level(e, ti, e.song.notes.pad[e.slot_note[slot]]), l, r)
+}
+
+// The song's tempo map node k's beats are on (nil: none, a clip's: 120 bpm).
+@(private = "file")
+node_tempo :: proc(e: ^Engine, k: int) -> ^song.Tempo_Map {
+	pl := e.nodes[k].placement
+	return pl >= 0 && int(pl) < len(e.song.placement_tempo) ? &e.song.placement_tempo[pl] : nil
+}
+
+// What a voice of track ti playing program `play` reads of its song's
+// tempo, where its program reads it: its map, its note's start in its
+// song's seconds, the beat that is.
+@(private = "file")
+voice_tempo :: proc(e: ^Engine, ti: int, play: i32, v: ^device.Graph_Voice) {
+	if play < 0 || !e.programs.programs[play].tempo {
+		return
+	}
+	v.tempo = node_tempo(e, ti)
+	v.seconds = v.note.time - f64(e.nodes[ti].origin) / RATE
+	v.beat0 = device.song_beat(v.tempo, v.seconds)
 }
 
 // A pad's level on track `ti` (Pad_Gain_Set; 1: its own).
@@ -2043,11 +2069,12 @@ pad_level :: proc(e: ^Engine, ti: int, pad: u32) -> f32 {
 // A slot playing a program, alone (a seek's chase, a choked note's fade):
 // as play_slot.
 @(private = "file")
-play_graph :: proc(e: ^Engine, w: ^Worker, slot: int, level: f32, l, r: []f32) -> bool {
+play_graph :: proc(e: ^Engine, w: ^Worker, ti, slot: int, level: f32, l, r: []f32) -> bool {
 	s := e.song
 	state := slot_state(e, slot)
 	n := note_from_row(s, int(e.slot_note[slot]))
 	v := [1]device.Graph_Voice{{state = state, note = n, seed = s.notes.seed[e.slot_note[slot]], at = e.slot_at[slot], gain = level}}
+	voice_tempo(e, ti, device.graph_playing(state), &v[0])
 	play := device.graph_playing(state)
 	m := len(l)
 	if e.slot_choke[slot] != 0 {
@@ -2118,12 +2145,13 @@ play_graphs :: proc(e: ^Engine, w: ^Worker, ti: int, l, r: []f32) {
 	for x in sounding[:n_sounding] {
 		k := x.slot
 		if e.slot_choke[k] != 0 {
-			play_graph(e, w, k, pad_level(e, ti, s.notes.pad[e.slot_note[k]]), l, r)
+			play_graph(e, w, ti, k, pad_level(e, ti, s.notes.pad[e.slot_note[k]]), l, r)
 			continue
 		}
 		n := note_from_row(s, int(e.slot_note[k]))
 		state := slot_state(e, k)
 		voices[count] = {state = state, note = n, seed = s.notes.seed[e.slot_note[k]], at = e.slot_at[k], out_l = l, out_r = r, gain = pad_level(e, ti, n.pad)}
+		voice_tempo(e, ti, x.play, &voices[count])
 		slots[count], plays[count] = k, x.play
 		count += 1
 	}
@@ -2260,6 +2288,7 @@ finish_segment :: proc(e: ^Engine, w: ^Worker, ti: int, at: i64, l, r: []f32, ke
 			row.duck(s, sc, at, l, r)
 		}
 	}
+	w.fx_scratch.tempo = node_tempo(e, ti)
 	run_fx(e, w, e.nodes[ti].chain, at, l, r, key_l, key_r)
 	gain_lane, pan_lane := i32(-1), i32(-1)
 	for i in lane_rows(e, e.lanes.tracks[ti]) {

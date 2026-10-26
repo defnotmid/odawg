@@ -687,3 +687,39 @@ test_default_song :: proc(t: ^testing.T) {
 		testing.expectf(t, len(s.findings) == 0, "a one-shot is told: %v", s.findings[:])
 	}
 }
+
+// A Tone length read once at one tempo is a finding where its part or
+// chain plays at another (tempo_fixed), naming it and the sections: a
+// FeedbackDelay's "8n." and an envelope's "16n" on a part playing into a
+// ramp; not an Lfo's rate in beats (it follows the tempo), not a part that
+// plays only where the tempo is the one it read, not a song at one tempo.
+@(test)
+test_tempo_fixed :: proc(t: ^testing.T) {
+	text :: proc(second: string) -> string {
+		return strings.concatenate({`{ key: "C major", sections: [ { name: "a", duration: "2m", bpm: 100 }, { name: "b", duration: "2m", bpm: `, second, ` } ],
+			parts: {
+				both: { instrument: { nodes: { env: { class: "Env", attack: "16n" }, lfo: { class: "Lfo", rate: "8n" }, out: { class: "Osc", amp: "env", pan: { by: "lfo", amount: 0.3 } } } },
+				        effects: [ { name: "FeedbackDelay", delay_time: "8n.", feedback: 0.3 } ], play: [ { name: ["a", "b"], notes: "C4" } ] },
+				first: { instrument: { nodes: { env: { class: "Env", attack: "16n" }, out: { class: "Osc", amp: "env" } } }, play: [ { name: "a", notes: "C4" } ] },
+				synced: { instrument: { nodes: { lfo: { class: "Lfo", rate: "8n" }, out: { class: "Osc", pan: { by: "lfo", amount: 0.3 } } } }, play: [ { name: ["a", "b"], notes: "C4" } ] } } }`}, context.temp_allocator)
+	}
+	arena, arena2: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	defer virtual.arena_destroy(&arena2)
+	s := compose(t, text("[ 100, 140 ]"), &arena)
+	said := make([dynamic]string, context.temp_allocator)
+	for f in s.findings {
+		if f.code == "tempo_fixed" {
+			append(&said, f.message)
+		}
+	}
+	joined := strings.join(said[:], "\n", context.temp_allocator)
+	testing.expectf(t, len(said) == 2, "two devices off the beat (both's instrument and its delay): %s", joined)
+	testing.expectf(t, strings.contains(joined, "parts/both/instrument/nodes/env/attack: a Tone length read once at 100 bpm, where it plays at another tempo: b (100-140 bpm)"), "the envelope's 16n: %s", joined)
+	testing.expectf(t, strings.contains(joined, "parts/both/effects/1/delay_time: a Tone length read once at 100 bpm"), "the delay's 8n.: %s", joined)
+	testing.expectf(t, !strings.contains(joined, "lfo/rate") && !strings.contains(joined, "parts/first") && !strings.contains(joined, "parts/synced"), "a rate in beats, or a part only at its tempo: %s", joined)
+	steady := compose(t, text("100"), &arena2)
+	for f in steady.findings {
+		testing.expectf(t, f.code != "tempo_fixed", "at one tempo: %s", f.message)
+	}
+}

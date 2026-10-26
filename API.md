@@ -274,6 +274,17 @@ A row:
   | ratio | sweep | index | amount | depth | at_most, exponent }` (a list of those). `by` is
   a node or the note's `velocity`, `accent`, `slide`, `gate`. `at_most` caps the field
   (by the source: an accent's shorter decay). Every node has `gain_db`, `pan` and `amp`.
+- **Tone lengths and the tempo.** An Lfo's `rate` written as a Tone length (`"8n"`: 2
+  cycles a beat) keeps its beats and follows the song's tempo as it plays (its `sync` is
+  set). Each chunk steps it by the song's beats the chunk spans, so it stays on the beat
+  through a ramp. In an instrument its phase restarts with each note and counts the beats
+  since; in an effect row it counts the song's beats, so it sits on the bar. A rate written
+  as a number is Hz. Any other Tone length (an envelope's time, a built-in FeedbackDelay's
+  `delay_time`, an AutoFilter's `frequency`) is read once, at the tempo of the first
+  section its part or chain plays in. Where that part or chain plays at another tempo,
+  it keeps the time it had and drifts off the beat: a `tempo_fixed` warning names the
+  field and the sections. In a mix, each placed song keeps its own tempo map
+  (`Song.placement_tempo`), so its voices and rows are on its own beat.
 - **Steady values:** a node reading only what holds for the note (velocity, accent, a
   Random, another such node) through a stateless kind (Map, Mul, Mix, Drive) runs one
   sample a chunk.
@@ -337,8 +348,9 @@ parts = { keys = { instrument = "pluck", effects = { "autowah", { "tremolo", dep
   one rate move together. So nothing moves its rate there: a modulator on it, or a lane on
   it, is `fixed_value`. No lane moves a field a row reads as it is placed either (an Lfo's
   `wave` and `phase`, a Filter's `type` and `rolloff`, a Comb's `delay` and `damp`;
-  `fixed_value`). A Tone length as a rate is Hz at the tempo of the section where the chain
-  is first placed, as an instrument's is.
+  `fixed_value`). A rate written as a Tone length (`rate = "4n"`, or `{ "tremolo", rate =
+  "4n" }`) counts the song's beats: the tremolo dips on the beat and on the bar, through
+  a ramp, and from a seek.
 - **`Follower`** is a level: the louder side of what it reads, rising with the `attack` time
   constant and falling with `release`, then times its `gain_db`. It moves an autowah's
   cutoff, or a duck built of nodes.
@@ -353,6 +365,10 @@ parts = { keys = { instrument = "pluck", effects = { "autowah", { "tremolo", dep
   name and count (`phaser#2`), or by place (`2`). After compose, a command sets one while
   the engine plays: `Effect_Param_Set "keys/effects/phaser/depth"`. The engine receives
   the row's program whole at its next walk, as it does for an instrument's.
+- **A host's chains:** a mix's `host_rows` is a spec holding a host's `effects` tables and
+  the texts of their files (`spec.instrument_files` lists what to read). A clip's `effects`
+  names rows from it as a song's part does, on the clip clock: no tempo, so 120 bpm. With
+  no `host_rows`, a row's name on a clip is `unknown_effect`.
 - **The library** is `examples/instruments/effects.json`, beside `synths.json`:
   - `phaser`: 4 swept all-pass stages against the dry signal.
   - `phaser6`: the same with 6 stages, written as `phaser` plus two nodes.
@@ -860,6 +876,7 @@ Checks that stand in for listening:
 | `role_balance` | a part with a `role` more than 1 LU outside its role's band where it plays (LU under the mix; an `fx` part's peak under the mix's peak); too loud is judged only where 4 or more parts play. Names the one `gain_db` change that puts every section in band, or a per-section lane when none can |
 | `no_melody` | Info: a song naming roles has no `melody` |
 | `default_song` | a song on 4 or more of 6 defaults at once (tempo 118-122, a kick on every beat, A/D minor or C major or i-VI-III-VII, no feel, the same parts in every section, a chord loop); read from the composed song |
+| `tempo_fixed` | a Tone length read once at one tempo (an envelope's time, a delay's `delay_time`, an AutoFilter's rate) on a part or chain that plays where the tempo is another; names the field and the sections. An Lfo's rate in beats follows the tempo and isn't one |
 
 The balance table is what these read: `check.balance_from_measures(song, measures)` over what
 `check.Measuring` measured as the render streamed (its stems pushed), with no render of its

@@ -2,6 +2,7 @@ package odawg_device
 
 import dsp "../dsp"
 import base "../base"
+import tempo "../tempo"
 import "core:math"
 
 // Instruments as data. The code holds node kinds, rows of a registry
@@ -73,6 +74,8 @@ Node_Field :: struct {
 	shapes:     bool, // its value decides how the node is placed (a filter's type): programs differing in it are not one shape
 	at_start:   bool, // its value is read as its voice starts (a note's start; an effect row's, where it is put in place): in an effect row no lane moves it
 	pace:       bool, // how fast the node's phase runs (an Lfo's rate): an effect row's phase is the song clock's, so in a row nothing moves it
+	syncs:      bool, // a Tone length here keeps its beats (a rate: cycles a beat) and sets the kind's `sync` field: it follows the song's tempo
+	sync:       bool, // set (non-zero): the node's `syncs` field is in beats, read against the song's tempo as it plays
 }
 
 // Every node's, before its kind's own: its level (linear in Programs; dB in
@@ -118,9 +121,11 @@ Node_Kind_Row :: struct {
 	process:  Node_Process,
 	tail:     Node_Tail,
 	memory:   proc(values: ^[MAX_FIELDS]f32, slots: []int) -> f64, // seconds of earlier notes its kept state remembers
-	// filled by register_node: each field's first slot in Graph_Node.values
+	// filled by register_node: each field's first slot in Graph_Node.values,
+	// and its `sync` field's (0: none)
 	slots:    []int,
 	count:    int,
+	sync:     int,
 }
 
 Node_Registry :: struct {
@@ -139,6 +144,9 @@ register_node :: proc(r: ^Node_Registry, row: Node_Kind_Row) -> Node_Kind {
 	at := len(COMMON_FIELDS)
 	for f, i in row.fields {
 		slots[i] = at
+		if f.sync {
+			x.sync = at
+		}
 		at += max(f.list, 1)
 	}
 	assert(at <= MAX_FIELDS, "a node kind has too many fields")
@@ -397,6 +405,7 @@ Program :: struct {
 	sources:    u8, // the note's sources something reads every sample of (else only the first)
 	jump:       bool, // every node jumps (a clip): a seek starts its notes where they are
 	one_shot:   bool, // its notes play to their end whatever the gate (an SFZ region's loop_mode=one_shot)
+	tempo:      bool, // a node reads the song's tempo (a rate in beats): its voices' lanes carry it
 }
 
 Programs :: struct {
@@ -430,6 +439,8 @@ Lane :: struct {
 	gate:     i64, // samples
 	at:       i64, // the chunk's first sample, from the note's start
 	clock:    i64, // the chunk's first sample on the voice's clock: an effect row's, the song's (a note's: at)
+	beat:     f64, // the chunk's first sample in beats on the voice's clock (an effect row's, the song's beat; a note's, since its start), and the song's beats a sample over the chunk: where its program reads the tempo
+	beat_step: f64,
 	in_l, in_r: []f32, // an effect row's: the chunk of what it is put on (nil: a note's voice)
 	release:  int, // where the gate closes in the chunk (-1: not in it)
 	starting: bool, // the note starts in this chunk and doesn't slide: nodes take their values
@@ -937,6 +948,12 @@ Graph_Voice :: struct {
 	done:         bool, // set: its sound is over
 	in_l, in_r:   []f32, // an effect row's input, as long as the samples played (nil: a note's voice)
 	clock:        i64, // its clock at its sample 0: an effect row's, the song sample its voice started at (a note's: 0)
+	// where its program reads the song's tempo: its song's map (nil: 120
+	// bpm), its sample 0 in its song's seconds, and the beat its clock's 0
+	// is on (a note's start; an effect row's, the song's start: 0)
+	tempo:        ^tempo.Tempo_Map,
+	seconds:      f64,
+	beat0:        f64,
 }
 
 // Floats a call of graph_run needs for `lanes` voices of a program.
@@ -972,6 +989,13 @@ graph_run :: proc(progs: ^Programs, env: ^Voice_Env, play: i32, voices: []Graph_
 			}
 			if v.in_l != nil {
 				lane.in_l, lane.in_r = v.in_l[off:][:n], v.in_r[off:][:n]
+			}
+			if prog.tempo {
+				// the beats the chunk spans, from the song's map at its ends:
+				// a phase counting them is on the beat at every chunk's edge
+				b0 := song_beat(v.tempo, v.seconds + f64(at) / RATE)
+				b1 := song_beat(v.tempo, v.seconds + f64(at + i64(n)) / RATE)
+				lane.beat, lane.beat_step = b0 - v.beat0, (b1 - b0) / f64(n)
 			}
 			lane.note.pitch = h.pitch
 			lane.hz = base.midi_to_hz(f64(h.pitch))
@@ -1115,6 +1139,14 @@ graph_run :: proc(progs: ^Programs, env: ^Voice_Env, play: i32, voices: []Graph_
 		v.at += i64(frames)
 		v.done = v.done || v.at >= h.total
 	}
+}
+
+// The song's beat at `seconds` of its time (no map: at 120 bpm).
+song_beat :: proc(m: ^tempo.Tempo_Map, seconds: f64) -> f64 {
+	if m == nil || len(m.segments) == 0 {
+		return seconds * 2
+	}
+	return tempo.beat_from_seconds(m, seconds)
 }
 
 // The sample in a chunk of c from note sample `at` where the gate closes.

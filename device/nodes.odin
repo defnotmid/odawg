@@ -82,10 +82,11 @@ nodes_init :: proc "contextless" () {
 		name = "Lfo", state = size_of(dsp.Osc), start = start_lfo, process = process_lfo,
 		fields = {
 			{name = "wave", unit = .Choice, choices = PLAIN_WAVES, at_start = true},
-			{name = "rate", unit = .Hz, default = 4, per_sample = true, pace = true},
+			{name = "rate", unit = .Hz, default = 4, per_sample = true, pace = true, syncs = true},
 			{name = "delay", unit = .Seconds},
 			{name = "fade", unit = .Seconds},
 			{name = "phase", unit = .Number, at_start = true},
+			{name = "sync", unit = .Number, at_start = true, sync = true}, // 1: rate is cycles a beat (a Tone length written there)
 		},
 	})
 	NODE_FILTER = register_node(r, {
@@ -549,14 +550,22 @@ process_ramp :: proc(c: ^Node_Call) {
 
 // ---- Lfo ---------------------------------------------------------------------------
 
+@(private = "file")
+LFO_RATE :: 4
+@(private = "file")
+LFO_PHASE :: 7
+@(private = "file")
+LFO_SYNC :: 8
+
 // A voice starting: its oscillator at its phase, where its clock has it (a
 // note's starts at 0; an effect row's is the song's, so a seek puts it
-// where a render from the start has it: its rate never moves there).
+// where a render from the start has it: its rate never moves there). A rate
+// in beats (sync) counts the clock in beats: a row's Lfo is on the bar.
 @(private = "file")
 start_lfo :: proc(c: ^Node_Call, lane: ^Lane) {
 	s := node_state(c, lane, dsp.Osc)
 	vals := node_values(c, lane)
-	phase := f64(vals[7]) + f64(vals[4]) * f64(lane.clock) / RATE
+	phase := f64(vals[LFO_PHASE]) + (vals[LFO_SYNC] != 0 ? f64(vals[LFO_RATE]) * lane.beat : f64(vals[LFO_RATE]) * f64(lane.clock) / RATE)
 	s^ = {wave = dsp.Wave(u8(vals[3])), width = 0.5, phase = phase - math.floor(phase)}
 }
 
@@ -568,13 +577,20 @@ process_lfo :: proc(c: ^Node_Call) {
 		vals := node_values(c, &lane)
 		rate: [NODE_CHUNK]f32 = ---
 		inc: [NODE_CHUNK]f64 = ---
-		varies, v := node_curve(c, &lane, 4, vals[4], rate[:n])
+		varies, v := node_curve(c, &lane, LFO_RATE, vals[LFO_RATE], rate[:n])
 		// it starts after its delay and grows to its depth over its fade (on
-		// its clock: a note's from its start, an effect row's from the song's)
+		// its clock: a note's from its start, an effect row's from the song's);
+		// a rate in beats (sync) steps by the song's beats a sample here
 		delay := i64(f64(vals[5]) * RATE)
 		fade := f64(vals[6]) * RATE
-		for i in 0 ..< n {
-			inc[i] = lane.clock + i64(i) < delay ? 0 : f64(varies ? rate[i] : v) / RATE
+		if vals[LFO_SYNC] != 0 {
+			for i in 0 ..< n {
+				inc[i] = lane.clock + i64(i) < delay ? 0 : f64(varies ? rate[i] : v) * lane.beat_step
+			}
+		} else {
+			for i in 0 ..< n {
+				inc[i] = lane.clock + i64(i) < delay ? 0 : f64(varies ? rate[i] : v) / RATE
+			}
 		}
 		l, _ := node_out(c, &lane)
 		dsp.osc_run(s, inc[:n], l)

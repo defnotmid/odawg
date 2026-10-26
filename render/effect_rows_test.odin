@@ -317,3 +317,52 @@ test_effect_row_live :: proc(t: ^testing.T) {
 	testing.expectf(t, moved > 1e-3, "before the edit the phaser at mix 1 sounds as at mix 0")
 	testing.expectf(t, worst == 0, "past the edit the part differs from the phaser placed at mix 0 by %e", worst)
 }
+
+// A host's clip names effect rows as a song's part does, from the rows the
+// host hands the mix (host_rows: its `effects` tables and their files): a
+// tremolo row on a clip's chain plays (the clip's level dips at its rate on
+// the clip clock: 120 bpm, no tempo); without them the name is a finding
+// and the clip plays as it is.
+@(test)
+test_effect_row_host_clip :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	_ = virtual.arena_init_growing(&arena)
+	context.allocator = virtual.arena_allocator(&arena)
+	frames := 4 * RATE
+	audio := make([]f32, 2 * frames)
+	for i in 0 ..< frames {
+		v := 0.3 * f32(math.sin(math.TAU * 330 * f64(i) / RATE))
+		audio[2 * i], audio[2 * i + 1] = v, v
+	}
+	bank: device.Bank
+	set := device.bank_borrow(&bank, "tone", audio)
+	findings := make(base.Findings)
+	rows := new(spec.Spec)
+	testing.expect(t, spec.spec_from_json(`{ effects: "instruments/effects.json" }`, rows, &findings))
+	add_examples(rows, &findings)
+	effects, _ := spec.json_parse(`[ { name: "tremolo", rate: 2, depth: 1 } ]`)
+	play :: proc(rows: ^spec.Spec, bank: ^device.Bank, set: i32, effects: spec.json_value) -> (^song.Song, Output) {
+		m := new(song.Song)
+		song.mix_init(m)
+		m.bank = bank
+		m.host_rows = rows
+		song.append_clip(m, {name = "bed", set = set, start = 0, stop = 3, effects = effects})
+		song.mix_end(m)
+		return m, output_from_song(m, {})
+	}
+	m, wet := play(rows, &bank, set, effects)
+	testing.expect_value(t, m.devices[m.chain[m.tracks[0].chain.first]], device.Device_Kind.Row)
+	// depth 1 at 2 Hz on the clip clock: silent where sin(2 pi 2 t) = -1
+	quiet := int(0.375 * RATE) // 2 t = 0.75
+	loud := int(0.125 * RATE)
+	testing.expectf(t, abs(wet.left[quiet]) < 0.01 && abs(wet.left[loud - 50]) + abs(wet.left[loud + 50]) > 0.05, "the tremolo on the clip: %f at its dip, %f near its top", wet.left[quiet], wet.left[loud])
+	bare, dry := play(nil, &bank, set, effects)
+	testing.expect_value(t, bare.tracks[0].chain.count, i32(0))
+	found := false
+	for f in bare.findings {
+		found ||= f.code == "unknown_effect" && f.path == "bed/effects/1"
+	}
+	testing.expectf(t, found, "a row with no host rows is a finding: %v", bare.findings)
+	testing.expectf(t, abs(dry.left[quiet]) > 0.01 || abs(dry.left[quiet + 40]) > 0.01, "without the row the clip plays as it is")
+}
