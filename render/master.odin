@@ -17,6 +17,7 @@ Master :: enum u8 {
 	Streaming,
 	Podcast,
 	Broadcast,
+	Web,
 }
 
 Master_Row :: struct {
@@ -30,6 +31,7 @@ MASTER_TABLE := [Master]Master_Row {
 	.Streaming = {"streaming", -14, -1},
 	.Podcast   = {"podcast", -16, -1},
 	.Broadcast = {"broadcast", -23, -1}, // EBU R128
+	.Web       = {"web", -14, -2}, // streaming's loudness, room for a lossy encode's overshoot (Opus, MP3: up to about 0.6 dB)
 }
 
 // The master a delivery target sets, in place of the song's (on): its gain

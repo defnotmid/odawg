@@ -690,8 +690,10 @@ say_start(line, word, t)  -- where to start `line` so `word` lands at t (the inv
 ottis needs no change.
 
 The video gets one new field, used from phase 2: `master = "streaming" | "podcast" |
-"broadcast"`. It measures the final mix, voice and SFX included, and replaces hand-tuned
-`master_gain_db` plus `limiter`.
+"broadcast" | "web"`. It measures the final mix, voice and SFX included, and replaces
+hand-tuned `master_gain_db` plus `limiter`. `web` is streaming's −14 LUFS with a −2 dBTP
+ceiling, for a file that will be encoded lossy afterwards (Opus, MP3): the encoder's
+overshoot, up to about 0.6 dB, then stays under −1 dBTP.
 
 Inside onimite:
 
