@@ -347,6 +347,7 @@ song_from_spec :: proc(s: ^spec.Spec, out: ^Song, bank: ^device.Bank = nil) -> b
 		returns = {0, i32(len(out.returns))}, buses = {0, i32(len(out.buses))},
 	})
 	graph_build(out)
+	notes_reach(out)
 	return true
 }
 

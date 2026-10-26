@@ -775,7 +775,9 @@ Checks that stand in for listening:
 | `mono_compat` | stereo that cancels in mono |
 | `energy_arc` | the measured shape doesn't follow the declared `energy` |
 | `repetition` | a bar looping too long with no variation |
-| `off_key`, `note_range` | notes |
+| `note_range` | notes at pitches outside MIDI's 0..127: they can't sound |
+| `no_region` | notes no layer, region or pad of the part's instrument answers (an SFZ's key range, a machine's pads): they're silent |
+| `off_key` | notes (planned) |
 | `silent_part` | a part with notes in the range that makes no sound (a part with none isn't judged) |
 | `buried_part` | a part without a `role` more than 15 LU under the mix in every section it plays (has notes in; its tails don't count); names the `gain_db` raise to 12 LU under where it's loudest |
 | `role_balance` | a part with a `role` more than 1 LU outside its role's band where it plays (LU under the mix; an `fx` part's peak under the mix's peak); too loud is judged only where 4 or more parts play. Names the one `gain_db` change that puts every section in band, or a per-section lane when none can |

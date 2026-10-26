@@ -97,3 +97,58 @@ add_need :: proc(out: ^[dynamic]device.Sample_Need, set: i32, key: f32, velocity
 		need.velocities[k] += {device.velocity_midi(velocity)}
 	}
 }
+
+// Notes that can't sound, a finding a part: a pitch outside MIDI's 0..127
+// (note_range), or a note no layer or pad of its instrument answers (an
+// SFZ's regions, a machine's pads: no_region). Played, they'd be silent.
+notes_reach :: proc(s: ^Song) {
+	Reach :: struct {
+		outside, unanswered: int,
+		lo, hi:              f32, // the pitches outside, or unanswered
+		ulo, uhi:            f32,
+	}
+	reach := make([]Reach, len(s.parts), context.temp_allocator)
+	for &r in reach {
+		r.lo, r.hi, r.ulo, r.uhi = math.F32_MAX, -math.F32_MAX, math.F32_MAX, -math.F32_MAX
+	}
+	for t in s.tracks {
+		program := i32(s.params[t.instrument][.Program])
+		if program < 0 {
+			continue
+		}
+		layered := s.programs.programs[program].layer_mode == .All
+		r := &reach[t.part]
+		for i in t.notes.first ..< base.span_end(t.notes) {
+			if s.notes.kind[i] != .Attack {
+				continue
+			}
+			p := s.notes.pitch[i]
+			if p < 0 || p > 127 {
+				r.outside += 1
+				r.lo, r.hi = min(r.lo, p), max(r.hi, p)
+				continue
+			}
+			n := note_of(s, int(i))
+			answered: bool
+			if layered {
+				layers: [device.MAX_LAYERS]i32
+				answered = device.graph_layers(&s.programs, program, n, -1, layers[:]) > 0
+			} else {
+				_, _, answered = device.graph_note(&s.programs, program, n)
+			}
+			if !answered {
+				r.unanswered += 1
+				r.ulo, r.uhi = min(r.ulo, p), max(r.uhi, p)
+			}
+		}
+	}
+	for r, part in reach {
+		path := base.path_join("parts", s.parts[part])
+		if r.outside > 0 {
+			base.report(&s.findings, "note_range", .Warning, path, "part %s: %d notes at pitches %.0f..%.0f, outside MIDI's 0..127: they can't sound", s.parts[part], r.outside, r.lo, r.hi)
+		}
+		if r.unanswered > 0 {
+			base.report(&s.findings, "no_region", .Warning, path, "part %s: %d notes (pitches %.0f..%.0f) that no layer, region or pad of its instrument answers: they're silent", s.parts[part], r.unanswered, r.ulo, r.uhi)
+		}
+	}
+}

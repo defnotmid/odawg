@@ -574,3 +574,53 @@ test_chord_rhythm_bars :: proc(t: ^testing.T) {
 		testing.expectf(t, same, "rhythm %s: chords on beats %v, want %v", c.rhythm, starts[:], c.want)
 	}
 }
+
+// A long range of voiced chords stays where it starts: 32 bars of 5-note
+// chords, voice-led bar to bar, keep within an octave of the first chord
+// whatever the voicing (an open voicing's raised tone once led the next
+// chord up, until the notes left MIDI's range).
+@(test)
+test_voicing_holds_register :: proc(t: ^testing.T) {
+	for voicing in ([]string{"open", "spread", "close"}) {
+		arena: virtual.Arena
+		defer virtual.arena_destroy(&arena)
+		s := compose(t, strings.concatenate({`{ bpm: 120, key: "C major", sections: [ { name: "a", duration: "32m", chords: "Cmaj9 Fmaj9 G9 Am9 Dm9 G9 Em9 A9" } ],
+			parts: { pad: { instrument: "Synth", play: [ { name: "a", chords: { voicing: "`, voicing, `", rhythm: "x..." }, octave: 3 } ] } } }`}, context.temp_allocator), &arena)
+		lo0, hi0, lo, hi := f32(200), f32(-200), f32(200), f32(-200)
+		first_bar := s.notes.time[0] + 1.9 // the first chord: its notes within a bar
+		for i in 0 ..< len(s.notes) {
+			p := s.notes.pitch[i]
+			if s.notes.time[i] < first_bar {
+				lo0, hi0 = min(lo0, p), max(hi0, p)
+			}
+			lo, hi = min(lo, p), max(hi, p)
+		}
+		testing.expectf(t, len(s.notes) >= 32 * 5 && hi <= hi0 + 12 && lo >= lo0 - 12, "%s: the first chord %v..%v, the range %v..%v over %d notes", voicing, lo0, hi0, lo, hi, len(s.notes))
+	}
+}
+
+// A note that can't sound is a finding: a pitch outside MIDI's range
+// (note_range); one no layer of a layered row or pad of a machine answers
+// (no_region). A note in range on a plain instrument is neither. (Two bars:
+// each pattern plays twice.)
+@(test)
+test_notes_reach :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	tone :: `{ nodes: { env: { class: "Env", attack: 0.001, decay: 0.01, sustain: 1, release: 0.005 }, out: { class: "Osc", wave: "sine", amp: "env" } } }`
+	s := compose(t, strings.concatenate({`{ bpm: 120, sections: [ { name: "a", duration: "2m" } ], parts: {
+		high: { instrument: "Synth", play: [ { name: "a", notes: "C4 C10", subdivision: "2n" } ] },
+		narrow: { instrument: { layers: [ { instrument: `, tone, `, lo_key: "C4", hi_key: "C5" } ] }, play: [ { name: "a", notes: "C2 C4", subdivision: "2n" } ] },
+		kit: { instrument: "machines/808.json", play: [ { name: "a", notes: "C8", subdivision: "1m" } ] },
+		fine: { instrument: "Synth", play: [ { name: "a", notes: "C4 E4", subdivision: "2n" } ] } } }`}, context.temp_allocator), &arena)
+	said: map[string]string
+	for f in s.findings {
+		if f.code == "note_range" || f.code == "no_region" {
+			said[strings.concatenate({f.code, " ", f.path}, context.temp_allocator)] = f.message
+		}
+	}
+	testing.expectf(t, strings.contains(said["note_range parts/high"], "2 notes at pitches 132..132"), "C10 is outside MIDI: %v", said)
+	testing.expectf(t, strings.contains(said["no_region parts/narrow"], "2 notes (pitches 36..36)"), "C2 below the layer's C4..C5: %v", said)
+	testing.expectf(t, "no_region parts/kit" in said, "C8 on no pad of the 808: %v", said)
+	testing.expectf(t, "note_range parts/fine" not_in said && "no_region parts/fine" not_in said && "no_region parts/high" not_in said, "a note that sounds is told: %v", said)
+}

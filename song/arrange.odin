@@ -1073,6 +1073,11 @@ expand_chords :: proc(x: ^Expand) {
 		clear(notes)
 		theory.pitches_from_chord(chord_from_beat(x.song, b), x.octave, notes)
 		theory.voice_lead(notes[:], previous[:])
+		// the next chord leads from this one's close position: led from the
+		// voiced one, an open voicing's raised tone would pull every chord
+		// after it up, out of MIDI's range over a long section
+		clear(previous)
+		append(previous, ..notes[:])
 		switch x.play.chords.voicing {
 		case "open":
 			if len(notes) >= 3 {
@@ -1084,8 +1089,6 @@ expand_chords :: proc(x: ^Expand) {
 				notes[len(notes) - 1] += 12
 			}
 		}
-		clear(previous)
-		append(previous, ..notes[:])
 	}
 	bars := x.from_spec.bars[x.play.chords.rhythm.first:base.span_end(x.play.chords.rhythm)]
 	if len(bars) == 0 {
