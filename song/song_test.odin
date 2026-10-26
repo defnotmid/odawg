@@ -723,3 +723,34 @@ test_tempo_fixed :: proc(t: ^testing.T) {
 		testing.expectf(t, f.code != "tempo_fixed", "at one tempo: %s", f.message)
 	}
 }
+
+// A part's Tone lengths are read at the tempo of the section it first
+// plays in: a lead entering at 128 after a 60 bpm intro has its "8n."
+// delay at 128 (0.3515625 s) and isn't told; a part playing from the intro
+// on reads at 60 and is told where it plays at 128.
+@(test)
+test_first_section_tempo :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	s := compose(t, `{ key: "C major", sections: [ { name: "intro", duration: "1m", bpm: 60 }, { name: "race", duration: "2m", bpm: 128 } ],
+		parts: {
+			lead: { instrument: "Synth", effects: [ { name: "FeedbackDelay", delay_time: "8n." } ], play: [ { name: "race", notes: "C5" } ] },
+			bed: { instrument: "Synth", effects: [ { name: "FeedbackDelay", delay_time: "8n." } ], play: [ { name: ["intro", "race"], notes: "C4" } ] } } }`, &arena)
+	delay :: proc(s: ^Song, part: string) -> f32 {
+		for tr in s.tracks {
+			if s.parts[tr.part] == part {
+				return s.params[s.chain[tr.chain.first]][.Delay_Time]
+			}
+		}
+		return -1
+	}
+	testing.expect_value(t, delay(s, "lead"), f32(0.75 * 60.0 / 128))
+	testing.expect_value(t, delay(s, "bed"), f32(0.75))
+	told := make([dynamic]string, context.temp_allocator)
+	for f in s.findings {
+		if f.code == "tempo_fixed" {
+			append(&told, f.path)
+		}
+	}
+	testing.expectf(t, len(told) == 1 && strings.has_prefix(told[0], "parts/bed"), "only the bed is off the beat: %v", told)
+}

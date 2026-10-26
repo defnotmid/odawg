@@ -246,8 +246,15 @@ arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 			style := song.sections[section_from_beat(song, p.beat)].style
 			k, found := slice.linear_search(styles[:], style)
 			if !found {
+				// its first note in that style: where its Tone lengths are read
+				first := p.beat
+				for q in pending {
+					if q.beat < first && song.sections[section_from_beat(song, q.beat)].style == style {
+						first = q.beat
+					}
+				}
 				append(&styles, style)
-				append(&tracks, track_for(song, s, work, i32(pi), name, style))
+				append(&tracks, track_for(song, s, work, i32(pi), name, style, first))
 				k = len(tracks) - 1
 			}
 			if tracks[k] < 0 {
@@ -431,9 +438,13 @@ chain_into_song :: proc(song: ^Song, from: ^spec.Spec, c: Span, beat_seconds: f6
 
 // The track part `pi` plays `style` on (-1: the song's own), made the first
 // time: the spec's settings over the style's over the part defaults; -1 when
-// neither gives it an instrument.
+// neither gives it an instrument. Its Tone lengths (an envelope's "8n", a
+// delay's "8n.") are read at the tempo of the section it first plays in
+// (`first`, its first note's beat; none: the first section of its style),
+// where a part entering after an intro at another tempo hears them on the
+// beat (tempo_fixed tells where it plays at another).
 @(private = "file")
-track_for :: proc(song: ^Song, s: ^spec.Spec, work: ^Work, pi: i32, name: string, style: i32) -> int {
+track_for :: proc(song: ^Song, s: ^spec.Spec, work: ^Work, pi: i32, name: string, style: i32, first: f64 = -1) -> int {
 	for t, i in song.tracks {
 		if t.part == pi && t.style == style {
 			return i
@@ -441,10 +452,14 @@ track_for :: proc(song: ^Song, s: ^spec.Spec, work: ^Work, pi: i32, name: string
 	}
 	variant := style_name(song, style)
 	beat_seconds := 60 / song.sections[0].bpm0
-	for sec in song.sections {
-		if sec.style == style {
-			beat_seconds = 60 / sec.bpm0
-			break
+	if first >= 0 {
+		beat_seconds = 60 / song.sections[section_from_beat(song, first)].bpm0
+	} else {
+		for sec in song.sections {
+			if sec.style == style {
+				beat_seconds = 60 / sec.bpm0
+				break
+			}
 		}
 	}
 	t := Track{part = pi, style = style, gain_db = PART_GAIN_DB, room = PART_ROOM_DB, instrument = -1}
