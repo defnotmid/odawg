@@ -130,6 +130,7 @@ Part_Spec :: struct {
 	plays:      Span,
 	to:         string, // the bus it goes into ("": the master)
 	key:        string, // the part, return or bus its effects' sidechain hears ("": itself)
+	role:       string, // what it is for in the mix (song.Part_Role's names; "": not said)
 }
 
 // A sample set the song brings, played by a Sampler naming it (`set =

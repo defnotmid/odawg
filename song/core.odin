@@ -205,6 +205,32 @@ note_seed :: proc(s: ^Song, t: Track, n: Note_Row) -> u64 {
 	return base.hash_combine(track, base.hash_combine(u64(n.time * base.RATE + 0.5), u64(n.pitch * 100) ~ u64(n.pad) << 32))
 }
 
+// What a part is for in the mix (its `role`): what check's role_balance
+// holds its level to. None: not said.
+Part_Role :: enum u8 {
+	None,
+	Melody, // the hook, a lead
+	Counter, // a second line, a co-lead
+	Bass,
+	Drums, // the kit
+	Comp, // chords, comping strings
+	Pad, // beds, quiet strings
+	Fx, // risers, impacts, one-shots
+	Texture, // ambience, hiss, room tone
+}
+
+PART_ROLE_NAMES := [Part_Role]string {
+	.None    = "",
+	.Melody  = "melody",
+	.Counter = "counter",
+	.Bass    = "bass",
+	.Drums   = "drums",
+	.Comp    = "comp",
+	.Pad     = "pad",
+	.Fx      = "fx",
+	.Texture = "texture",
+}
+
 Song :: struct {
 	name:     string,
 	start:    f64, // on the outside clock
@@ -217,6 +243,7 @@ Song :: struct {
 	chords:   [dynamic]theory.Chord,
 	markers:  [dynamic]Marker,
 	parts:    [dynamic]string, // names: the spec's and its styles', sorted
+	roles:    [dynamic]Part_Role, // each part's (parts' order): what it is for in the mix
 	styles:   [dynamic]string, // the styles its sections play, by name ("styles/house.json")
 	tracks:   [dynamic]Track,
 	devices:  [dynamic]device.Device_Kind,

@@ -83,6 +83,37 @@ arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 		}
 	}
 	slice.sort(song.parts[:])
+	// each part's role: the spec's part's, else a style's
+	resize(&song.roles, len(song.parts))
+	for name, i in song.parts {
+		written, path := "", ""
+		for st in work.styles {
+			if st != nil {
+				for p in st.parts {
+					if p.name == name && p.role != "" {
+						written, path = p.role, base.path_join(base.path_join("parts", name), "role")
+					}
+				}
+			}
+		}
+		for p in s.parts {
+			if p.name == name && p.role != "" {
+				written, path = p.role, base.path_join(base.path_join("parts", name), "role")
+			}
+		}
+		if written == "" {
+			continue
+		}
+		found := false
+		for r in Part_Role {
+			if r != .None && PART_ROLE_NAMES[r] == written {
+				song.roles[i], found = r, true
+			}
+		}
+		if !found {
+			base.report(&song.findings, "bad_value", .Error, path, "%s: %q is not a role (melody, counter, bass, drums, comp, pad, fx, texture)", path, written)
+		}
+	}
 	// the returns: the styles', then the spec's (the spec's win by name)
 	for st in work.styles {
 		if st != nil {

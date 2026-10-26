@@ -562,13 +562,17 @@ print_balance :: proc(s: ^song.Song, rows: []check.Balance_Row) {
 	}
 	for table in 0 ..< 2 {
 		fmt.println(table == 0 ? "balance: LU under the mix (· no notes there, - silent)" : "balance: peak dBFS")
-		fmt.printf("%-14s", "part")
+		fmt.printf("%-22s", "part")
 		for sec in s.sections {
 			fmt.printf(" %8s", sec.name[:min(len(sec.name), 8)])
 		}
 		fmt.printf(" %8s\n", "song")
 		for i in 0 ..< len(rows) / per {
-			fmt.printf("%-14s", s.parts[i][:min(len(s.parts[i]), 14)])
+			label := s.parts[i]
+			if s.roles[i] != .None {
+				label = fmt.tprintf("%s (%s)", s.parts[i], song.PART_ROLE_NAMES[s.roles[i]])
+			}
+			fmt.printf("%-22s", label[:min(len(label), 22)])
 			for b in rows[i * per:][:per] {
 				cell := "·"
 				if b.plays {

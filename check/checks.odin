@@ -5,7 +5,9 @@
 // or as it streams, chunk by chunk (Measuring), the same way either way.
 package odawg_check
 
+import "core:fmt"
 import "core:math"
+import "core:strings"
 import analyze "../analyze"
 import base "../base"
 import render "../render"
@@ -16,6 +18,8 @@ Check :: enum u8 {
 	Clipping,
 	Silent_Part,
 	Buried_Part,
+	Role_Balance,
+	No_Melody,
 	Loudness,
 }
 
@@ -31,6 +35,7 @@ Measures :: struct {
 	mix_energy:  []f64,
 	part_energy: [][]f64,
 	part_peak_steps: [][]f32, // each measured part's sample peak (linear) every 100 ms step
+	mix_peak_steps:  []f32, // the mix's
 	from:        f64,
 	samples:     i64,
 }
@@ -41,6 +46,37 @@ Measures :: struct {
 // span under 400 ms holds no loudness block and isn't judged.
 BURIED_LU :: 15
 BURIED_TARGET_LU :: 12
+
+// A role's band (song.Part_Role): how far under the mix a part of it sits
+// where it plays, in LU; for a role of hits (by_peak), its peak under the
+// mix's peak there in dB, since a one-shot's loudness reads low by nature.
+// From the levels of the songs onimite's user accepted (a hook 4-8 under,
+// a bass or a kit 4-6, comping 7-10, beds 11-13, ambience to 25).
+Role_Row :: struct {
+	lo, hi:  f64,
+	by_peak: bool,
+}
+
+// "Too loud" is judged where this many parts or more sound: four equal parts
+// sit 6 LU under the mix each, where comp's band begins.
+ROLE_DENSE :: 4
+
+// How far outside its band a part sits before it's told (LU, or dB of
+// peak): about the smallest level change heard, and what a measurement moves
+// by; a part told is told the change that puts it in the band itself.
+ROLE_SLACK :: 1
+
+ROLE_TABLE := [song.Part_Role]Role_Row {
+	.None    = {},
+	.Melody  = {0, 8, false},
+	.Counter = {4, 10, false},
+	.Bass    = {3, 8, false},
+	.Drums   = {2, 8, false},
+	.Comp    = {6, 12, false},
+	.Pad     = {9, 15, false},
+	.Fx      = {0, 12, true},
+	.Texture = {12, 25, false},
+}
 
 // A section as the measured render holds it: its whole 100 ms steps
 // (counted in samples from the render's first, so no rounding moves a
@@ -70,11 +106,12 @@ Context :: struct {
 // silent), its sample peak there (dBFS: a hit that lands reads loud here
 // and low in loudness), and whether a note of its sounds there.
 Balance_Row :: struct {
-	lufs:    f64,
-	mix:     f64,
-	under:   f64,
-	peak_db: f64,
-	plays:   bool,
+	lufs:        f64,
+	mix:         f64,
+	under:       f64,
+	peak_db:     f64,
+	mix_peak_db: f64, // the mix's sample peak there
+	plays:       bool,
 }
 
 // Every measured part (song.parts order) against the mix in every section
@@ -94,34 +131,37 @@ balance_rows :: proc(s: ^song.Song, m: ^Measures, spans: []Section_Span, plays: 
 	parts := min(len(m.part_energy), len(s.parts))
 	per := len(spans) + 1
 	rows := make([]Balance_Row, parts * per, allocator)
+	peak_over :: proc(peaks: []f32, first, last: int) -> f32 {
+		p: f32
+		for v in peaks[clamp(first, 0, len(peaks)):clamp(last, 0, len(peaks))] {
+			p = max(p, v)
+		}
+		return p
+	}
 	mix := make([]f64, len(spans), context.temp_allocator)
+	mix_peak := make([]f32, len(spans), context.temp_allocator)
 	for sp, j in spans {
 		mix[j] = analyze.loudness_of_span(m.mix_energy, sp.first, sp.last)
+		mix_peak[j] = peak_over(m.mix_peak_steps, sp.first, sp.last)
 	}
 	played := make([dynamic][2]int, context.temp_allocator)
 	for energy, i in m.part_energy[:parts] {
 		peaks := m.part_peak_steps[i]
-		peak_over :: proc(peaks: []f32, first, last: int) -> f32 {
-			p: f32
-			for v in peaks[clamp(first, 0, len(peaks)):clamp(last, 0, len(peaks))] {
-				p = max(p, v)
-			}
-			return p
-		}
 		clear(&played)
-		song_peak: f32
+		song_peak, song_mix_peak: f32
 		for sp, j in spans {
 			part := analyze.loudness_of_span(energy, sp.first, sp.last)
 			peak := peak_over(peaks, sp.first, sp.last)
-			rows[i * per + j] = {lufs = part, mix = mix[j], under = mix[j] - part, peak_db = base.gain_to_db(f64(peak)), plays = plays[i * len(spans) + j]}
+			rows[i * per + j] = {lufs = part, mix = mix[j], under = mix[j] - part, peak_db = base.gain_to_db(f64(peak)), mix_peak_db = base.gain_to_db(f64(mix_peak[j])), plays = plays[i * len(spans) + j]}
 			if plays[i * len(spans) + j] {
 				append(&played, [2]int{sp.first, sp.last})
 				song_peak = max(song_peak, peak)
+				song_mix_peak = max(song_mix_peak, mix_peak[j])
 			}
 		}
 		part := analyze.loudness_of_spans(energy, played[:])
 		whole := analyze.loudness_of_spans(m.mix_energy, played[:])
-		rows[i * per + len(spans)] = {lufs = part, mix = whole, under = whole - part, peak_db = base.gain_to_db(f64(song_peak)), plays = len(played) > 0}
+		rows[i * per + len(spans)] = {lufs = part, mix = whole, under = whole - part, peak_db = base.gain_to_db(f64(song_peak)), mix_peak_db = base.gain_to_db(f64(song_mix_peak)), plays = len(played) > 0}
 	}
 	return rows
 }
@@ -164,6 +204,9 @@ CHECK_TABLE := [Check]Check_Row {
 	.Buried_Part = {"buried_part", proc(c: ^Context) {
 			sections := len(c.spans)
 			for i in 0 ..< len(c.balance) / (sections + 1) {
+				if c.song.roles[i] != .None {
+					continue // role_balance holds it to its role's band
+				}
 				least := math.INF_F64 // how far under the mix it sits where it's loudest against it
 				for b in c.balance[i * (sections + 1):][:sections] {
 					if b.plays && !math.is_inf(b.lufs) {
@@ -174,6 +217,71 @@ CHECK_TABLE := [Check]Check_Row {
 					name := c.song.parts[i]
 					base.report(c.findings, "buried_part", .Warning, base.path_join("parts", name), "part %s sits %.1f LU or more under the mix in every section it plays: raise parts/%s/gain_db by about %.0f dB (%d LU under where it's loudest)", name, least, name, least - BURIED_TARGET_LU, BURIED_TARGET_LU)
 				}
+			}
+		}},
+	.Role_Balance = {"role_balance", proc(c: ^Context) {
+			sections := len(c.spans)
+			parts := len(c.balance) / (sections + 1)
+			// how many parts sound in each section: where few do, each sits
+			// near the mix whatever its level, so "too loud" is judged only
+			// where ROLE_DENSE or more play
+			playing := make([]int, sections, context.temp_allocator)
+			for i in 0 ..< parts {
+				for b, j in c.balance[i * (sections + 1):][:sections] {
+					playing[j] += b.plays && !math.is_inf(b.lufs) ? 1 : 0
+				}
+			}
+			for i in 0 ..< parts {
+				role := c.song.roles[i]
+				if role == .None {
+					continue
+				}
+				band := ROLE_TABLE[role]
+				// where it plays: how far under the mix (its loudness, or for a
+				// role of hits its peak), and which sections fall outside the band
+				lo_shift, hi_shift := -math.INF_F64, math.INF_F64 // the gain_db raises that put every one in band
+				outside := strings.builder_make(context.temp_allocator)
+				for b, j in c.balance[i * (sections + 1):][:sections] {
+					// silent there (a role of hits judged by its peak: a click's
+					// loudness can read silent where its peak doesn't)
+					if !b.plays || math.is_inf(band.by_peak ? b.peak_db : b.lufs) {
+						continue
+					}
+					under := band.by_peak ? b.mix_peak_db - b.peak_db : b.under
+					lo := playing[j] >= ROLE_DENSE ? band.lo : -math.INF_F64
+					lo_shift, hi_shift = max(lo_shift, under - band.hi), min(hi_shift, under - lo)
+					if under < lo - ROLE_SLACK || under > band.hi + ROLE_SLACK {
+						if strings.builder_len(outside) > 0 {
+							strings.write_string(&outside, ", ")
+						}
+						fmt.sbprintf(&outside, "%.1f in %s", under, c.song.sections[j].name)
+					}
+				}
+				if strings.builder_len(outside) == 0 {
+					continue
+				}
+				name, role_name := c.song.parts[i], song.PART_ROLE_NAMES[role]
+				what := band.by_peak ? "its peak dB under the mix's" : "LU under the mix"
+				path := base.path_join("parts", name)
+				if lo_shift > hi_shift {
+					base.report(c.findings, "role_balance", .Warning, path, "part %s (%s: %.0f-%.0f %s) sits %s, and no one change to its gain_db puts every section it plays in band: set parts/%s/gain_db per section with a lane (it rides on gain_db)", name, role_name, band.lo, band.hi, what, strings.to_string(outside), name)
+					continue
+				}
+				// the smallest raise (or cut) that puts every section in band
+				raise := lo_shift > 0 ? lo_shift : hi_shift
+				base.report(c.findings, "role_balance", .Warning, path, "part %s (%s: %.0f-%.0f %s) sits %s: %s parts/%s/gain_db by about %.1f dB", name, role_name, band.lo, band.hi, what, strings.to_string(outside), raise > 0 ? "raise" : "lower", name, abs(raise))
+			}
+		}},
+	.No_Melody = {"no_melody", proc(c: ^Context) {
+			// a song that names roles and none is a melody: the hook is what's
+			// usually missing
+			named, melody := false, false
+			for r in c.song.roles {
+				named ||= r != .None
+				melody ||= r == .Melody
+			}
+			if named && !melody {
+				base.report(c.findings, "no_melody", .Info, "parts", "no part has the role melody: a hook is usually what such a song is missing")
 			}
 		}},
 	.Loudness = {"loudness", proc(c: ^Context) {
@@ -255,6 +363,7 @@ findings_from_render :: proc(s: ^song.Song, out: ^render.Output, findings: ^base
 Measuring :: struct {
 	meter:      analyze.Meter,
 	peak_steps: [][dynamic]f32, // each part's sample peak every 100 ms step (the steps' grid)
+	mix_peak_steps: [dynamic]f32, // the mix's
 	parts:      []analyze.Steps,
 	measured:   int, // the parts whose stems came
 	from:       f64,
@@ -263,6 +372,7 @@ Measuring :: struct {
 measuring_init :: proc(m: ^Measuring, s: ^song.Song, allocator := context.allocator, from := 0.0) {
 	analyze.meter_init(&m.meter, render.RATE, allocator)
 	m.peak_steps = make([][dynamic]f32, len(s.parts), allocator)
+	m.mix_peak_steps = make([dynamic]f32, allocator)
 	for &p in m.peak_steps {
 		p = make([dynamic]f32, allocator)
 	}
@@ -281,6 +391,7 @@ measuring_destroy :: proc(m: ^Measuring) {
 	for p in m.peak_steps {
 		delete(p)
 	}
+	delete(m.mix_peak_steps)
 }
 
 // The next chunk: the mix, and the stems (stem_count's order: the parts'
@@ -301,6 +412,10 @@ measuring_push :: proc(m: ^Measuring, l, r: []f32, stems: [][2][]f32) {
 		g := at + i64(j)
 		step := int(g / STEP)
 		end := min(n, j + int(STEP - g % STEP))
+		if len(m.mix_peak_steps) <= step {
+			resize(&m.mix_peak_steps, step + 1)
+		}
+		m.mix_peak_steps[step] = max(m.mix_peak_steps[step], render.peak_from_samples(l[j:end], r[j:end]))
 		for st, i in stems[:k] {
 			p := &m.peak_steps[i]
 			if len(p) <= step {
@@ -329,5 +444,5 @@ measures_from :: proc(m: ^Measuring, allocator := context.allocator) -> Measures
 			peaks[i] = max(peaks[i], v)
 		}
 	}
-	return {loudness = analyze.loudness_from_meter(&m.meter, allocator), mix_peak = m.meter.sample_peak, part_peaks = peaks, mix_energy = m.meter.energy[:], part_energy = energy, part_peak_steps = steps, from = m.from, samples = m.meter.pushed}
+	return {loudness = analyze.loudness_from_meter(&m.meter, allocator), mix_peak = m.meter.sample_peak, part_peaks = peaks, mix_energy = m.meter.energy[:], part_energy = energy, part_peak_steps = steps, mix_peak_steps = m.mix_peak_steps[:min(len(m.mix_peak_steps), len(m.meter.energy))], from = m.from, samples = m.meter.pushed}
 }

@@ -182,6 +182,31 @@ Freesound (its CC0 filter), Kenney's packs, OpenGameArt's CC0 section.
   `-0.15` on brass, lead dead-centre).
 - **Pumping.** `sidechain` from `drums/kick` ducks pads, basses and stabs in
   dance music; a song that isn't dance music usually shouldn't pump.
+- **Roles hold levels to what the part is for.** A part's `role` gives it a
+  band of LU under the mix where it plays, from the songs onimite's user
+  accepted; `inspect` reports a part more than 1 LU outside its band
+  (`role_balance`) with the `gain_db` change that fixes it:
+
+  | role | for | LU under the mix |
+  | --- | --- | --- |
+  | `melody` | the hook, a lead | 0–8 (in a sparse section the hook is most of the mix) |
+  | `counter` | a second line, a co-lead | 4–10 |
+  | `bass` | | 3–8 |
+  | `drums` | the kit | 2–8 |
+  | `comp` | chords, comping strings | 6–12 |
+  | `pad` | beds, quiet strings | 9–15 |
+  | `fx` | risers, impacts, one-shots | its peak 0–12 dB under the mix's (a hit's loudness reads low by nature) |
+  | `texture` | ambience, hiss, room tone | 12–25 |
+
+  "Too loud" counts only where 4 or more parts play: in a sparse section
+  every part sits near the mix. A part without a role is held only to
+  `buried_part`'s 15 LU. A song naming roles with no `melody` is told so.
+- **Sample libraries play at their authors' levels, far apart.** VS Chamber
+  Orchestra 2's own SFZ files play well below pianos and drum kits at the
+  same velocity: its glockenspiel and marimba 15–25 dB, its strings 8–12
+  (onimite's measurements); one note of its flute and of its cellos at the
+  same velocity are 17.6 dB apart. A part on them needs a large `gain_db`,
+  and `role_balance` names it.
 - **One reference level.** Every voice in `synths.json` reaches −18 LUFS
   max momentary (its loudest 400 ms) for one note at velocity 0.8, played
   alone (C4; the basses C2). Swapping one voice for another keeps the

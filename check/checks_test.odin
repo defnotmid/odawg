@@ -1,6 +1,7 @@
 package odawg_check
 
 import "core:mem/virtual"
+import "core:fmt"
 import "core:math"
 import "core:slice"
 import "core:strconv"
@@ -211,4 +212,67 @@ test_balance_rows :: proc(t: ^testing.T) {
 	// held part's
 	hit, pad := row(s, rows, "hit", 1), row(s, rows, "pad", 1)
 	testing.expectf(t, hit.peak_db - hit.lufs > pad.peak_db - pad.lufs + 3, "hit peak %.1f / %.1f LUFS against pad %.1f / %.1f", hit.peak_db, hit.lufs, pad.peak_db, pad.lufs)
+}
+
+// A part's role holds it to its role's band where it plays: a comp part 30
+// dB down is told the raise that puts it in band (and raised by that, it
+// isn't told again); a pad pushed up is told to come down; a texture far
+// under the mix is in its band and not buried; an fx hit is judged by its
+// peak (a quiet click told, a loud one not). A song naming roles without a
+// melody is told so; an unknown role is an error.
+@(test)
+test_role_balance :: proc(t: ^testing.T) {
+	text :: proc(keys_gain: string, lead_role: string) -> string {
+		return strings.concatenate({`{ bpm: 120, seed: 5, sections: [ { name: "a", duration: "4m", chords: "C F G C" }, { name: "b", duration: "4m", chords: "A F G C" } ],
+			parts: {
+				lead: { instrument: "Synth", role: "`, lead_role, `", play: [ { name: ["a", "b"], notes: "C5 E5 G5 E5", subdivision: "4n" } ] },
+				keys: { instrument: "Synth", role: "comp", gain_db: `, keys_gain, `, play: [ { name: ["a", "b"], chords: { voicing: "open", rhythm: "x.x.x.x." }, octave: 4 } ] },
+				bass: { instrument: "Synth", role: "bass", play: [ { name: ["a", "b"], degrees: "1 . 5 .", subdivision: "4n", octave: 2 } ] },
+				pad: { instrument: "Synth", role: "pad", gain_db: 6, play: [ { name: ["a", "b"], chords: { voicing: "spread" }, octave: 3 } ] },
+				tex: { instrument: "Synth", role: "texture", gain_db: -24, play: [ { name: ["a", "b"], notes: "C6", subdivision: "1m" } ] },
+				fx_quiet: { instrument: { name: "NoiseSynth", "envelope/decay": 0.02, "envelope/sustain": 0 }, role: "fx", gain_db: -40, play: [ { name: "b", notes: "C4", subdivision: "1m" } ] },
+				fx_loud: { instrument: { name: "NoiseSynth", "envelope/decay": 0.02, "envelope/sustain": 0 }, role: "fx", gain_db: 6, play: [ { name: "b", notes: "C4", subdivision: "1m" } ] } } }`}, context.temp_allocator)
+	}
+	check_song :: proc(t: ^testing.T, text: string) -> (said: map[string]string, codes: map[string]bool) {
+		sp := new(spec.Spec)
+		findings := make(base.Findings)
+		testing.expect(t, spec.spec_from_json(text, sp, &findings))
+		s := new(song.Song)
+		song.song_from_spec(sp, s)
+		for f in s.findings {
+			codes[f.code] = true
+		}
+		out := render.output_from_song(s, {stems = true})
+		got := make(base.Findings)
+		findings_from_render(s, &out, &got)
+		for f in got {
+			codes[f.code] = true
+			if f.code == "role_balance" || f.code == "buried_part" {
+				said[strings.concatenate({f.code, " ", f.path})] = f.message
+			}
+		}
+		return
+	}
+	arena: virtual.Arena
+	_ = virtual.arena_init_growing(&arena)
+	defer virtual.arena_destroy(&arena)
+	context.allocator = virtual.arena_allocator(&arena)
+	said, codes := check_song(t, text("-30", "melody"))
+	keys := said["role_balance parts/keys"]
+	testing.expectf(t, strings.contains(keys, "raise parts/keys/gain_db"), "comp 30 dB down: %q (all: %v)", keys, said)
+	testing.expectf(t, strings.contains(said["role_balance parts/pad"], "lower parts/pad/gain_db"), "a pad pushed up: %q", said["role_balance parts/pad"])
+	testing.expectf(t, "buried_part parts/tex" not_in said, "a texture with its role is buried_part's: %v", said)
+	testing.expectf(t, "role_balance parts/fx_quiet" in said && "role_balance parts/fx_loud" not_in said, "fx by peak: %v", said)
+	testing.expect(t, !codes["no_melody"], "a song with a melody is told it has none")
+	// raised by what it was told, the comp part sits in its band
+	if at := strings.index(keys, "by about "); at >= 0 {
+		raise, _ := strconv.parse_f64(strings.fields(keys[at + len("by about "):])[0])
+		again, _ := check_song(t, text(fmt.tprintf("%.1f", -30 + raise), "melody"))
+		testing.expectf(t, "role_balance parts/keys" not_in again, "raised by %.1f dB it's still told: %q", raise, again["role_balance parts/keys"])
+	}
+	// roles named, none a melody; a role that isn't one
+	_, codes = check_song(t, text("-30", "counter"))
+	testing.expect(t, codes["no_melody"], "no melody: not told")
+	_, codes = check_song(t, text("-30", "lead_vocal"))
+	testing.expect(t, codes["bad_value"], "an unknown role: not an error")
 }

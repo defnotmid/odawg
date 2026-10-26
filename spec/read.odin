@@ -167,6 +167,7 @@ PART_FIELDS := []Field_Row {
 	{"mute", .Ranges, offset_of(Part_Spec, mute)},
 	{"to", .String, offset_of(Part_Spec, to)},
 	{"key", .String, offset_of(Part_Spec, key)},
+	{"role", .String, offset_of(Part_Spec, role)},
 	{"play", .Ignore, 0}, // read by read_parts_field, so plays stay contiguous per part
 }
 
