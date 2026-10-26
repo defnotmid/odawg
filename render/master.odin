@@ -309,13 +309,27 @@ wav_close :: proc(w: ^Wav_Writer) -> bool {
 }
 
 // The peak of a buffer pair, linear.
-peak_from_samples :: proc(l, r: []f32) -> f32 {
-	p: f32
-	for v in l {
-		p = max(p, abs(v))
+//
+// Eight running maxima side by side, then the largest of them: one alone
+// waits on itself every sample (a float max won't be reordered for it), 5x
+// slower on a render's stems. A max is exact, so the peak is the same.
+peak_from_samples :: proc(l, r: []f32) -> f32 #no_bounds_check {
+	LANES :: 8
+	p: [LANES]f32
+	for x in ([2][]f32{l, r}) {
+		i := 0
+		for ; i + LANES <= len(x); i += LANES {
+			for k in 0 ..< LANES {
+				p[k] = max(p[k], abs(x[i + k]))
+			}
+		}
+		for ; i < len(x); i += 1 {
+			p[0] = max(p[0], abs(x[i]))
+		}
 	}
-	for v in r {
-		p = max(p, abs(v))
+	peak: f32
+	for v in p {
+		peak = max(peak, v)
 	}
-	return p
+	return peak
 }

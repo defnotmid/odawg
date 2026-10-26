@@ -156,3 +156,39 @@ test_master :: proc(t: ^testing.T) {
 	again := master_export(s, {pool = &tp4.work_pool}, .Streaming, {})
 	testing.expectf(t, again.integrated == l.integrated, "mastered again: %f LUFS, first %f", again.integrated, l.integrated)
 }
+
+// A buffer's peak, taken eight lanes at a time, is the plain running
+// maximum's: every length up to past a few lanes (each a different tail),
+// the peak in either side at any position, negative or positive.
+@(test)
+test_peak_from_samples :: proc(t: ^testing.T) {
+	serial :: proc(l, r: []f32) -> f32 {
+		p: f32
+		for v in l {
+			p = max(p, abs(v))
+		}
+		for v in r {
+			p = max(p, abs(v))
+		}
+		return p
+	}
+	buf: [2][1001]f32
+	for n in ([]int{0, 1, 2, 3, 7, 8, 9, 15, 16, 17, 23, 40, 1001}) {
+		for at in 0 ..< max(n, 1) {
+			for side in 0 ..< 2 {
+				for i in 0 ..< n {
+					buf[0][i] = f32(math.sin(f64(i) * 0.37)) * 0.5
+					buf[1][i] = f32(math.cos(f64(i) * 0.71)) * 0.5
+				}
+				if n > 0 {
+					buf[side][at] = at % 2 == 0 ? -0.93 : 0.93
+				}
+				l, r := buf[0][:n], buf[1][:n]
+				if got, want := peak_from_samples(l, r), serial(l, r); got != want {
+					testing.expectf(t, false, "length %d, peak at %d of side %d: %v, want %v", n, at, side, got, want)
+					return
+				}
+			}
+		}
+	}
+}
