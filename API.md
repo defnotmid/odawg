@@ -264,7 +264,9 @@ A row:
   same way): Osc, Noise, Random, Env, Decay, Ramp, Lfo, Filter, Ladder (the 303's diode
   ladder), OnePole, Difference, Drive, Slew, Map, Mix, Mul, Comb, Sampler, Clip. A `Filter`
   of type `diode`, `onepole` or `difference` is that kind. Their order means nothing: a
-  program runs them after what they read, and leaves out what the out doesn't hear.
+  program runs them after what they read, and leaves out what the out doesn't hear. A kind
+  that reads an input of two sides writes two (a `Comb`, a line a side; its delay at most
+  43 ms, a plucked string's note down to about 23 Hz).
 - **A field** is a number, a choice, a Tone length, or what moves it: `{ base, by, octaves
   | ratio | sweep | index | amount | depth | at_most, exponent }` (a list of those). `by` is
   a node or the note's `velocity`, `accent`, `slide`, `gate`. `at_most` caps the field

@@ -155,6 +155,17 @@ trumpet and cellos from VS Chamber Orchestra 2.
    more than 15 LU under the mix in every section it plays (`buried_part`)
    with the raise that puts it 12 LU under.
 
+A recorded one-shot (a real cymbal swell into the drop, vinyl crackle, a
+vocal chop on the one) that belongs to the music is a pad of a set of the
+song's own, its file in a source like an SFZ's samples:
+`sets = { fx = { pads = { swell = "freesound/previews/248/248236_4056007-hq.mp3" } } }`
+and a part `{ "Sampler", set = "fx" }` playing `steps = { swell = "x..." }`.
+It lands on the grid, goes through the part's effects and sends, and shows
+in the stems and the findings. An effect timed to a picture (a whoosh on a
+cut, a strike on a word) is a clip the host places instead. Either way the
+file is fetched and pinned, never bundled, and credited. CC0 effects:
+Freesound (its CC0 filter), Kenney's packs, OpenGameArt's CC0 section.
+
 ## Mixing as part of the sound
 
 - **Effects on the part, space on returns.** A delay or chorus that belongs to

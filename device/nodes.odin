@@ -17,9 +17,9 @@ NODE_FILTER_CHOICES := []string{"lowpass", "highpass", "bandpass", "lowshelf", "
 PHASE_CHOICES := []string{"start", "random"}
 PLAIN_WAVES := []string{"sine", "triangle", "sawtooth", "square", "pulse"}
 
-// A comb's delay line (samples): its longest delay, and the lowest note a
-// plucked string plays (about 12 Hz).
-COMB_LINE :: 4096
+// A comb's delay line a side (samples): its longest delay (43 ms), and the
+// lowest note a plucked string plays (about 23 Hz); two sides fit a voice.
+COMB_LINE :: 2048
 
 // The kinds' ids (set at init).
 NODE_OSC, NODE_NOISE, NODE_RANDOM, NODE_ENV, NODE_DECAY, NODE_RAMP, NODE_LFO: Node_Kind
@@ -904,7 +904,7 @@ process_drive :: proc(c: ^Node_Call) {
 
 @(private = "file")
 Slew_State :: struct {
-	y: f32,
+	y: [2]f32, // a side each (the second when it reads two sides)
 }
 
 // A one-pole lag: toward its input with the `rise` time constant going up,
@@ -915,15 +915,20 @@ process_slew :: proc(c: ^Node_Call) {
 		s := node_state(c, &lane, Slew_State)
 		rise := 1 - f32(math.exp(-1 / (f64(max(node_value(c, &lane, 3), 1e-6)) * RATE)))
 		fall := 1 - f32(math.exp(-1 / (f64(max(node_value(c, &lane, 4), 1e-6)) * RATE)))
-		il, _ := node_input(c, &lane, 0)
-		l, _ := node_out(c, &lane)
-		y := s.y
-		for i in 0 ..< len(l) {
-			x := il[i]
-			y += (x - y) * (x > y ? rise : fall)
-			l[i] = y
+		// what reads two sides writes both (the graph's rule)
+		il, ir := node_input(c, &lane, 0)
+		l, r := node_out(c, &lane)
+		ins := [2][]f32{il, ir}
+		outs := [2][]f32{l, r}
+		for side in 0 ..< (c.node.sides ? 2 : 1) {
+			y := s.y[side]
+			for i in 0 ..< len(l) {
+				x := ins[side][i]
+				y += (x - y) * (x > y ? rise : fall)
+				outs[side][i] = y
+			}
+			s.y[side] = y
 		}
-		s.y = y
 	}
 }
 
@@ -1044,9 +1049,9 @@ COMB_RELEASE :: 6
 
 @(private = "file")
 Comb_State :: struct {
-	line:  [COMB_LINE]f32,
+	line:  [2][COMB_LINE]f32, // a side each (the second when it reads two sides)
 	write: int,
-	lp:    f32,
+	lp:    [2]f32,
 	k:     f32, // the low-pass's (1: none)
 	delay: f64, // samples (a note's period: shortened by the low-pass's own delay there, so it is in tune)
 }
@@ -1074,7 +1079,7 @@ comb_start :: proc(c: ^Node_Call, lane: ^Lane, s: ^Comb_State) {
 start_comb :: proc(c: ^Node_Call, lane: ^Lane) {
 	s := node_state(c, lane, Comb_State)
 	if lane.fresh {
-		s.line, s.write, s.lp = {}, 0, 0
+		s.line, s.write, s.lp = {}, 0, {}
 	}
 	comb_start(c, lane, s)
 }
@@ -1094,8 +1099,13 @@ process_comb :: proc(c: ^Node_Call) {
 			}
 			moved = d != f32(s.delay / RATE)
 		}
-		il, _ := node_input(c, &lane, 0)
-		l, _ := node_out(c, &lane)
+		// what reads two sides writes both (the graph's rule): a line each,
+		// side by side
+		il, ir := node_input(c, &lane, 0)
+		l, r := node_out(c, &lane)
+		sides := c.node.sides ? 2 : 1
+		ins := [2][]f32{il, ir}
+		outs := [2][]f32{l, r}
 		for i in 0 ..< n {
 			t := lane.at + i64(i)
 			fade := f32(1)
@@ -1109,12 +1119,15 @@ process_comb :: proc(c: ^Node_Call) {
 			}
 			i0 := int(pos)
 			fr := f32(pos - f64(i0))
-			delayed := s.line[i0 & (COMB_LINE - 1)] * (1 - fr) + s.line[(i0 + 1) & (COMB_LINE - 1)] * fr
-			s.lp += s.k * (delayed - s.lp)
-			y := il[i] + fb * fade * s.lp
-			s.line[s.write] = y
+			for side in 0 ..< sides {
+				line := &s.line[side]
+				delayed := line[i0 & (COMB_LINE - 1)] * (1 - fr) + line[(i0 + 1) & (COMB_LINE - 1)] * fr
+				s.lp[side] += s.k * (delayed - s.lp[side])
+				y := ins[side][i] + fb * fade * s.lp[side]
+				line[s.write] = y
+				outs[side][i] = y
+			}
 			s.write = (s.write + 1) & (COMB_LINE - 1)
-			l[i] = y
 		}
 	}
 }

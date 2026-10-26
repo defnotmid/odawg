@@ -725,3 +725,43 @@ test_nested_layers :: proc(t: ^testing.T) {
 		testing.expect(t, said, "a machine as a layer: no finding")
 	}
 }
+
+// Every kind that reads an input, fed two sides (a noise burst and a fat
+// oscillator's spread copies, the copies also heard directly, as in
+// velvet_horizon's plucked string), writes both: rendered from a seek it
+// plays the samples it plays rendered whole. A side a kind left unwritten
+// would hold whatever its buffer last held, which a seek (and a thread
+// count) changes.
+@(test)
+test_stereo_input_kinds_seek :: proc(t: ^testing.T) {
+	KINDS := [?]string{"Filter", "Drive", "Slew", "Map", "Curve", "Mix", "Mul", "Comb", "Ladder", "OnePole", "Difference"}
+	for kind in KINDS {
+		arena: virtual.Arena
+		defer virtual.arena_destroy(&arena)
+		x := strings.concatenate({`{ class: "`, kind, `", input: "excite" }`}, context.temp_allocator)
+		if kind == "Mix" || kind == "Mul" {
+			x = strings.concatenate({`{ class: "`, kind, `", inputs: [ "excite", "excite" ] }`}, context.temp_allocator)
+		}
+		text := strings.concatenate({`{ key: "F dorian", seed: 42, swing: 0.16, swing_subdivision: "16n", gain_db: 0,
+			sections: [ { name: "a", duration: "8m", bpm: 112, chords: "Fm9 Bb9 Abmaj7 Eb9 Fm9 Bb9 Dbmaj7 C7" } ],
+			parts: { p: { instrument: { nodes: {
+				burst_env: { class: "Decay", attack: 0.001, time: 0.012 },
+				noise: { class: "Noise", color: "pink", amp: "burst_env", gain_db: -6 },
+				saw_env: { class: "Decay", attack: 0.001, time: 0.035 },
+				saw: { class: "Osc", wave: "fatsawtooth", count: 3, spread: 10, width: 0.65, amp: "saw_env", gain_db: -8 },
+				excite: { class: "Mix", inputs: [ "noise", "saw" ] },
+				x: `, x, `,
+				body: { class: "Filter", type: "highpass", frequency: 220, input: "x" },
+				env: { class: "Env", attack: 0.001, decay: 0.8, sustain: 0, release: 0.35 },
+				out: { class: "Mix", inputs: [ "body", "saw" ], amp: "env", gain_db: -7.5 } } },
+				play: [ { name: "a", arpeggio: { pattern: "up", interval: "16n", octaves: 2 }, octave: 4, velocity: 0.65, humanize: 0.003 } ] } } }`}, context.temp_allocator)
+		s := compose_with(t, text, &arena)
+		out := output_from_song(s, {})
+		defer output_destroy(&out)
+		FROM :: 5 * 4 * 60.0 / 112 // the fifth bar
+		seg := output_from_song(s, {from = FROM, to = f64(out.frames) / RATE})
+		defer output_destroy(&seg)
+		worst := seek_differs(out, seg, FROM)
+		testing.expectf(t, worst == 0, "%s fed two sides: from a seek it differs by %g", kind, worst)
+	}
+}
