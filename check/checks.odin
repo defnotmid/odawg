@@ -23,7 +23,7 @@ Check :: enum u8 {
 // above 1 it clips), and each measured part's peak (song.parts order,
 // linear; a render without stems measures none); the K-weighted energy of
 // the mix and of each measured part every 100 ms (analyze.Steps), from
-// `from` (song seconds), a section's loudness read from them.
+// `from` (song seconds) for `samples`, a section's loudness read from them.
 Measures :: struct {
 	loudness:    analyze.Loudness,
 	mix_peak:    f32,
@@ -31,18 +31,45 @@ Measures :: struct {
 	mix_energy:  []f64,
 	part_energy: [][]f64,
 	from:        f64,
+	samples:     i64,
 }
 
 // A part more than BURIED_LU under the mix in every section it plays is
 // buried (inaudible in a mix, SOUND_DESIGN.md); the raise it's told puts it
-// BURIED_TARGET_LU under where it's loudest against the mix.
+// BURIED_TARGET_LU under where it's loudest against the mix. A section
+// span under 400 ms holds no loudness block and isn't judged.
 BURIED_LU :: 15
 BURIED_TARGET_LU :: 12
 
+// A section as the measured render holds it: its whole 100 ms steps
+// (counted in samples from the render's first, so no rounding moves a
+// boundary) and its seconds within the render.
+Section_Span :: struct {
+	first, last: int, // steps [first, last)
+	from, to:    f64, // song seconds
+}
+
+// What the rules read: the song, what was measured, and from both once,
+// each section's span and where each part plays (plays[part * sections +
+// section]: a note of its, an attack of a track that's heard, sounding in
+// the section within the render; a tail or silence isn't playing).
 Context :: struct {
 	song:     ^song.Song,
 	measures: ^Measures,
 	findings: ^base.Findings,
+	spans:    []Section_Span,
+	plays:    []bool,
+}
+
+// Whether part i plays anywhere in the render.
+@(private = "file")
+part_plays :: proc(c: ^Context, i: int) -> bool {
+	for p in c.plays[i * len(c.spans):][:len(c.spans)] {
+		if p {
+			return true
+		}
+	}
+	return false
 }
 
 Check_Row :: struct {
@@ -63,8 +90,9 @@ CHECK_TABLE := [Check]Check_Row {
 		}},
 	.Silent_Part = {"silent_part", proc(c: ^Context) {
 			for peak, i in c.measures.part_peaks[:min(len(c.measures.part_peaks), len(c.song.parts))] {
-				if peak < 1e-4 {
-					base.report(c.findings, "silent_part", .Warning, base.path_join("parts", c.song.parts[i]), "part %s makes no sound in this range", c.song.parts[i])
+				// a part with no notes here is quiet by design
+				if peak < 1e-4 && part_plays(c, i) {
+					base.report(c.findings, "silent_part", .Warning, base.path_join("parts", c.song.parts[i]), "part %s has notes in this range but makes no sound", c.song.parts[i])
 				}
 			}
 		}},
@@ -72,12 +100,13 @@ CHECK_TABLE := [Check]Check_Row {
 			m := c.measures
 			for energy, i in m.part_energy[:min(len(m.part_energy), len(c.song.parts))] {
 				least := math.INF_F64 // how far under the mix it sits where it's loudest against it
-				for sec in c.song.sections {
-					// its whole 100 ms steps
-					first, last := int(math.ceil((sec.start - m.from) * 10)), int(math.floor((sec.stop - m.from) * 10))
-					part := analyze.loudness_of_span(energy, first, last)
+				for sp, j in c.spans {
+					if !c.plays[i * len(c.spans) + j] {
+						continue
+					}
+					part := analyze.loudness_of_span(energy, sp.first, sp.last)
 					if !math.is_inf(part) {
-						least = min(least, analyze.loudness_of_span(m.mix_energy, first, last) - part)
+						least = min(least, analyze.loudness_of_span(m.mix_energy, sp.first, sp.last) - part)
 					}
 				}
 				if !math.is_inf(least) && least > BURIED_LU {
@@ -99,9 +128,44 @@ CHECK_TABLE := [Check]Check_Row {
 // Runs every check over what was measured of a render.
 findings_from_measures :: proc(s: ^song.Song, m: ^Measures, findings: ^base.Findings) {
 	c := Context{song = s, measures = m, findings = findings}
+	c.spans, c.plays = section_plays(s, m)
 	for row in CHECK_TABLE {
 		row.rule(&c)
 	}
+}
+
+// Each section's span of the render, and where each part plays (Context).
+// In temp memory.
+@(private = "file")
+section_plays :: proc(s: ^song.Song, m: ^Measures) -> (spans: []Section_Span, plays: []bool) {
+	STEP :: i64(render.RATE / 10)
+	start := i64(math.round(m.from * render.RATE)) // the render's first sample
+	from, to := f64(start) / render.RATE, f64(start + m.samples) / render.RATE
+	spans = make([]Section_Span, len(s.sections), context.temp_allocator)
+	for sec, j in s.sections {
+		a := max(i64(math.round(sec.start * render.RATE)) - start, 0)
+		b := max(i64(math.round(sec.stop * render.RATE)) - start, 0)
+		spans[j] = {first = int((a + STEP - 1) / STEP), last = int(b / STEP), from = max(sec.start, from), to = min(sec.stop, to)}
+	}
+	plays = make([]bool, len(s.parts) * len(spans), context.temp_allocator)
+	for t in s.tracks {
+		if t.muted {
+			continue
+		}
+		for n in t.notes.first ..< base.span_end(t.notes) {
+			if s.notes.kind[n] != .Attack {
+				continue
+			}
+			t0 := s.notes.time[n]
+			t1 := t0 + s.notes.duration[n]
+			for sp, j in spans {
+				if t0 < sp.to && (t1 > sp.from || t0 >= sp.from) {
+					plays[int(t.part) * len(spans) + j] = true
+				}
+			}
+		}
+	}
+	return
 }
 
 // Runs every check over a render in memory (its stems, the parts' first,
@@ -162,5 +226,5 @@ measures_from :: proc(m: ^Measuring, allocator := context.allocator) -> Measures
 	for &e, i in energy {
 		e = m.parts[i].energy[:]
 	}
-	return {loudness = analyze.loudness_from_meter(&m.meter, allocator), mix_peak = m.meter.sample_peak, part_peaks = m.part_peaks[:m.measured], mix_energy = m.meter.energy[:], part_energy = energy, from = m.from}
+	return {loudness = analyze.loudness_from_meter(&m.meter, allocator), mix_peak = m.meter.sample_peak, part_peaks = m.part_peaks[:m.measured], mix_energy = m.meter.energy[:], part_energy = energy, from = m.from, samples = m.meter.pushed}
 }

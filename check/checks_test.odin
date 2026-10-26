@@ -13,7 +13,8 @@ import spec "../spec"
 // A render measured as it streams, a chunk at a time (a sink's), is what it
 // is measured whole: the same loudness (integrated, range, true and sample
 // peak, momentary and short-term), mix peak and parts' peaks, so the same
-// findings.
+// findings. A part with notes and no sound is found silent; a part with no
+// notes isn't.
 @(test)
 test_measured_streaming :: proc(t: ^testing.T) {
 	arena: virtual.Arena
@@ -26,7 +27,8 @@ test_measured_streaming :: proc(t: ^testing.T) {
 		parts: { drums: { instrument: "MembraneSynth", play: [ { name: "a", notes: "C2 - C2 -", subdivision: "8n" } ] },
 		         lead: { instrument: "PluckSynth", effects: [ { name: "FeedbackDelay", delay_time: "8n", feedback: 0.4, wet: 0.3 } ],
 		                 play: [ { name: "a", notes: "A4 C5 E5 -", subdivision: "8n" } ] },
-		         rest: { instrument: "Synth", play: [] } } }`, sp, &findings))
+		         rest: { instrument: "Synth", gain_db: -200, play: [ { name: "a", notes: "C4", subdivision: "1m" } ] },
+		         empty: { instrument: "Synth", play: [] } } }`, sp, &findings))
 	s := new(song.Song)
 	testing.expect(t, song.song_from_spec(sp, s))
 	out := render.output_from_song(s, {stems = true})
@@ -58,11 +60,13 @@ test_measured_streaming :: proc(t: ^testing.T) {
 	testing.expect_value(t, a.mix_peak, render.peak_from_samples(out.left, out.right))
 	got := make(base.Findings)
 	findings_from_measures(s, &a, &got)
-	silent := false
+	silent, empty := false, false
 	for f in got {
 		silent ||= f.code == "silent_part" && f.path == "parts/rest"
+		empty ||= f.code == "silent_part" && f.path == "parts/empty"
 	}
-	testing.expectf(t, silent, "the empty part isn't found silent: %v", got[:])
+	testing.expectf(t, silent, "a part with notes and no sound isn't found silent: %v", got[:])
+	testing.expectf(t, !empty, "a part with no notes is found silent: %v", got[:])
 	// a render without stems measures no part: none is found silent
 	mix := render.output_from_song(s, {})
 	only: Measuring
@@ -78,8 +82,11 @@ test_measured_streaming :: proc(t: ^testing.T) {
 }
 
 // A part far under the mix in every section it plays is buried, told the
-// raise that puts it 12 LU under where it's loudest; a part only somewhat
-// under, or silent somewhere, isn't. A range measures what it renders.
+// raise that puts it 12 LU under where it's loudest. What counts is where
+// it has notes: a part buried in one section and heard in another isn't;
+// a part's tail in a quiet section neither clears it (faded) nor, in a
+// range where it has no notes, finds it buried; a part with no notes in a
+// range isn't judged there.
 @(test)
 test_buried_part :: proc(t: ^testing.T) {
 	arena: virtual.Arena
@@ -88,37 +95,48 @@ test_buried_part :: proc(t: ^testing.T) {
 	context.allocator = virtual.arena_allocator(&arena)
 	sp := new(spec.Spec)
 	findings := make(base.Findings)
-	testing.expect(t, spec.spec_from_json(`{ bpm: 120, seed: 3, sections: [ { name: "a", duration: "4m" }, { name: "b", duration: "4m" } ],
-		parts: { lead: { instrument: "Synth", play: [ { name: ["a", "b"], notes: "A4 - C5 -", subdivision: "4n" } ] },
-		         under: { instrument: "Synth", gain_db: -10, play: [ { name: ["a", "b"], notes: "E4 - - -", subdivision: "4n" } ] },
-		         buried: { instrument: "Synth", gain_db: -32, play: [ { name: ["a", "b"], notes: "C4 - - -", subdivision: "4n" } ] },
-		         late: { instrument: "Synth", gain_db: -32, play: [ { name: "b", notes: "G4 - - -", subdivision: "4n" } ] } } }`, sp, &findings))
+	// a 0-8 s, then c 8-10 s where nothing starts (faded's reverb tail alone:
+	// the rest release in 50 ms), then b 10-18 s (its tail still under it)
+	testing.expect(t, spec.spec_from_json(`{ bpm: 120, seed: 3, sections: [ { name: "a", duration: "4m" }, { name: "c", duration: "1m" }, { name: "b", duration: "4m" } ],
+		automation: { "parts/half/gain_db": [ [ "a", -32, "step" ], [ "b", -10, "step" ] ] },
+		parts: { lead: { instrument: { name: "Synth", "envelope/release": 0.05 }, play: [ { name: ["a", "b"], notes: "A4 - C5 -", subdivision: "4n" } ] },
+		         under: { instrument: { name: "Synth", "envelope/release": 0.05 }, gain_db: -10, play: [ { name: ["a", "b"], notes: "E4 - - -", subdivision: "4n" } ] },
+		         buried: { instrument: { name: "Synth", "envelope/release": 0.05 }, gain_db: -32, play: [ { name: ["a", "b"], notes: "C4 - - -", subdivision: "4n" } ] },
+		         late: { instrument: { name: "Synth", "envelope/release": 0.05 }, gain_db: -32, play: [ { name: "b", notes: "G4 - - -", subdivision: "4n" } ] },
+		         half: { instrument: { name: "Synth", "envelope/release": 0.05 }, play: [ { name: ["a", "b"], notes: "D4 - - -", subdivision: "4n" } ] },
+		         faded: { instrument: { name: "Synth", "envelope/release": 0.05 }, effects: [ { name: "Reverb", decay: 10, wet: 1 } ], gain_db: -32, play: [ { name: "a", notes: "F4 - - -", subdivision: "4n" } ] } } }`, sp, &findings))
 	s := new(song.Song)
 	testing.expect(t, song.song_from_spec(sp, s))
-	measure :: proc(s: ^song.Song, from, to: f64) -> base.Findings {
-		out := render.output_from_song(s, {from = from, to = to, stems = true})
+	Case :: struct {
+		from, to: f64,
+		buried:   []string, // the parts found buried, the rest not
+	}
+	cases := []Case {
+		{0, 0, {"buried", "late", "faded"}}, // half is heard in b; faded's tail in c doesn't clear it
+		{0, 8, {"buried", "half", "faded"}}, // late has no notes in a
+		{10, 18, {"buried", "late"}}, // faded's tail is in b, its notes aren't
+	}
+	for cs in cases {
+		out := render.output_from_song(s, {from = cs.from, to = cs.to, stems = true})
 		got := make(base.Findings)
 		findings_from_render(s, &out, &got)
-		return got
-	}
-	for f in ([][2]f64{{0, 0}, {8, 16}}) {
-		got := measure(s, f[0], f[1])
 		said: map[string]string
 		for x in got {
 			if x.code == "buried_part" {
-				said[x.path] = x.message
+				said[strings.trim_prefix(x.path, "parts/")] = x.message
 			}
 		}
-		testing.expectf(t, "parts/buried" in said, "from %v: a part 30 LU under isn't buried: %v", f, got[:])
-		testing.expectf(t, "parts/late" in said, "from %v: a part 30 LU under where it plays isn't buried: %v", f, got[:])
-		testing.expectf(t, "parts/under" not_in said && "parts/lead" not_in said, "from %v: a part found buried that isn't: %v", f, said)
+		for part in s.parts {
+			want := slice.contains(cs.buried, part)
+			testing.expectf(t, (part in said) == want, "from %v to %v: %s found buried %v, want %v (%v)", cs.from, cs.to, part, part in said, want, said)
+		}
 		// the raise it names: the 30 LU or so it sits under, less 12
-		msg := said["parts/buried"]
+		msg := said["buried"]
 		at := strings.index(msg, "by about ")
 		testing.expectf(t, at >= 0, "no raise named: %q", msg)
 		if at >= 0 {
 			db, _ := strconv.parse_f64(strings.fields(msg[at + len("by about "):])[0])
-			testing.expectf(t, db > 10 && db < 25, "from %v: a raise of %v dB for a part 32 dB down beside one 10 dB down", f, db)
+			testing.expectf(t, db > 10 && db < 25, "from %v: a raise of %v dB for a part 32 dB down beside one 10 dB down", cs.from, db)
 		}
 	}
 }

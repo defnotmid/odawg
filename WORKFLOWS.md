@@ -295,8 +295,10 @@ What went wrong on the way, and what changed:
   either would leave the register's error: after a C4 calibration, parts still needed
   1 to 10 dB. Instead `inspect` reports `buried_part`: a part more than 15 LU under the
   mix in every section it plays, with the `gain_db` raise that puts it 12 LU under where
-  it's loudest. `inspect` now measures the parts' stems as it streams, so `silent_part`
-  reports from the CLI too.
+  it's loudest. Where a part plays is where it has notes: its release or reverb tail in
+  a quiet section neither hides it nor gets it flagged in a range it has no notes in, and
+  `silent_part` skips a part with no notes there. `inspect` now measures the parts' stems
+  as it streams, so both report from the CLI too.
 
 ---
 
