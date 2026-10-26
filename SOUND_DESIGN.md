@@ -232,7 +232,15 @@ Freesound (its CC0 filter), Kenney's packs, OpenGameArt's CC0 section.
 
 Left to itself, a generator writes the most likely song: A minor, Am F C G,
 120 bpm, a kick on every beat, a clap on 2 and 4, eight-bar sections built
-up and dropped. Choose each of these on purpose:
+up and dropped. Choose each of these on purpose. `default_song` reads a
+composed song for six of these defaults and warns when 4 or more hold at
+once: a tempo of 118-122; a kick on every beat (in 90% of the bars the
+drums play); A minor, D minor or C major, or i-VI-III-VII in any key
+(turned, the pop I-V-vi-IV: C G Am F); no feel (every note on the grid,
+every part at one velocity, no accents); the same parts in every section;
+a chord loop (two chords, or one progression throughout). One or a few
+are choices (a dub vamp at 118 with a kick on every beat); most at once is
+the song nobody chose.
 
 - **Genre and feel first.** Pick a genre for the piece, find a real reference
   track, and copy its decisions: its tempo, meter, swing, which instruments

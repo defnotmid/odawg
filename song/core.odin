@@ -348,6 +348,7 @@ song_from_spec :: proc(s: ^spec.Spec, out: ^Song, bank: ^device.Bank = nil) -> b
 	})
 	graph_build(out)
 	notes_reach(out)
+	default_song(out)
 	return true
 }
 

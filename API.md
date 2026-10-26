@@ -782,6 +782,7 @@ Checks that stand in for listening:
 | `buried_part` | a part without a `role` more than 15 LU under the mix in every section it plays (has notes in; its tails don't count); names the `gain_db` raise to 12 LU under where it's loudest |
 | `role_balance` | a part with a `role` more than 1 LU outside its role's band where it plays (LU under the mix; an `fx` part's peak under the mix's peak); too loud is judged only where 4 or more parts play. Names the one `gain_db` change that puts every section in band, or a per-section lane when none can |
 | `no_melody` | Info: a song naming roles has no `melody` |
+| `default_song` | a song on 4 or more of 6 defaults at once (tempo 118-122, a kick on every beat, A/D minor or C major or i-VI-III-VII, no feel, the same parts in every section, a chord loop); read from the composed song |
 
 The balance table is what these read: `check.balance_from_measures(song, measures)` over what
 `check.Measuring` measured as the render streamed (its stems pushed), with no render of its

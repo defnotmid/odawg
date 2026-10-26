@@ -624,3 +624,66 @@ test_notes_reach :: proc(t: ^testing.T) {
 	testing.expectf(t, "no_region parts/kit" in said, "C8 on no pad of the 808: %v", said)
 	testing.expectf(t, "note_range parts/fine" not_in said && "no_region parts/fine" not_in said && "no_region parts/high" not_in said, "a note that sounds is told: %v", said)
 }
+
+// A song on most of the defaults at once is a finding (default_song, at 4
+// signs), one on a few isn't. Each case moves a song across the line by one
+// sign: swing off makes "no feel" hold, an accent takes it back; one
+// section counts neither the same parts nor one progression; C G Am F is
+// i-VI-III-VII turned; a drums part's lowest pitch on every beat is a kick.
+// A one-shot isn't music, and isn't read.
+@(test)
+test_default_song :: proc(t: ^testing.T) {
+	Case :: struct {
+		name:     string,
+		bpm:      string,
+		key:      string,
+		chords:   string,
+		swing:    string,
+		sections: string,
+		kick:     string,
+		drums:    string, // "machine" or "role"
+		fires:    bool,
+	}
+	cases := []Case {
+		// a kick on every beat, the same parts, one progression: 3
+		{"three signs", "140", "E minor", "Em9 A9 Bm7 Em9", "0.3", `[ { name: "a", duration: "4m" }, { name: "b", duration: "4m" } ]`, "x...x...x...x...", "machine", false},
+		{"no swing: no feel holds", "140", "E minor", "Em9 A9 Bm7 Em9", "0", `[ { name: "a", duration: "4m" }, { name: "b", duration: "4m" } ]`, "x...x...x...x...", "machine", true},
+		{"an accent is feel", "140", "E minor", "Em9 A9 Bm7 Em9", "0", `[ { name: "a", duration: "4m" }, { name: "b", duration: "4m" } ]`, "X...x...x...x...", "machine", false},
+		{"one section", "140", "E minor", "Em9 A9 Bm7 Em9", "0", `[ { name: "a", duration: "8m" } ]`, "x...x...x...x...", "machine", false},
+		{"I-V-vi-IV turned", "140", "E minor", "C G Am F", "0.3", `[ { name: "a", duration: "4m" }, { name: "b", duration: "4m" } ]`, "x...x...x...x...", "machine", true},
+		{"a drums part's lowest pitch", "140", "E minor", "Em9 A9 Bm7 Em9", "0", `[ { name: "a", duration: "4m" }, { name: "b", duration: "4m" } ]`, "", "role", true},
+	}
+	for c in cases {
+		arena: virtual.Arena
+		defer virtual.arena_destroy(&arena)
+		drums := strings.concatenate({`drums: { instrument: "machines/909.json", play: [ { name: ["a", "b"], steps: { kick: "`, c.kick, `", hat: "..x...x...x...x." } } ] }`}, context.temp_allocator)
+		if c.drums == "role" {
+			drums = `drums: { instrument: "Synth", role: "drums", play: [ { name: ["a", "b"], notes: "C2 E3 C2 E3 C2 E3 C2 E3", subdivision: "8n" } ] }`
+		}
+		sections := c.sections
+		if strings.contains(c.sections, `"8m"`) {
+			drums, _ = strings.replace_all(drums, `["a", "b"]`, `"a"`, context.temp_allocator)
+		}
+		pad := `pad: { instrument: "Synth", play: [ { name: ["a", "b"], chords: { voicing: "close" }, octave: 4 } ] }`
+		if strings.contains(c.sections, `"8m"`) {
+			pad, _ = strings.replace_all(pad, `["a", "b"]`, `"a"`, context.temp_allocator)
+		}
+		text := strings.concatenate({`{ bpm: `, c.bpm, `, key: "`, c.key, `", swing: `, c.swing, `, chords: "`, c.chords, `", sections: `, sections, `, parts: { `, drums, `, `, pad, ` } }`}, context.temp_allocator)
+		s := compose(t, text, &arena)
+		said := ""
+		for f in s.findings {
+			if f.code == "default_song" {
+				said = f.message
+			}
+		}
+		testing.expectf(t, (said != "") == c.fires, "%s: default_song %v, want %v (%q)", c.name, said != "", c.fires, said)
+	}
+	// a one-shot (a host's sound: one part, one note, no tempo or key) isn't
+	// music: no findings at all, though it shows the defaults
+	{
+		arena: virtual.Arena
+		defer virtual.arena_destroy(&arena)
+		s := compose(t, `{ sections: [ { name: "a", duration: "1m" } ], parts: { thump: { instrument: "MembraneSynth", play: [ { name: "a", notes: "C2", subdivision: "1m" } ] } } }`, &arena)
+		testing.expectf(t, len(s.findings) == 0, "a one-shot is told: %v", s.findings[:])
+	}
+}
