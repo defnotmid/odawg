@@ -361,7 +361,7 @@ engine_init :: proc(e: ^Engine, s: ^song.Song, pool: ^common.Work_Pool = nil, ma
 		c := s.nodes[k].kind == .Master ? base.Span{} : song.node_chain(s, k)
 		for d in s.chain[c.first:base.span_end(c)] {
 			p := song.params_largest(s, d) // its delay lines as long as a lane takes them
-			size := (device.effect_size(s.devices[d], &p) + 15) &~ 15
+			size := (device.effect_size(s.devices[d], &p, &s.programs) + 15) &~ 15
 			e.fx[fi] = {d, {i32(bytes), i32(size)}}
 			bytes += size
 			fi += 1
@@ -371,7 +371,7 @@ engine_init :: proc(e: ^Engine, s: ^song.Song, pool: ^common.Work_Pool = nil, ma
 		}
 		run.chain = {i32(first), i32(fi - first)}
 	}
-	e.fx_bytes = make([]u8, bytes)
+	e.fx_bytes, _ = mem.make_aligned([]u8, bytes, 16) // a row's voice is 16-aligned
 	master_run_init(&e.master, s, mastering)
 	for ti in 0 ..< len(s.tracks) {
 		e.tracks[ti].placement = song.node_placement(s, ti)
@@ -461,6 +461,11 @@ engine_init :: proc(e: ^Engine, s: ^song.Song, pool: ^common.Work_Pool = nil, ma
 		_ = virtual.arena_init_growing(&w.temp)
 	}
 	mix_init(e)
+	// what a Row plays: the engine's own instruments
+	for &w in e.workers {
+		w.fx_scratch.env = &e.env
+	}
+	e.master.scratch.env = &e.env
 	lanes_init(e)
 	flow_init(e, looped)
 	engine_seek(e, 0, false)
@@ -545,27 +550,7 @@ engine_sync :: proc(e: ^Engine, row: song.Command_Row) {
 			reach(&s.programs, i32(s.params[s.tracks[ti].instrument][.Program]), &done)
 		}
 		for pi in done {
-			p := s.programs.programs[pi]
-			x := Edit{kind = .Program, ref = pi, program = p}
-			x.nodes = slice.clone(s.programs.nodes[p.nodes.first:base.span_end(p.nodes)], carry)
-			mods_first, mods_end := i32(len(s.programs.mods)), i32(0)
-			inputs_first, inputs_end := i32(len(s.programs.inputs)), i32(0)
-			for n in x.nodes {
-				if n.mods.count > 0 {
-					mods_first, mods_end = min(mods_first, n.mods.first), max(mods_end, base.span_end(n.mods))
-				}
-				if n.inputs.count > 0 {
-					inputs_first, inputs_end = min(inputs_first, n.inputs.first), max(inputs_end, base.span_end(n.inputs))
-				}
-			}
-			if mods_end > mods_first {
-				x.mods, x.mods_at = slice.clone(s.programs.mods[mods_first:mods_end], carry), mods_first
-			}
-			if inputs_end > inputs_first {
-				x.inputs, x.inputs_at = slice.clone(s.programs.inputs[inputs_first:inputs_end], carry), inputs_first
-			}
-			x.controls = slice.clone(s.programs.controls[p.controls.first:base.span_end(p.controls)], carry)
-			push(e, x)
+			push(e, program_edit(s, pi, carry))
 		}
 	case .Master_Gain_Set, .Master_Gain_Step:
 		push(e, {kind = .Master, value = s.master_gain_db})
@@ -579,7 +564,38 @@ engine_sync :: proc(e: ^Engine, row: song.Command_Row) {
 		for d in song.command_devices(s, row) {
 			push(e, {kind = .Params, ref = d, params = s.params[d]})
 		}
+		// an effect row's option: its program, whole
+		for pi in song.command_programs(s, song.command_rows(s, row)) {
+			push(e, program_edit(s, pi, carry))
+		}
 	}
+}
+
+// Program pi as the song has it now (its nodes, the modulators and inputs
+// they span, its controls), copied for the engine's next walk.
+@(private = "file")
+program_edit :: proc(s: ^song.Song, pi: i32, carry: mem.Allocator) -> Edit {
+	p := s.programs.programs[pi]
+	x := Edit{kind = .Program, ref = pi, program = p}
+	x.nodes = slice.clone(s.programs.nodes[p.nodes.first:base.span_end(p.nodes)], carry)
+	mods_first, mods_end := i32(len(s.programs.mods)), i32(0)
+	inputs_first, inputs_end := i32(len(s.programs.inputs)), i32(0)
+	for n in x.nodes {
+		if n.mods.count > 0 {
+			mods_first, mods_end = min(mods_first, n.mods.first), max(mods_end, base.span_end(n.mods))
+		}
+		if n.inputs.count > 0 {
+			inputs_first, inputs_end = min(inputs_first, n.inputs.first), max(inputs_end, base.span_end(n.inputs))
+		}
+	}
+	if mods_end > mods_first {
+		x.mods, x.mods_at = slice.clone(s.programs.mods[mods_first:mods_end], carry), mods_first
+	}
+	if inputs_end > inputs_first {
+		x.inputs, x.inputs_at = slice.clone(s.programs.inputs[inputs_first:inputs_end], carry), inputs_first
+	}
+	x.controls = slice.clone(s.programs.controls[p.controls.first:base.span_end(p.controls)], carry)
+	return x
 }
 
 // The edits waiting, applied (at a walk's start: nothing renders).
@@ -666,6 +682,14 @@ lanes_init :: proc(e: ^Engine) {
 		case .Param:
 			for f, fi in e.fx {
 				if f.device == a.ref {
+					r = {&l.fx, fi}
+				}
+			}
+		case .Effect_Control:
+			// the effect row playing the program the control moves
+			program := device.control_program(&s.programs, a.ref)
+			for f, fi in e.fx {
+				if device.DEVICE_TABLE[s.devices[f.device]].program && program >= 0 && i32(e.mix.params[f.device][.Program]) == program {
 					r = {&l.fx, fi}
 				}
 			}
@@ -2321,7 +2345,8 @@ apply_window :: proc(w: song.Window, origin: i64, at: i64, l, r: []f32) {
 }
 
 // A chain over a block from song sample `at`; an effect a lane moves runs a
-// cell at a time, its params the lanes' values for the cell.
+// cell at a time, its params the lanes' values for the cell (an effect
+// row's options: its controls set, what follows from them derived).
 @(private = "file")
 run_fx :: proc(e: ^Engine, w: ^Worker, c: base.Span, at: i64, l, r: []f32, key_l: []f32 = nil, key_r: []f32 = nil) {
 	s := e.song
@@ -2334,9 +2359,20 @@ run_fx :: proc(e: ^Engine, w: ^Worker, c: base.Span, at: i64, l, r: []f32, key_l
 		for a := 0; a < len(l); {
 			t := at + i64(a)
 			b := a + cell_piece(t, len(l) - a, len(lanes) > 0)
+			controls := false
 			for li in lanes {
 				row := s.automation[li]
-				p[row.param] = song.automation_cell_value(s, row, t)
+				v := song.automation_cell_value(s, row, t)
+				#partial switch row.kind {
+				case .Param:
+					p[row.param] = v
+				case .Effect_Control:
+					device.control_apply(&e.programs, &e.programs.controls[row.ref], v)
+					controls = true
+				}
+			}
+			if controls {
+				device.program_derive(&e.programs, i32(p[.Program]))
 			}
 			effect(state, &p, l[a:b], r[a:b], piece(key_l, a, b), piece(key_r, a, b), w.fx_scratch)
 			a = b

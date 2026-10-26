@@ -183,6 +183,7 @@ Program_Desc :: struct {
 	velocity:   bool, // the out follows the note's velocity
 	one_shot:   bool, // its notes play to their end whatever the gate
 	sw_lo, sw_hi, sw_default: u8, // 1 + a layered instrument's keyswitch keys and default (0: none)
+	effect:     bool, // an effect row: nodes over its Input, no note, on the song's clock (rows.odin)
 	path:       string, // where its nodes or pads were written
 }
 
@@ -221,6 +222,10 @@ compile_program :: proc(progs: ^Programs, desc: ^Program_Desc, findings: ^base.F
 		node_desc_resolve(&n)
 	}
 	id: i32
+	if desc.effect && (len(desc.layers) > 0 || len(desc.pads) > 0) {
+		base.report(findings, "bad_value", .Error, desc.path, "%s: an effect row plays nodes over its Input, not pads or layers", desc.path)
+		return -1
+	}
 	if len(desc.layers) > 0 {
 		if len(desc.nodes) > 0 || len(desc.pads) > 0 {
 			base.report(findings, "bad_value", .Error, desc.path, "%s: a row plays nodes, pads or layers, one of them", desc.path)
@@ -278,6 +283,10 @@ compile_nodes :: proc(progs: ^Programs, desc: ^Program_Desc, prog: Program, find
 			base.report(findings, "unknown_input", .Error, path, "%s: the row has no node %q (nor is it velocity, accent, slide or gate)", path, name)
 			return false
 		}
+		if k < 0 && desc.effect {
+			base.report(findings, "effect_reads_note", .Error, path, "%s: an effect row plays no note, so it has no %s (its Input is what it is put on)", path, name)
+			return false
+		}
 		if k >= 0 {
 			append(reads, k)
 		}
@@ -293,6 +302,24 @@ compile_nodes :: proc(progs: ^Programs, desc: ^Program_Desc, prog: Program, find
 		if row.inputs < 0 && len(n.inputs) == 0 {
 			base.report(findings, "bad_value", .Error, n.path, "%s: a %s needs its inputs", n.path, row.name)
 			ok = false
+		}
+		// what it plays from: a note (an effect row has none), what an effect
+		// is put on (an instrument has nothing)
+		if row.needs == .Note && desc.effect {
+			base.report(findings, "effect_reads_note", .Error, n.path, "%s: %s plays from a note's start or pitch, and an effect row plays no note (an Lfo, a Follower or its Input move it)", n.path, row.name)
+			ok = false
+		}
+		if row.needs == .Input && !desc.effect {
+			base.report(findings, "bad_value", .Error, n.path, "%s: %s is what an effect row is put on; an instrument has none (name the row in an `effects` table)", n.path, row.name)
+			ok = false
+		}
+		// an effect row's phases are the song clock's: what sets their pace
+		// can't move
+		for m in n.mods {
+			if f := field_of_slot(n.kind, m.slot); f != nil && f.pace && desc.effect {
+				base.report(findings, "fixed_value", .Error, m.path, "%s: an effect row's %s %s can't move: its phase runs on the song clock, so a seek lands where a render from the start is", m.path, row.name, f.name)
+				ok = false
+			}
 		}
 		// every one checked (each a finding), not only up to the first bad one
 		for name in n.inputs {
@@ -1162,6 +1189,19 @@ control_from_path :: proc(progs: ^Programs, program: i32, path: string) -> i32 {
 		}
 		mf = f
 	}
+	// one made for the path before (an earlier lane's or command's): that one
+	for c, i in progs.controls[base.span_end(p.controls):] {
+		if c.name != row.name || c.targets.count == 0 {
+			continue
+		}
+		t := progs.control_targets[c.targets.first]
+		for pi in programs {
+			q := progs.programs[pi]
+			if t.node >= q.nodes.first && t.node < base.span_end(q.nodes) {
+				return base.span_end(p.controls) + i32(i)
+			}
+		}
+	}
 	name := base.name_id(parts[0])
 	for pi in programs {
 		p := progs.programs[pi]
@@ -1213,6 +1253,38 @@ control_moves :: proc(progs: ^Programs, program: i32, c: i32, lo, hi: f32) -> bo
 	control_apply(progs, row, old)
 	program_derive(progs, program)
 	return moves
+}
+
+// The program a control moves: the one its first target is a node of (an
+// option's, or a control made for a node's field; -1: it reaches nothing).
+control_program :: proc(progs: ^Programs, c: i32) -> i32 {
+	row := progs.controls[c]
+	if row.targets.count == 0 {
+		return -1
+	}
+	node := progs.control_targets[row.targets.first].node
+	for p, i in progs.programs {
+		if p.nodes.count > 0 && node >= p.nodes.first && node < base.span_end(p.nodes) {
+			return i32(i)
+		}
+	}
+	return -1
+}
+
+// The field a control reaches that an effect row reads only as its voice
+// starts (`at_start`), or that sets the pace of its phase on the song clock
+// (`pace`): no lane moves one in a row (nil: none).
+control_pinned :: proc(progs: ^Programs, c: i32) -> ^Node_Field {
+	row := progs.controls[c]
+	for t in progs.control_targets[row.targets.first:base.span_end(row.targets)] {
+		if t.mod >= 0 {
+			continue
+		}
+		if f := field_of_slot(progs.nodes[t.node].kind, int(t.slot)); f != nil && (f.at_start || f.pace) {
+			return f
+		}
+	}
+	return nil
 }
 
 // A node's field (by the node's name; its pads' programs' too) set to
@@ -1322,6 +1394,7 @@ program_derive :: proc(progs: ^Programs, program: i32) -> (reshaped: bool) {
 			stereo ||= x.stereo
 			steady &&= x.node >= 0 ? nodes[x.node].steady : x.buf != SOURCE_GATE
 		}
+		stereo &&= !row.one_side // a level of both sides is one
 		g.mod_slots = 0
 		for &m in progs.mods[g.mods.first:base.span_end(g.mods)] {
 			// the note's velocity, accent and slide hold for it, as a steady node does

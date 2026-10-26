@@ -71,6 +71,8 @@ Node_Field :: struct {
 	per_sample: bool, // a modulator moves it every sample (else: at the note's start)
 	list:       int, // a list of up to this many values, in consecutive slots (0: one)
 	shapes:     bool, // its value decides how the node is placed (a filter's type): programs differing in it are not one shape
+	at_start:   bool, // its value is read as its voice starts (a note's start; an effect row's, where it is put in place): in an effect row no lane moves it
+	pace:       bool, // how fast the node's phase runs (an Lfo's rate): an effect row's phase is the song clock's, so in a row nothing moves it
 }
 
 // Every node's, before its kind's own: its level (linear in Programs; dB in
@@ -79,6 +81,15 @@ COMMON_FIELDS := []Node_Field{{name = "gain_db", unit = .Gain, default = 1, per_
 FIELD_GAIN :: 0
 FIELD_PAN :: 1
 FIELD_AMP :: 2
+
+// What a kind plays from: a note (an envelope, a recording, a pitch, a draw
+// from its seed; an effect row has none), or the audio an effect is put on
+// (an instrument has none).
+Node_Needs :: enum u8 {
+	Nothing,
+	Note,
+	Input,
+}
 
 // Writes the chunk of one node for every lane of the call: its output into
 // node_out(c, lane) (left; right too for a stereo node), not adding.
@@ -94,6 +105,8 @@ Node_Kind_Row :: struct {
 	steady:   bool, // its output holds for a whole note (a draw from the seed): what it moves moves once a chunk
 	stateless: bool, // its output is a function of what it reads now (a map, a product): steady when they are
 	stereo:   bool, // it writes two sides whatever it reads (else one, or as its inputs)
+	one_side: bool, // it writes one side whatever it reads (a level of both)
+	needs:    Node_Needs,
 	sides:    proc(values: ^[MAX_FIELDS]f32) -> bool, // it writes two sides with these values (a fat oscillator's copies); nil: as stereo says
 	keeps:    bool, // its state carries across a mono program's notes
 	jump:     bool, // its output is a function of where the note is (a recording's position): a seek starts it there, nothing rendered
@@ -406,7 +419,7 @@ Programs :: struct {
 // ---- what a kind's process sees ----------------------------------------------------
 
 // One voice of a call: its note (pitch resolved), where the chunk is in it,
-// its buffers.
+// its buffers; an effect row's, its input and the song's clock.
 Lane :: struct {
 	state:    [^]u8,
 	note:     Note,
@@ -416,6 +429,8 @@ Lane :: struct {
 	seed:     u64,
 	gate:     i64, // samples
 	at:       i64, // the chunk's first sample, from the note's start
+	clock:    i64, // the chunk's first sample on the voice's clock: an effect row's, the song's (a note's: at)
+	in_l, in_r: []f32, // an effect row's: the chunk of what it is put on (nil: a note's voice)
 	release:  int, // where the gate closes in the chunk (-1: not in it)
 	starting: bool, // the note starts in this chunk and doesn't slide: nodes take their values
 	fresh:    bool, // the voice's state was zeroed for it (a kept state starts here)
@@ -895,8 +910,23 @@ graph_start :: proc(s: ^Voice_State, p: ^Params, n: Note, env: ^Voice_Env, fresh
 
 graph_playing :: proc(s: ^Voice_State) -> i32 {return (^Graph_Header)(s).program}
 
+// An effect row's voice starting (its state zeroed): no note, its gate open
+// for good, every node heard while it plays.
+graph_start_effect :: proc(s: ^Voice_State, program: i32) {
+	h := (^Graph_Header)(s)
+	h.program, h.layer, h.gain = program, -1, 1
+	h.total, h.gate, h.pos = max(i64), max(i64), 0
+	h.pitch, h.key = 60, 60
+	h.started, h.starting, h.fresh = true, true, true
+	for &e in h.ends {
+		e = max(i32)
+	}
+	h.from_hz, h.glide_k = math.log2(base.midi_to_hz(60)), 1
+}
+
 // A voice playing a program: its state (its header first), its note, its
-// seed, the samples of it played, where its sound goes and at what level.
+// seed, the samples of it played, where its sound goes and at what level;
+// an effect row's, what it is put on and where its clock started.
 Graph_Voice :: struct {
 	state:        ^Voice_State,
 	note:         Note,
@@ -905,6 +935,8 @@ Graph_Voice :: struct {
 	out_l, out_r: []f32, // added into
 	gain:         f32,
 	done:         bool, // set: its sound is over
+	in_l, in_r:   []f32, // an effect row's input, as long as the samples played (nil: a note's voice)
+	clock:        i64, // its clock at its sample 0: an effect row's, the song sample its voice started at (a note's: 0)
 }
 
 // Floats a call of graph_run needs for `lanes` voices of a program.
@@ -935,8 +967,11 @@ graph_run :: proc(progs: ^Programs, env: ^Voice_Env, play: i32, voices: []Graph_
 			lane := &lanes_buf[count]
 			lane^ = {
 				state = ([^]u8)(v.state), note = v.note, key = h.key, seed = v.seed, gate = h.gate, at = at,
-				release = release_at(h.gate, at, n), starting = h.starting && at == 0, fresh = h.fresh && at == 0,
+				clock = v.clock + at, release = release_at(h.gate, at, n), starting = h.starting && at == 0, fresh = h.fresh && at == 0,
 				bufs = scratch[count * per_lane:][:per_lane], params = layer_params(progs, h.layer),
+			}
+			if v.in_l != nil {
+				lane.in_l, lane.in_r = v.in_l[off:][:n], v.in_r[off:][:n]
 			}
 			lane.note.pitch = h.pitch
 			lane.hz = base.midi_to_hz(f64(h.pitch))

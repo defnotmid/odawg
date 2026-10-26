@@ -47,7 +47,7 @@ append_song :: proc(m: ^Song, s: ^Song, at: f64, prefix: string, gain_db: f64 = 
 	append(&m.labels, ..s.labels[:])
 	for p, i in s.params {
 		x := p
-		if s.devices[i] == .Voice {
+		if device.DEVICE_TABLE[s.devices[i]].program {
 			x[.Program] += f32(prog0)
 		}
 		append(&m.params, x)
@@ -153,6 +153,8 @@ append_song :: proc(m: ^Song, s: ^Song, at: f64, prefix: string, gain_db: f64 = 
 		case .Control:
 			x.ref += ctl0
 			x.track += track0
+		case .Effect_Control:
+			x.ref += ctl0
 		case .Param:
 			x.ref += dev0
 		case .Placement_Gain:

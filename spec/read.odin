@@ -56,6 +56,7 @@ Field_Kind :: enum u8 {
 	Room, // the spec: room spans
 	Styles, // the spec: its own styles by name
 	Instruments, // the spec: its instruments by name
+	Effects, // the spec: its effect rows by name
 	Buses, // the spec: its buses by name
 	Sets, // the spec: its sample sets by name
 	Sources, // the spec: the sources its files are fetched from, by name
@@ -102,6 +103,7 @@ FIELD_READERS := [Field_Kind]Field_Reader {
 	.Room      = read_room_field,
 	.Styles    = read_styles_field,
 	.Instruments = read_instruments_field,
+	.Effects   = read_effects_field,
 	.Buses     = read_buses_field,
 	.Sets      = read_sets_field,
 	.Sources   = read_sources_field,
@@ -132,6 +134,7 @@ SPEC_FIELDS := []Field_Row {
 	{"room", .Room, 0},
 	{"styles", .Styles, 0},
 	{"instruments", .Instruments, 0},
+	{"effects", .Effects, 0},
 	{"buses", .Buses, 0},
 	{"sets", .Sets, 0},
 	{"sources", .Sources, 0},
@@ -307,6 +310,7 @@ spec_init :: proc(s: ^Spec, allocator := context.allocator) {
 	s.strings.allocator, s.styles.allocator, s.buses.allocator = allocator, allocator, allocator
 	s.sets.allocator, s.set_zones.allocator, s.sources.allocator = allocator, allocator, allocator
 	s.instruments.allocator, s.instrument_includes.allocator, s.instrument_files.allocator = allocator, allocator, allocator
+	s.effects.allocator, s.effect_includes.allocator = allocator, allocator
 	s.sfz_files.allocator = allocator
 }
 
@@ -1177,23 +1181,44 @@ read_styles_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) 
 
 @(private = "file")
 read_instruments_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
+	read_rows(r, v, path, &r.spec.instruments, &r.spec.instrument_includes, "instrument")
+}
+
+// Effect rows: as instruments are written, each named as no built-in is (a
+// chain finds a built-in first).
+@(private = "file")
+read_effects_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
+	first := len(r.spec.effects)
+	read_rows(r, v, path, &r.spec.effects, &r.spec.effect_includes, "effect")
+	for x in r.spec.effects[first:] {
+		if _, builtin := device.device_from_name(x.name); builtin {
+			at := base.path_join(path, x.name)
+			base.report(r.findings, "bad_value", .Error, at, "%s: %q is a built-in effect's name; a chain naming it plays the built-in, so name the row otherwise", at, x.name)
+		}
+	}
+}
+
+// Rows by name, a file of them (an include), or a list of those.
+@(private = "file")
+read_rows :: proc(r: ^Reader, v: json.Value, path: string, rows: ^[dynamic]Instrument_Spec, includes: ^[dynamic]string, what: string) {
 	#partial switch x in v {
 	case json.String:
 		// a file of rows
-		append(&r.spec.instrument_includes, strings.clone(x))
+		append(includes, strings.clone(x))
 		return
 	case json.Array:
 		for y, i in x {
-			read_instruments_field(r, y, base.path_index(path, i + 1), dst)
+			read_rows(r, y, base.path_index(path, i + 1), rows, includes, what)
 		}
 		return
 	}
-	o, names, ok := named_records(r, v, path, "{ name = { nodes = { ... } } } per instrument, a file of them, or a list of those")
+	expect := strings.concatenate({"{ name = { nodes = { ... } } } per ", what, ", a file of them, or a list of those"}, context.temp_allocator)
+	o, names, ok := named_records(r, v, path, expect)
 	if !ok {
 		return
 	}
 	for name in names {
-		append(&r.spec.instruments, Instrument_Spec{strings.clone(name), json.clone_value(o[name])})
+		append(rows, Instrument_Spec{strings.clone(name), json.clone_value(o[name])})
 	}
 }
 
@@ -1218,11 +1243,14 @@ read_room_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
 
 // ---- devices -------------------------------------------------------------------------
 
-// An instrument or effect: a name (a Tone class, an effect: "Synth",
-// "MonoSynth", "Reverb"), or a table whose name is one, its options nested as
-// Tone nests them. Each option is found in device.PARAM_TABLE by its `/` path
-// among the params its kind reads; a string where a table of options with a
-// `type` is expected is that type (`noise = "pink"`).
+// An effect in a chain: a name (a built-in: "Reverb", "Filter"), or a
+// table whose name is one, its options nested as Tone nests them. Each
+// option is found in device.PARAM_TABLE by its `/` path among the params
+// its kind reads; a string where a table of options with a `type` is
+// expected is that type (`noise = "pink"`). Any other name, or a row
+// written out (`{ nodes = { ... } }`), is an effect row (a Row: the row as
+// written, read into a program where the chain is placed, its name looked
+// up in the `effects` tables then).
 device_from_value :: proc(r: ^Reader, v: json.Value, path: string) -> i32 {
 	name: string
 	o: json.Object
@@ -1237,13 +1265,13 @@ device_from_value :: proc(r: ^Reader, v: json.Value, path: string) -> i32 {
 			name = s
 		}
 	case:
-		bad(r, path, "an instrument or effect: a name or { name, options }")
+		bad(r, path, "an effect: a name, { name, options }, or a row ({ nodes = { ... } })")
 		return -1
 	}
 	kind, known := device.device_from_name(name)
 	if !known {
-		base.report(r.findings, "bad_value", .Error, path, "%s: %q is not an instrument or effect", path, name)
-		return -1
+		append(&r.spec.devices, Device_Spec{kind = .Row, path = strings.clone(path), row = json.clone_value(v)})
+		return i32(len(r.spec.devices) - 1)
 	}
 	d := Device_Spec{kind = kind, values = {i32(len(r.spec.values)), 0}, path = strings.clone(path)}
 	if o != nil {

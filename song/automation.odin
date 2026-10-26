@@ -1,5 +1,6 @@
 package odawg_song
 
+import "core:fmt"
 import "core:math"
 import "core:slice"
 import "core:strconv"
@@ -22,6 +23,7 @@ Automation_Kind :: enum u8 {
 	Send, // a send's level (dB): the edge from `from` to `to`
 	Param, // an effect's param: ref the device, param it
 	Control, // an instrument's control (an option, or a field's own): ref the control in programs, track the track playing it
+	Effect_Control, // an effect row's control: ref the control in programs (the effect playing its program reads it)
 	Placement_Gain, // a placed song's level (dB; `master/gain_db`): ref the placement
 }
 
@@ -126,6 +128,42 @@ params_largest :: proc(s: ^Song, d: i32) -> device.Params {
 	return p
 }
 
+// Device d's memory (an effect's) as far as its lanes take it: a built-in's
+// params at their largest (params_largest); an effect row's at its values,
+// and at each of its lanes' lowest and highest (the most of those), on a
+// copy of the values the lanes move.
+effect_memory_largest :: proc(s: ^Song, d: i32) -> device.Effect_Memory {
+	p := params_largest(s, d)
+	m := device.effect_memory(s.devices[d], &p, &s.programs)
+	if !device.DEVICE_TABLE[s.devices[d]].program {
+		return m
+	}
+	program := i32(p[.Program])
+	if program < 0 || int(program) >= len(s.programs.programs) {
+		return m
+	}
+	progs: device.Programs
+	for a in s.automation {
+		if a.kind != .Effect_Control || device.control_program(&s.programs, a.ref) != program {
+			continue
+		}
+		if progs.programs == nil {
+			progs = s.programs
+			progs.nodes = slice.clone_to_dynamic(s.programs.nodes[:], context.temp_allocator)
+			progs.mods = slice.clone_to_dynamic(s.programs.mods[:], context.temp_allocator)
+			progs.controls = slice.clone_to_dynamic(s.programs.controls[:], context.temp_allocator)
+		}
+		lo, hi := automation_range(s, a.points)
+		for v in ([2]f32{lo, hi}) {
+			device.control_apply(&progs, &progs.controls[a.ref], v)
+			x := device.effect_memory(s.devices[d], &p, &progs)
+			m.ring, m.state = max(m.ring, x.ring), max(m.state, x.state)
+		}
+		device.control_apply(&progs, &progs.controls[a.ref], s.programs.controls[a.ref].value)
+	}
+	return m
+}
+
 // ---- from the spec -------------------------------------------------------------------
 
 // The spec's lanes resolved into rows (after the tracks and their chains
@@ -208,7 +246,7 @@ automation_unit :: proc(song: ^Song, a: Automation) -> device.Unit {
 	#partial switch a.kind {
 	case .Param:
 		return device.PARAM_TABLE[a.param].unit
-	case .Control:
+	case .Control, .Effect_Control:
 		progs := &song.programs
 		c := progs.controls[a.ref]
 		if c.targets.count > 0 {
@@ -277,7 +315,7 @@ automation_targets :: proc(song: ^Song, name, path: string, points: Span, lo, hi
 			}
 		case strings.has_prefix(rest, "effects/"):
 			for ti in tracks {
-				automation_effect(song, &row, song.tracks[ti].chain, rest[len("effects/"):], path, out, findings)
+				automation_effect(song, &row, song.tracks[ti].chain, rest[len("effects/"):], path, lo, hi, out, findings)
 			}
 		case:
 			for ti in tracks {
@@ -308,7 +346,7 @@ automation_targets :: proc(song: ^Song, name, path: string, points: Span, lo, hi
 			bad(findings, path, "%s: there is no %s %q (there are: %s)", path, name[:slash], rest[:at], sinks_of(song))
 			return
 		}
-		automation_effect(song, &row, NODE_CHAIN[node.kind](song, node.ref), rest[at + 1:], path, out, findings)
+		automation_effect(song, &row, NODE_CHAIN[node.kind](song, node.ref), rest[at + 1:], path, lo, hi, out, findings)
 	case name == "master/gain_db":
 		row.kind, row.ref = .Placement_Gain, 0
 		add(out, row)
@@ -347,9 +385,11 @@ options_of :: proc(song: ^Song, program: i32) -> string {
 }
 
 // An effect's param in `chain` (`Filter/frequency`, `2/frequency`: the
-// second effect, `Filter#2/frequency`: the second Filter).
+// second effect, `Filter#2/frequency`: the second Filter), or an effect
+// row's option or node/field (`phaser/depth`, `phaser/lfo/rate`), checked
+// to move between lo and hi.
 @(private = "file")
-automation_effect :: proc(song: ^Song, row: ^Automation, chain: Span, rest, path: string, out: ^[dynamic]Automation, findings: ^base.Findings) {
+automation_effect :: proc(song: ^Song, row: ^Automation, chain: Span, rest, path: string, lo, hi: f32, out: ^[dynamic]Automation, findings: ^base.Findings) {
 	at := strings.index_byte(rest, '/')
 	if at < 0 {
 		base.report(findings, "unknown_key", .Error, path, "%s: name the effect and its param (effects/Filter/frequency)", path)
@@ -365,12 +405,35 @@ automation_effect :: proc(song: ^Song, row: ^Automation, chain: Span, rest, path
 	seen := 0
 	for d, i in song.chain[chain.first:base.span_end(chain)] {
 		kind := song.devices[d]
-		if by_index ? i + 1 != index : device.DEVICE_TABLE[kind].name != name {
+		if by_index ? i + 1 != index : song.labels[d] != name {
 			continue
 		}
 		seen += 1
 		if !by_index && seen != nth {
 			continue
+		}
+		if device.DEVICE_TABLE[kind].program {
+			// an effect row: its control (an option, or a node/field)
+			program := i32(song.params[d][.Program])
+			c := device.control_from_path(&song.programs, program, param_path)
+			if c < 0 {
+				base.report(findings, "unknown_key", .Error, path, "%s: effect row %s has no option or node/field %q (its options: %s)", path, which, param_path, options_of(song, program))
+				return
+			}
+			if f := device.control_pinned(&song.programs, c); f != nil {
+				why := f.pace ? "its phase runs on the song clock, so a seek lands where a render from the start is" : "an effect row reads it as it is put in place"
+				base.report(findings, "fixed_value", .Error, path, "%s: %q can't move in an effect row (%s); set it in the row, or where the chain places it", path, param_path, why)
+				return
+			}
+			if !device.control_moves(&song.programs, program, c, lo, hi) {
+				base.report(findings, "fixed_value", .Error, path, "%s: %q can't move (it is read once, or between %g and %g it would change the row's shape)", path, param_path, lo, hi)
+				return
+			}
+			row.kind, row.ref = .Effect_Control, c
+			x := row^
+			x.path = strings.clone(row.path)
+			append(out, x)
+			return
 		}
 		for p in device.Param {
 			pr := device.PARAM_TABLE[p]
@@ -397,8 +460,8 @@ automation_effect :: proc(song: ^Song, row: ^Automation, chain: Span, rest, path
 		return
 	}
 	effects := make([dynamic]string, context.temp_allocator)
-	for d in song.chain[chain.first:base.span_end(chain)] {
-		append(&effects, device.DEVICE_TABLE[song.devices[d]].name)
+	for d, i in song.chain[chain.first:base.span_end(chain)] {
+		append(&effects, song.labels[d] != "" ? song.labels[d] : fmt.tprint(i + 1)) // a row written out: by its place
 	}
 	base.report(findings, "unknown_key", .Error, path, "%s: no effect %q in the chain (it has: %s)", path, which, names_joined(effects[:]))
 }

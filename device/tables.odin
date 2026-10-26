@@ -245,7 +245,8 @@ Param_Value :: struct {
 
 // A device kind's row: what it reads and Tone's defaults; an effect's procs
 // (the Voice, an instrument, plays a program of nodes: graph.odin's voice
-// procs, its Program param naming the program).
+// procs, its Program param naming the program; an effect Row plays one over
+// its input: rows.odin).
 Device_Row :: struct {
 	name:        string,
 	reads:       Param_Set,
@@ -257,6 +258,7 @@ Device_Row :: struct {
 	init:        proc(state: []u8), // what a reset sets past zero (nil: nothing)
 	effect_latency: Effect_Latency_Proc, // nil: none
 	memory:      Memory_Rule, // an effect's (MEMORY_RULES)
+	program:     bool, // it plays a program of nodes (its .Program): its state and memory are its program's too
 }
 
 Device_Kind :: enum u8 {
@@ -276,13 +278,15 @@ Device_Kind :: enum u8 {
 	Bit_Crusher,
 	Stereo_Widener,
 	Auto_Filter,
+	// An effect row: a program of nodes over its input (rows.odin).
+	Row,
 }
 
 @(private = "file")
 FX :: Param_Set{.Wet}
 
 DEVICE_TABLE := [Device_Kind]Device_Row {
-	.Voice = {name = ""},
+	.Voice = {name = "", program = true},
 	// effects: Tone's defaults
 	.Filter = {name = "Filter", reads = FX + {.Type, .Frequency, .Q, .Rolloff, .Gain}, defaults = {{.Wet, 1}, {.Type, f32(dsp.Filter_Type.Lowpass)}, {.Frequency, 350}, {.Q, 1}, {.Rolloff, -12}}, effect = effect_filter, state = size_of(Fx_Filter), memory = .Filter},
 	.EQ3 = {name = "EQ3", reads = FX + {.Low, .Mid, .High, .Low_Frequency, .High_Frequency}, defaults = {{.Wet, 1}, {.Low_Frequency, 400}, {.High_Frequency, 2500}}, effect = effect_eq3, state = size_of(Fx_EQ3), memory = .Crossover},
@@ -297,11 +301,15 @@ DEVICE_TABLE := [Device_Kind]Device_Row {
 	.Bit_Crusher = {name = "BitCrusher", reads = FX + {.Bits}, defaults = {{.Wet, 1}, {.Bits, 4}}, effect = effect_bit_crusher, state = 0, memory = .Stateless},
 	.Stereo_Widener = {name = "StereoWidener", reads = FX + {.Width}, defaults = {{.Wet, 1}, {.Width, 0.5}}, effect = effect_stereo_widener, state = 0, memory = .Stateless},
 	.Auto_Filter = {name = "AutoFilter", reads = FX + {.Frequency, .Depth, .Base_Frequency, .Octaves, .Filter_Type, .Filter_Q, .Filter_Rolloff}, defaults = {{.Wet, 1}, {.Frequency, 1}, {.Depth, 1}, {.Base_Frequency, 200}, {.Octaves, 2.6}, {.Filter_Type, f32(dsp.Filter_Type.Lowpass)}, {.Filter_Q, 1}, {.Filter_Rolloff, -12}}, effect = effect_auto_filter, state = size_of(Fx_Auto_Filter), clock = true, memory = .Swept_Filter},
+	// a row: named by its own name (a spec's `effects`), its clock and then its program's voice
+	.Row = {name = "", reads = {.Program}, effect = effect_row, state = size_of(Fx_Row), clock = true, memory = .Stateless, program = true},
 }
 
+// A built-in by its name (an instrument row's or an effect row's own name
+// is no kind's).
 device_from_name :: proc(name: string) -> (Device_Kind, bool) {
 	for row, k in DEVICE_TABLE {
-		if row.name == name {
+		if row.name != "" && row.name == name {
 			return k, true
 		}
 	}
@@ -328,11 +336,18 @@ note_tail :: proc(p: ^Params, n: Note, env: ^Voice_Env = nil) -> f64 {
 }
 
 // An effect's memory by its row's rule (an effect without one is a bug in
-// its row: the tests name it).
-effect_memory :: proc(kind: Device_Kind, p: ^Params) -> Effect_Memory {
-	rule := DEVICE_TABLE[kind].memory
-	assert(rule != .Unset, "an effect row without a memory rule")
-	m := MEMORY_RULES[rule](p)
+// its row: the tests name it), and its program's (a Row's: progs holds it).
+effect_memory :: proc(kind: Device_Kind, p: ^Params, progs: ^Programs = nil) -> Effect_Memory {
+	row := &DEVICE_TABLE[kind]
+	assert(row.memory != .Unset, "an effect row without a memory rule")
+	m := MEMORY_RULES[row.memory](p)
+	if row.program && progs != nil {
+		if program := i32(p[.Program]); program >= 0 && int(program) < len(progs.programs) {
+			x := program_memory(progs, program)
+			m.ring += x
+			m.state += x
+		}
+	}
 	m.state = max(m.state, m.ring)
 	return m
 }

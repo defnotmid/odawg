@@ -22,6 +22,7 @@ EXAMPLE_FILES := [?]struct {
 	{"instruments/tb303.json", #load("../examples/instruments/tb303.json", string), false},
 	{"instruments/808_bass.json", #load("../examples/instruments/808_bass.json", string), false},
 	{"instruments/909_bass.json", #load("../examples/instruments/909_bass.json", string), false},
+	{"instruments/effects.json", #load("../examples/instruments/effects.json", string), false},
 	{"machines/808.json", #load("../examples/machines/808.json", string), false},
 	{"machines/909.json", #load("../examples/machines/909.json", string), false},
 	{"machines/linn_80s.json", #load("../examples/machines/linn_80s.json", string), false},

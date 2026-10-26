@@ -29,11 +29,16 @@ import "core:mem"
 // engine, not one per instance; nothing in it lives past a call).
 FX_CHUNK :: 256
 
+// What a call has besides its instance: the scratch its stages share, and
+// the song's instruments (a Row plays a program of them: env, and graph
+// its voice's buffers; nil: no Row plays).
 Fx_Scratch :: struct #align (16) {
 	dry_l, dry_r: [FX_CHUNK]f32, // the input, or the dry signal delayed by the latency
 	key_l, key_r: [FX_CHUNK]f32,
 	a, b:         [FX_CHUNK]f32,
 	d:            [FX_CHUNK]f64,
+	env:          ^Voice_Env,
+	graph:        [MAX_BUFS * 2 * NODE_CHUNK]f32,
 }
 
 // An effect's processing of one chunk; key always present and as long.
@@ -47,10 +52,17 @@ fx_header :: #force_inline proc(state: []u8, $T: typeid) -> ^T {
 	return (^T)(raw_data(state))
 }
 
-// An effect instance's bytes: its row's state and rings.
-effect_size :: proc(kind: Device_Kind, p: ^Params) -> int {
+// An effect instance's bytes: its row's state and rings, and its program's
+// voice (a Row's: progs holds it).
+effect_size :: proc(kind: Device_Kind, p: ^Params, progs: ^Programs = nil) -> int {
 	row := &DEVICE_TABLE[kind]
-	return row.state + (row.rings != nil ? row.rings(p) : 0)
+	n := row.state + (row.rings != nil ? row.rings(p) : 0)
+	if row.program && progs != nil {
+		if program := i32(p[.Program]); program >= 0 && int(program) < len(progs.programs) {
+			n += int(progs.programs[program].state)
+		}
+	}
+	return n
 }
 
 // Puts an instance at song sample `at`: its history cleared, its clock (a

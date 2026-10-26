@@ -367,11 +367,13 @@ add_return :: proc(song: ^Song, from: ^spec.Spec, ret: spec.Return_Spec) {
 @(private = "file")
 device_into_song :: proc(song: ^Song, from: ^spec.Spec, d: i32, beat_seconds: f64, drafts: ^spec.Drafts = nil) -> i32 {
 	p, ok := spec.params_from_device(from, d, beat_seconds, song.bank)
-	if !ok && from.devices[d].kind != .Voice {
+	plays_program := device.DEVICE_TABLE[from.devices[d].kind].program
+	if !ok && !plays_program {
 		base.report(&song.findings, "asset_unavailable", .Error, from.devices[d].path, "%s: a sample set it plays is not loaded (offline, or not in the register)", from.devices[d].path)
 	}
-	if from.devices[d].kind == .Voice {
-		// its row, read into a program at this tempo
+	if plays_program {
+		// its row (an instrument's, an effect row's), read into a program at
+		// this tempo: a program each placement
 		program := spec.instrument_program(from, d, beat_seconds, song.bank, &song.programs, &song.findings, drafts)
 		if program < 0 {
 			return -1
@@ -384,11 +386,12 @@ device_into_song :: proc(song: ^Song, from: ^spec.Spec, d: i32, beat_seconds: f6
 	return i32(len(song.devices) - 1)
 }
 
-// A device's label: an instrument's row as named (its name, or a table's
-// name or class; "" written out in full), an effect's kind.
+// A device's label: an instrument's or an effect row's row as named (its
+// name, or a table's name or class; "" written out in full), a built-in
+// effect's kind.
 @(private = "file")
 device_label :: proc(d: spec.Device_Spec) -> string {
-	if d.kind != .Voice {
+	if !device.DEVICE_TABLE[d.kind].program {
 		return device.DEVICE_TABLE[d.kind].name
 	}
 	#partial switch x in d.row {
@@ -409,7 +412,10 @@ device_label :: proc(d: spec.Device_Spec) -> string {
 chain_into_song :: proc(song: ^Song, from: ^spec.Spec, c: Span, beat_seconds: f64) -> Span {
 	devices := make([dynamic]i32, context.temp_allocator)
 	for d in from.chain[c.first:base.span_end(c)] {
-		append(&devices, device_into_song(song, from, d, beat_seconds))
+		// an effect row that can't play (its findings say why) isn't placed
+		if x := device_into_song(song, from, d, beat_seconds); x >= 0 {
+			append(&devices, x)
+		}
 	}
 	sp := Span{i32(len(song.chain)), i32(len(devices))}
 	append(&song.chain, ..devices[:])

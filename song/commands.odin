@@ -131,13 +131,21 @@ COMMAND_KINDS := [Command_Kind]Command_Kind_Row {
 		}
 		return len(rows) > 0
 	}},
-	.Effect_Param_Set = {"effect", "an effect's param, in its unit (\"keys/effects/Filter/frequency\", \"returns/hall/Reverb/wet\")", .Part, proc(s: ^Song, row: Command_Row, tracks: []int) -> bool {
-		devices := command_devices(s, row)
+	.Effect_Param_Set = {"effect", "an effect's param, or an effect row's option, in its unit (\"keys/effects/Filter/frequency\", \"keys/effects/phaser/depth\", \"returns/hall/Reverb/wet\")", .Part, proc(s: ^Song, row: Command_Row, tracks: []int) -> bool {
 		rows := command_rows(s, row)
 		for a in rows {
-			s.params[a.ref][a.param] = f32(row.value)
+			#partial switch a.kind {
+			case .Param:
+				s.params[a.ref][a.param] = f32(row.value)
+			case .Effect_Control:
+				device.control_apply(&s.programs, &s.programs.controls[a.ref], f32(row.value))
+			}
 		}
-		return len(devices) > 0
+		programs := command_programs(s, rows)
+		for p in programs {
+			device.program_derive(&s.programs, p)
+		}
+		return len(command_devices(s, row)) > 0 || len(programs) > 0
 	}},
 }
 
@@ -165,6 +173,20 @@ command_devices :: proc(s: ^Song, row: Command_Row) -> []i32 {
 	for a in command_rows(s, row) {
 		if a.kind == .Param {
 			append(&out, a.ref)
+		}
+	}
+	return out[:]
+}
+
+// The effect rows' programs whose controls rows name.
+command_programs :: proc(s: ^Song, rows: []Automation) -> []i32 {
+	out := make([dynamic]i32, context.temp_allocator)
+	for a in rows {
+		if a.kind != .Effect_Control {
+			continue
+		}
+		if p := device.control_program(&s.programs, a.ref); p >= 0 && !slice.contains(out[:], p) {
+			append(&out, p)
 		}
 	}
 	return out[:]

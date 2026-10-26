@@ -23,7 +23,10 @@ booty_house, acid_house) as files to copy. A `Sampler` plays
 licence-checked sample sets downloaded on first use, or your own (a set
 the song writes out, or an SFZ file's zones); a `Player` plays a clip.
 Effects: Tone.js's, causal and
-streaming (reverb, delays, chorus, compressor, true-peak limiter, EQ, ...). A sibling
+streaming (reverb, delays, chorus, compressor, true-peak limiter, EQ, ...),
+and effects as data too: a row of nodes over what it is put on, on the
+song's clock (instruments/effects.json: a phaser, a flanger, a tremolo, an
+autopan, an autowah). A sibling
 of ovg, o3d, oksl, odecs and ottis; onimite binds it for its videos. MIT
 licensed. [API.md](API.md) is the design; [WORKFLOWS.md](WORKFLOWS.md) walks
 through using it; [SOUND_DESIGN.md](SOUND_DESIGN.md) is how to build voices

@@ -84,7 +84,7 @@ master_run_init :: proc(m: ^Master_Run, s: ^song.Song, mastering: Mastering, all
 	for i in 0 ..< len(m.states) {
 		kind, p := master_run_row(m, i)
 		row := device.DEVICE_TABLE[kind]
-		m.states[i], _ = mem.make_aligned([]u8, (device.effect_size(kind, &p) + 15) &~ 15, 16)
+		m.states[i], _ = mem.make_aligned([]u8, (device.effect_size(kind, &p, &s.programs) + 15) &~ 15, 16)
 		if row.effect_latency != nil {
 			m.latency += row.effect_latency(&p)
 		}

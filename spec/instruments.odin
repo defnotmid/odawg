@@ -163,14 +163,20 @@ instrument_files :: proc(s: ^Spec, out: ^[dynamic]string) {
 		}
 	}
 	for d in s.devices {
-		if d.kind == .Voice {
+		if device.DEVICE_TABLE[d.kind].program {
 			walk(s, s, out, d.row)
 		}
 	}
 	for x in s.instruments {
 		walk(s, s, out, x.value)
 	}
+	for x in s.effects {
+		walk(s, s, out, x.value)
+	}
 	for inc in s.instrument_includes {
+		add(s, s, out, inc)
+	}
+	for inc in s.effect_includes {
 		add(s, s, out, inc)
 	}
 	for f in s.instrument_files {
@@ -189,14 +195,20 @@ instrument_files :: proc(s: ^Spec, out: ^[dynamic]string) {
 	for st in s.styles {
 		own := st.spec
 		for d in own.devices {
-			if d.kind == .Voice {
+			if device.DEVICE_TABLE[d.kind].program {
 				walk(s, own, out, d.row)
 			}
 		}
 		for x in own.instruments {
 			walk(s, own, out, x.value)
 		}
+		for x in own.effects {
+			walk(s, own, out, x.value)
+		}
 		for inc in own.instrument_includes {
+			add(s, own, out, inc)
+		}
+		for inc in own.effect_includes {
 			add(s, own, out, inc)
 		}
 	}
@@ -394,6 +406,7 @@ Ctx :: struct {
 	beat_seconds: f64,
 	findings:     ^base.Findings,
 	drafts:       ^Drafts, // rows already drafted (nil: none kept)
+	effect:       bool, // an effect row is read (its names are the `effects` tables'), not an instrument
 }
 
 // Instruments as drafted (a row's bases, files, built-ins and overrides
@@ -517,12 +530,13 @@ draft_base :: proc(c: ^Ctx, d: ^Draft, name, path: string, owner: ^Spec, depth: 
 		return draft_read(c, d, v, file, owner, depth + 1)
 	}
 	for o := owner; o != nil; o = o.outer {
-		for x in o.instruments {
+		rows, includes, table_name := row_tables(c, o)
+		for x in rows {
 			if x.name == name {
-				return draft_read(c, d, x.value, base.path_join("instruments", name), o, depth + 1)
+				return draft_read(c, d, x.value, base.path_join(table_name, name), o, depth + 1)
 			}
 		}
-		for inc in o.instrument_includes {
+		for inc in includes {
 			v, file, found := file_value(o, inc)
 			if !found {
 				continue
@@ -534,17 +548,18 @@ draft_base :: proc(c: ^Ctx, d: ^Draft, name, path: string, owner: ^Spec, depth: 
 			}
 		}
 	}
-	if v, found := tone_rows[name]; found {
+	if v, found := tone_rows[name]; found && !c.effect {
 		ok := draft_read(c, d, v, base.path_join("instrument", name), nil, depth + 1)
 		d.origin = name
 		return ok
 	}
 	names := make([dynamic]string, context.temp_allocator)
 	for o := owner; o != nil; o = o.outer {
-		for x in o.instruments {
+		rows, includes, _ := row_tables(c, o)
+		for x in rows {
 			append(&names, x.name)
 		}
-		for inc in o.instrument_includes {
+		for inc in includes {
 			if v, _, found := file_value(o, inc); found {
 				if table, is_table := v.(json.Object); is_table {
 					append(&names, ..sorted_keys(table))
@@ -552,9 +567,28 @@ draft_base :: proc(c: ^Ctx, d: ^Draft, name, path: string, owner: ^Spec, depth: 
 			}
 		}
 	}
+	if c.effect {
+		for row in device.DEVICE_TABLE {
+			if row.name != "" {
+				append(&names, row.name)
+			}
+		}
+		report(c, "unknown_effect", .Error, path, "%s: %q is not an effect here (%s)", path, name, strings.join(names[:], ", ", context.temp_allocator))
+		return false
+	}
 	append(&names, ..tone_row_names())
 	report(c, "unknown_instrument", .Error, path, "%s: %q is not an instrument here (%s)", path, name, strings.join(names[:], ", ", context.temp_allocator))
 	return false
+}
+
+// The rows a spec names for what is read: its instruments, or (an effect
+// row) its effect rows; and the table's name, for paths.
+@(private = "file")
+row_tables :: proc(c: ^Ctx, o: ^Spec) -> (rows: []Instrument_Spec, includes: []string, table_name: string) {
+	if c.effect {
+		return o.effects[:], o.effect_includes[:], "effects"
+	}
+	return o.instruments[:], o.instrument_includes[:], "instruments"
 }
 
 // A row's keys over d: its nodes, pads, out, length, note, mono,
@@ -1220,6 +1254,7 @@ draft_desc :: proc(c: ^Ctx, d: ^Draft, written: string) -> ^device.Program_Desc 
 		mono       = d.mono,
 		velocity   = d.velocity,
 		out        = d.out,
+		effect     = c.effect,
 		path       = d.path != "" ? d.path : written,
 	}
 	nodes := make([]device.Node_Desc, len(d.nodes), context.temp_allocator)
@@ -1408,12 +1443,12 @@ sampler_keys :: proc(n: ^Draft_Node, out: ^[dynamic]device.Key_Desc) {
 
 // ---- reading a part's instrument ---------------------------------------------------
 
-// The program device d of s plays (a Voice's row, read and placed into
-// progs at `beat_seconds` a beat, its Samplers' sets the bank's). -1: none
-// (findings say why).
+// The program device d of s plays (a Voice's row, or a Row's: an effect
+// row, read and placed into progs at `beat_seconds` a beat, its Samplers'
+// sets the bank's). -1: none (findings say why).
 instrument_program :: proc(s: ^Spec, d: i32, beat_seconds: f64, bank: ^device.Bank, progs: ^device.Programs, findings: ^base.Findings, drafts: ^Drafts = nil) -> i32 {
 	dev := &s.devices[d]
-	c := Ctx{progs = progs, bank = bank, beat_seconds = beat_seconds, findings = findings, drafts = drafts}
+	c := Ctx{progs = progs, bank = bank, beat_seconds = beat_seconds, findings = findings, drafts = drafts, effect = dev.kind == .Row}
 	path := strings.trim_prefix(dev.path, "song/")
 	draft, ok := drafted(&c, dev.row, path, s)
 	if !ok {

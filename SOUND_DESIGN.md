@@ -167,6 +167,45 @@ cut, a strike on a word) is a clip the host places instead. Either way the
 file is fetched and pinned, never bundled, and credited. CC0 effects:
 Freesound (its CC0 filter), Kenney's packs, OpenGameArt's CC0 section.
 
+## Effects as rows: a phaser, a flanger, an autowah
+
+An effect odawg doesn't have built in is a row of nodes, written like an
+instrument. `examples/instruments/effects.json` has a phaser, a six-stage
+phaser, a flanger, a tremolo, an autopan and an autowah, each written out to
+learn from. A song names the file (`"effects": "instruments/effects.json"`)
+and places a row in any chain by its name, with its options:
+`"effects": [ { "name": "phaser", "rate": 0.3, "feedback": 0.6 } ]`.
+
+- **Anatomy.**
+  - An `Input` node is what the effect is put on, in stereo.
+  - The `out` node is what comes back.
+  - In between are the kinds that work on a signal: `Filter`, `Ladder`,
+    `OnePole`, `Comb`, `Drive`, `Slew`, `Map`, `Mix` and `Mul`.
+  - What moves them is an `Lfo` (on the song clock) or a `Follower` (the input's
+    level).
+  - A row has no note. Envelopes, oscillators, noise and samples belong to
+    instruments, and a row using one is refused (`effect_reads_note`).
+- **Sweeps.** A phaser sums the dry signal with all-pass stages whose
+  frequency an Lfo moves in octaves. Where the stages have turned the phase
+  half a cycle, the sum cancels: a notch. Four stages give two notches, six
+  give three. A flanger is a short `Comb` (1–5 ms) whose delay an Lfo moves.
+  Setting it against the dry signal (`effects.json`'s `against` node) makes
+  the notches deep.
+- **Level-driven.** A `Follower` reading the `Input` gives a 0..1 level.
+  Driving a band-pass's frequency in octaves from it is an autowah.
+  Multiplying the signal by an inverted, slewed level is a duck built of
+  nodes.
+- **Its rate is fixed, its depth isn't.**
+  - An Lfo in a row runs on the song clock: its phase at any moment is the
+    rate times song time. Two parts with a tremolo at one rate pulse
+    together, and a seek lands exactly in the sweep. So a lane can't move
+    the rate (`fixed_value`). Choose it where the row is placed instead.
+  - Depth, mix, feedback, center and q can all move:
+    `"parts/pad/effects/phaser/depth"`, like any option.
+- **Where it goes.** A phaser or flanger that belongs to one sound goes in that
+  part's `effects`. One over a loop of several parts goes on a bus, or on a
+  return they send to (a `phaser6` return under the pads, sent at -6 dB).
+
 ## Mixing as part of the sound
 
 - **Effects on the part, space on returns.** A delay or chorus that belongs to

@@ -57,6 +57,8 @@ Spec :: struct {
 	styles:            [dynamic]Style_Spec, // the song's own (and style files the host read)
 	instruments:       [dynamic]Instrument_Spec, // rows its parts can name
 	instrument_includes: [dynamic]string, // files of rows its parts can name too (`instruments = "classic.json"`)
+	effects:           [dynamic]Instrument_Spec, // effect rows its chains can name (`effects = { phaser = row }`)
+	effect_includes:   [dynamic]string, // files of effect rows its chains can name too (`effects = "instruments/effects.json"`)
 	instrument_files:  [dynamic]Instrument_File, // the files of rows the host read (the song's: every one its styles name too)
 	sfz_files:         [dynamic]Sfz_File, // the SFZ instruments the assets layer read (the song's: its styles' too)
 	buses:             [dynamic]Bus_Spec,
@@ -91,9 +93,10 @@ style_read :: proc(s: ^Spec, name: string, value: json.Value) -> Style_Spec {
 	return st
 }
 
-// An instrument a spec declares (`instruments = { name = row }`): kept as
-// the value it was given, read into a program where a part plays it (its
-// times at that part's tempo), so a part can name it and change some of it.
+// An instrument a spec declares (`instruments = { name = row }`), or an
+// effect row (`effects = { name = row }`): kept as the value it was given,
+// read into a program where a part plays it or a chain places it (its times
+// at that tempo), so a part or a chain can name it and change some of it.
 Instrument_Spec :: struct {
 	name:  string,
 	value: json.Value,
@@ -430,7 +433,7 @@ Device_Spec :: struct {
 	values: Span, // into values
 	beats:  device.Param_Set,
 	path:   string,
-	row:    json.Value, // a Voice's: the instrument as written (a name, a name and changes, a row)
+	row:    json.Value, // a Voice's or a Row's: the instrument or effect row as written (a name, a name and changes, a row)
 }
 
 // A sample set a Sampler names, and the spec that says what it is (a set

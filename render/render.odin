@@ -116,8 +116,7 @@ node_memory :: proc(s: ^song.Song, k: int) -> device.Effect_Memory {
 
 chain_memory :: proc(s: ^song.Song, c: base.Span) -> (m: device.Effect_Memory) {
 	for d in s.chain[c.first:base.span_end(c)] {
-		p := song.params_largest(s, d) // as far as a lane takes it
-		e := device.effect_memory(s.devices[d], &p)
+		e := song.effect_memory_largest(s, d) // as far as a lane takes it
 		m.ring += e.ring
 		m.state += e.state
 	}

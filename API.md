@@ -264,7 +264,8 @@ A row:
 
 - **Nodes** are kinds of the registry (`device.register_node`; a host adds its own the
   same way): Osc, Noise, Random, Env, Decay, Ramp, Lfo, Filter, Ladder (the 303's diode
-  ladder), OnePole, Difference, Drive, Slew, Map, Mix, Mul, Comb, Sampler, Clip. A `Filter`
+  ladder), OnePole, Difference, Drive, Slew, Map, Mix, Mul, Comb, Sampler, Clip, Follower
+  (a level), and an effect row's Input (§3.4.1). A `Filter`
   of type `diode`, `onepole` or `difference` is that kind. Their order means nothing: a
   program runs them after what they read, and leaves out what the out doesn't hear. A kind
   that reads an input of two sides writes two (a `Comb`, a line a side; its delay at most
@@ -298,6 +299,81 @@ A row:
   1): a tape's, so 2 plays an octave up in half the time and -1 plays backwards from
   `offset`. Sample k of the note reads frame offset + k × rate through the Sampler's sinc,
   never a sum of steps, so a seek starts it where it is; beyond the recording, silence.
+
+### 3.4.1 Effect rows
+
+An effect is data as well. Besides the 13 built-ins, a chain places an **effect row**: a row
+of nodes over what it is put on, shaped like an instrument's (`nodes`, `out`, `options`,
+`description`). A spec (or a style) declares rows in `effects = { name = row }`, a file of
+them (`effects = "instruments/effects.json"`), or a list of both. A chain entry is a
+built-in's name first, then a row's: `"phaser"`, `{ "phaser", rate = 0.3 }` (its options),
+`{ "phaser", nodes = { lfo = { wave = "triangle" } } }` (by node), a row written out
+(`{ nodes = { ... } }`), or a file of one row. A row named as a built-in is `bad_value`, and
+a name that is neither is `unknown_effect`.
+
+```lua
+effects = {
+  tremolo = {
+    nodes = {
+      lfo = { "Lfo", rate = 5 },
+      out = { "Input", amp = { by = "lfo", depth = 0.5 } },
+    },
+    options = { rate = "lfo/rate", depth = "out/amp/depth" },
+  },
+},
+parts = { keys = { instrument = "pluck", effects = { "autowah", { "tremolo", depth = 0.3 } } } },
+```
+
+- **`Input`** writes what the effect is put on, both sides. A kind reading two sides writes
+  two, so stereo stays stereo through the row. The row's out takes the block's place.
+- **One voice a placement, and no note.** Each place a chain puts a row plays its own
+  program as one voice that never ends. A kind that plays from a note (Osc, Noise, Random,
+  Env, Decay, Ramp, Segments, Sampler, Region, Clip), or a node reading `velocity`,
+  `accent`, `slide`, `gate` or `key`, is `effect_reads_note`. An Lfo, a Follower or the
+  Input move what a row moves. An Input in an instrument is `bad_value`.
+- **The song's clock.** An Lfo in a row takes its phase from the song sample (plus its
+  `phase`; its `delay` and `fade` count from the song's start). A seek, or a node waking
+  from silence, puts it where a render from the start has it, and two parts' tremolos at
+  one rate move together. So nothing moves its rate there: a modulator on it, or a lane on
+  it, is `fixed_value`. No lane moves a field a row reads as it is placed either (an Lfo's
+  `wave` and `phase`, a Filter's `type` and `rolloff`, a Comb's `delay` and `damp`;
+  `fixed_value`). A Tone length as a rate is Hz at the tempo of the section where the chain
+  is first placed, as an instrument's is.
+- **`Follower`** is a level: the louder side of what it reads, rising with the `attack` time
+  constant and falling with `release`, then times its `gain_db`. It moves an autowah's
+  cutoff, or a duck built of nodes.
+- **Memory.** A row remembers the sum of what its nodes remember: a Filter rings at its
+  cutoff and q, plus a Comb's ring, a Follower's times and a Slew's. A cutoff that a
+  modulator or an option moves is taken at 20 Hz, and each lane's lowest and highest value
+  on an option is counted. An exact seek pre-rolls it, and a dormant bus stays awake
+  through it.
+- **Automation:** `parts/<part>/effects/<row>/<option>`, or
+  `.../<row>/<node>/<field>[/<modulator field>]`, and the return and bus forms. These name a
+  row's controls the way a built-in's params are named: by the row's name (`phaser`), by
+  name and count (`phaser#2`), or by place (`2`). After compose, a command sets one while
+  the engine plays: `Effect_Param_Set "keys/effects/phaser/depth"`. The engine receives
+  the row's program whole at its next walk, as it does for an instrument's.
+- **The library** is `examples/instruments/effects.json`, beside `synths.json`:
+  - `phaser`: 4 swept all-pass stages against the dry signal.
+  - `phaser6`: the same with 6 stages, written as `phaser` plus two nodes.
+  - `flanger`: a swept 1–5 ms comb with feedback, set against the dry signal.
+  - `tremolo`.
+  - `autopan`.
+  - `autowah`: a band-pass that a Follower opens.
+
+  The phaser's `feedback` is its stages' q. They are all-pass, so no setting can boost
+  the signal or run away. The flanger feeds back at most 0.9 into its line.
+- **Cost** (one core, a 70 s song, medians of 7 runs), per second of sound:
+
+  | effect | time |
+  | --- | --- |
+  | `phaser` | 2.7 ms |
+  | built-in `Chorus` | 1.2 ms |
+  | `phaser6` | 4.2 ms |
+  | `flanger` | 0.4 ms |
+  | `autowah` | 0.9 ms |
+
+  An exact seek with the phaser on a bus takes 25 ms; with Chorus, 16 ms.
 
 ### 3.5 Styles
 
@@ -502,7 +578,8 @@ automation = {
     A send's and the master's lanes are their values, as written.
   - `parts/<part>/sends/<return or bus>`: a send's level.
   - `parts/<part>/effects/<effect>/<param>`: an effect in the part's chain, by name
-    (`Filter`), by name and count (`Filter#2`) or by place (`2`).
+    (`Filter`), by name and count (`Filter#2`) or by place (`2`); an effect row's option
+    or node/field the same way (`effects/phaser/depth`, `effects/phaser/ap1/q`; §3.4.1).
   - `parts/<part>/<option>` or `parts/<part>/<node>/<field>[/<modulator field>]`: the
     instrument's options (`cutoff`) and fields (`lp/frequency`, `lp/frequency/octaves`,
     `pads/kick/body/decay`).

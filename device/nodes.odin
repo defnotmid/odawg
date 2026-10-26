@@ -10,8 +10,9 @@ import "core:math"
 // (Tone's ADSR, a one-pole decay with bursts, a ramp), an LFO, filters (the
 // SVF chain, the 303's diode ladder), a drive, a slew, a map, a mix and a
 // product, a comb (a delay line with feedback and damping inside: a plucked
-// string, a body, a flanger), and the Sampler. Each kind's slots follow
-// COMMON_FIELDS in its fields' order (a list last).
+// string, a body, a flanger), the Sampler; and an effect row's input and a
+// level follower. Each kind's slots follow COMMON_FIELDS in its fields'
+// order (a list last).
 
 NODE_FILTER_CHOICES := []string{"lowpass", "highpass", "bandpass", "lowshelf", "highshelf", "notch", "allpass", "peaking", "diode", "onepole", "difference"}
 PHASE_CHOICES := []string{"start", "random"}
@@ -24,14 +25,14 @@ COMB_LINE :: 2048
 // The kinds' ids (set at init).
 NODE_OSC, NODE_NOISE, NODE_RANDOM, NODE_ENV, NODE_DECAY, NODE_RAMP, NODE_LFO: Node_Kind
 NODE_FILTER, NODE_DRIVE, NODE_SLEW, NODE_MAP, NODE_CURVE, NODE_MIX, NODE_MUL, NODE_COMB, NODE_SAMPLER, NODE_REGION, NODE_SEGMENTS, NODE_CLIP: Node_Kind
-NODE_LADDER, NODE_ONE_POLE, NODE_DIFFERENCE: Node_Kind
+NODE_LADDER, NODE_ONE_POLE, NODE_DIFFERENCE, NODE_INPUT, NODE_FOLLOWER: Node_Kind
 
 @(init, private = "file")
 nodes_init :: proc "contextless" () {
 	context = runtime.default_context()
 	r := &NODES
 	NODE_OSC = register_node(r, {
-		name = "Osc", stereo = false, state = size_of(Osc_State), sides = osc_stereo, start = start_osc, process = process_osc,
+		name = "Osc", stereo = false, needs = .Note, state = size_of(Osc_State), sides = osc_stereo, start = start_osc, process = process_osc,
 		fields = {
 			{name = "wave", unit = .Choice, choices = WAVE_CHOICES, default = f32(dsp.Wave.Sine)},
 			{name = "count", unit = .Number, default = 3},
@@ -45,10 +46,10 @@ nodes_init :: proc "contextless" () {
 			{name = "hz", unit = .Hz, list = 6},
 		},
 	})
-	NODE_NOISE = register_node(r, {name = "Noise", state = size_of(dsp.Noise), start = start_noise, process = process_noise, fields = {{name = "color", unit = .Choice, choices = NOISE_CHOICES}}})
-	NODE_RANDOM = register_node(r, {name = "Random", steady = true, process = process_random})
+	NODE_NOISE = register_node(r, {name = "Noise", needs = .Note, state = size_of(dsp.Noise), start = start_noise, process = process_noise, fields = {{name = "color", unit = .Choice, choices = NOISE_CHOICES}}})
+	NODE_RANDOM = register_node(r, {name = "Random", needs = .Note, steady = true, process = process_random})
 	NODE_ENV = register_node(r, {
-		name = "Env", unipolar = true, state = size_of(dsp.Adsr), start = start_env, process = process_env, tail = tail_env,
+		name = "Env", unipolar = true, needs = .Note, state = size_of(dsp.Adsr), start = start_env, process = process_env, tail = tail_env,
 		fields = {
 			{name = "attack", unit = .Seconds, default = 0.005},
 			{name = "decay", unit = .Seconds, default = 0.1},
@@ -61,7 +62,7 @@ nodes_init :: proc "contextless" () {
 		},
 	})
 	NODE_DECAY = register_node(r, {
-		name = "Decay", unipolar = true, state = size_of(Decay_State), start = start_decay, process = process_decay, tail = tail_decay,
+		name = "Decay", unipolar = true, needs = .Note, state = size_of(Decay_State), start = start_decay, process = process_decay, tail = tail_decay,
 		fields = {
 			{name = "attack", unit = .Seconds},
 			{name = "hold", unit = .Seconds},
@@ -74,31 +75,31 @@ nodes_init :: proc "contextless" () {
 		},
 	})
 	NODE_RAMP = register_node(r, {
-		name = "Ramp", unipolar = true, process = process_ramp,
+		name = "Ramp", unipolar = true, needs = .Note, process = process_ramp,
 		fields = {{name = "from", unit = .Number}, {name = "to", unit = .Number, default = 1}, {name = "time", unit = .Seconds}, {name = "curve", unit = .Number, default = 1}},
 	})
 	NODE_LFO = register_node(r, {
 		name = "Lfo", state = size_of(dsp.Osc), start = start_lfo, process = process_lfo,
 		fields = {
-			{name = "wave", unit = .Choice, choices = PLAIN_WAVES},
-			{name = "rate", unit = .Hz, default = 4, per_sample = true},
+			{name = "wave", unit = .Choice, choices = PLAIN_WAVES, at_start = true},
+			{name = "rate", unit = .Hz, default = 4, per_sample = true, pace = true},
 			{name = "delay", unit = .Seconds},
 			{name = "fade", unit = .Seconds},
-			{name = "phase", unit = .Number},
+			{name = "phase", unit = .Number, at_start = true},
 		},
 	})
 	NODE_FILTER = register_node(r, {
-		name = "Filter", inputs = 1, state = size_of(Filter_State), start = start_filter, process = process_filter,
+		name = "Filter", inputs = 1, state = size_of(Filter_State), start = start_filter, process = process_filter, memory = memory_filter_node,
 		fields = {
-			{name = "type", unit = .Choice, choices = NODE_FILTER_CHOICES, shapes = true},
+			{name = "type", unit = .Choice, choices = NODE_FILTER_CHOICES, shapes = true, at_start = true},
 			{name = "frequency", unit = .Hz, default = 1000, per_sample = true},
 			{name = "q", unit = .Number, default = 1, per_sample = true},
-			{name = "rolloff", unit = .Number, default = -12},
+			{name = "rolloff", unit = .Number, default = -12, at_start = true},
 			{name = "gain", unit = .Db},
 		},
 	})
 	NODE_DRIVE = register_node(r, {
-		name = "Drive", inputs = 1, state = size_of(Drive_State), start = start_drive, process = process_drive,
+		name = "Drive", inputs = 1, state = size_of(Drive_State), start = start_drive, process = process_drive, memory = memory_one_sample,
 		fields = {{name = "amount", unit = .Number, default = 1}, {name = "oversample", unit = .Number}},
 	})
 	NODE_SLEW = register_node(r, {
@@ -118,18 +119,18 @@ nodes_init :: proc "contextless" () {
 	NODE_COMB = register_node(r, {
 		name = "Comb", inputs = 1, keeps = true, state = size_of(Comb_State), start = start_comb, process = process_comb, tail = tail_comb, memory = memory_comb,
 		fields = {
-			{name = "delay", unit = .Seconds, per_sample = true},
+			{name = "delay", unit = .Seconds, per_sample = true, at_start = true},
 			{name = "feedback", unit = .Number, default = 0.7},
-			{name = "damp", unit = .Hz},
+			{name = "damp", unit = .Hz, at_start = true},
 			{name = "release", unit = .Seconds},
 		},
 	})
 	NODE_SAMPLER = register_node(r, {
-		name = "Sampler", stereo = true, state = size_of(Sampler_State), start = start_sampler, process = process_sampler, tail = tail_sampler_node,
+		name = "Sampler", stereo = true, needs = .Note, state = size_of(Sampler_State), start = start_sampler, process = process_sampler, tail = tail_sampler_node,
 		fields = {{name = "set", unit = .Asset, default = -1}, {name = "attack", unit = .Seconds}, {name = "release", unit = .Seconds, default = 0.1}},
 	})
 	NODE_SEGMENTS = register_node(r, {
-		name = "Segments", unipolar = true, process = process_segments, tail = tail_segments,
+		name = "Segments", unipolar = true, needs = .Note, process = process_segments, tail = tail_segments,
 		fields = {
 			{name = "times", unit = .Number, list = SEGMENT_POINTS}, // seconds from the point before (the first: from the note's start)
 			{name = "levels", unit = .Number, list = SEGMENT_POINTS},
@@ -138,7 +139,7 @@ nodes_init :: proc "contextless" () {
 		},
 	})
 	NODE_REGION = register_node(r, {
-		name = "Region", stereo = true, state = size_of(Region_State), start = start_region, process = process_region, tail = tail_region,
+		name = "Region", stereo = true, needs = .Note, state = size_of(Region_State), start = start_region, process = process_region, tail = tail_region,
 		fields = {
 			{name = "set", unit = .Asset, default = -1},
 			{name = "zone", unit = .Number},
@@ -157,7 +158,7 @@ nodes_init :: proc "contextless" () {
 		},
 	})
 	NODE_CLIP = register_node(r, {
-		name = "Clip", stereo = true, jump = true, process = process_clip, tail = tail_clip,
+		name = "Clip", stereo = true, jump = true, needs = .Note, process = process_clip, tail = tail_clip,
 		fields = {
 			{name = "set", unit = .Asset, default = -1},
 			{name = "offset", unit = .Seconds},
@@ -169,14 +170,19 @@ nodes_init :: proc "contextless" () {
 		},
 	})
 	NODE_LADDER = register_node(r, {
-		name = "Ladder", inputs = 1, state = size_of(Ladder_State), start = start_ladder, process = process_ladder,
+		name = "Ladder", inputs = 1, state = size_of(Ladder_State), start = start_ladder, process = process_ladder, memory = memory_ladder,
 		fields = {{name = "frequency", unit = .Hz, default = 1000, per_sample = true}, {name = "q", unit = .Number, default = 1, per_sample = true}},
 	})
 	NODE_ONE_POLE = register_node(r, {
-		name = "OnePole", inputs = 1, state = size_of(One_Pole_State), start = start_one_pole, process = process_one_pole,
+		name = "OnePole", inputs = 1, state = size_of(One_Pole_State), start = start_one_pole, process = process_one_pole, memory = memory_one_pole,
 		fields = {{name = "frequency", unit = .Hz, default = 1000, per_sample = true}},
 	})
-	NODE_DIFFERENCE = register_node(r, {name = "Difference", inputs = 1, state = size_of(Difference_State), start = start_difference, process = process_difference})
+	NODE_DIFFERENCE = register_node(r, {name = "Difference", inputs = 1, state = size_of(Difference_State), start = start_difference, process = process_difference, memory = memory_one_sample})
+	NODE_INPUT = register_node(r, {name = "Input", stereo = true, needs = .Input, process = process_input})
+	NODE_FOLLOWER = register_node(r, {
+		name = "Follower", inputs = 1, unipolar = true, one_side = true, state = size_of(Follower_State), process = process_follower, memory = memory_follower,
+		fields = {{name = "attack", unit = .Seconds, default = 0.01}, {name = "release", unit = .Seconds, default = 0.1}},
+	})
 	// the Filter types that are kinds of their own
 	append(&KINDS_BY_CHOICE, Kind_By_Choice{NODE_FILTER, FILTER_TYPE, DIODE, NODE_LADDER})
 	append(&KINDS_BY_CHOICE, Kind_By_Choice{NODE_FILTER, FILTER_TYPE, ONE_POLE, NODE_ONE_POLE})
@@ -543,12 +549,15 @@ process_ramp :: proc(c: ^Node_Call) {
 
 // ---- Lfo ---------------------------------------------------------------------------
 
-// A note starting: its oscillator at its phase.
+// A voice starting: its oscillator at its phase, where its clock has it (a
+// note's starts at 0; an effect row's is the song's, so a seek puts it
+// where a render from the start has it: its rate never moves there).
 @(private = "file")
 start_lfo :: proc(c: ^Node_Call, lane: ^Lane) {
 	s := node_state(c, lane, dsp.Osc)
 	vals := node_values(c, lane)
-	s^ = {wave = dsp.Wave(u8(vals[3])), width = 0.5, phase = f64(vals[7]) - math.floor(f64(vals[7]))}
+	phase := f64(vals[7]) + f64(vals[4]) * f64(lane.clock) / RATE
+	s^ = {wave = dsp.Wave(u8(vals[3])), width = 0.5, phase = phase - math.floor(phase)}
 }
 
 @(private = "file")
@@ -560,17 +569,18 @@ process_lfo :: proc(c: ^Node_Call) {
 		rate: [NODE_CHUNK]f32 = ---
 		inc: [NODE_CHUNK]f64 = ---
 		varies, v := node_curve(c, &lane, 4, vals[4], rate[:n])
-		// it starts after its delay and grows to its depth over its fade
+		// it starts after its delay and grows to its depth over its fade (on
+		// its clock: a note's from its start, an effect row's from the song's)
 		delay := i64(f64(vals[5]) * RATE)
 		fade := f64(vals[6]) * RATE
 		for i in 0 ..< n {
-			inc[i] = lane.at + i64(i) < delay ? 0 : f64(varies ? rate[i] : v) / RATE
+			inc[i] = lane.clock + i64(i) < delay ? 0 : f64(varies ? rate[i] : v) / RATE
 		}
 		l, _ := node_out(c, &lane)
 		dsp.osc_run(s, inc[:n], l)
 		if delay > 0 || fade > 0 {
 			for i in 0 ..< n {
-				k := lane.at + i64(i) - delay
+				k := lane.clock + i64(i) - delay
 				g: f32 = k < 0 ? 0 : (fade > 0 && f64(k) < fade ? f32(f64(k) / fade) : 1)
 				l[i] *= g
 			}
@@ -670,6 +680,18 @@ process_filter :: proc(c: ^Node_Call) {
 	}
 }
 
+// What its stages remember (an effect row's memory): FX_FORGET of the
+// slower pole's time constants of its shape at its cutoff and q, and a
+// sample more a stage.
+@(private = "file")
+memory_filter_node :: proc(values: ^[MAX_FIELDS]f32, slots: []int) -> f64 {
+	shape := dsp.SVF_SHAPES[dsp.Filter_Type(clamp(int(values[FILTER_TYPE]), 0, len(dsp.Filter_Type) - 1))](f64(values[FILTER_Q]), f64(values[FILTER_GAIN]))
+	d := shape.k / 2
+	sigma := math.TAU * max(f64(values[FILTER_FREQUENCY]), 1) * (d - math.sqrt(max(d * d - 1, 0)))
+	stages := dsp.rolloff_stages(values[FILTER_ROLLOFF])
+	return FX_FORGET / max(sigma, 1e-3) + f64(stages - 1) / RATE
+}
+
 // The 303's diode ladder (its stages carry across a mono program's slide).
 @(private = "file")
 LADDER_FREQUENCY :: 3
@@ -723,6 +745,14 @@ process_ladder :: proc(c: ^Node_Call) {
 	}
 }
 
+// Four poles at its cutoff, slower as its resonance nears the edge.
+@(private = "file")
+memory_ladder :: proc(values: ^[MAX_FIELDS]f32, slots: []int) -> f64 {
+	res := f64(clamp(values[LADDER_Q], 0, 11)) / 10
+	tau := 1 / (math.TAU * max(f64(values[LADDER_FREQUENCY]), 1))
+	return (FX_FORGET + 3) * tau / max(1 - res, 0.05)
+}
+
 // A one-pole low-pass, per side: its cutoff moved per sample, or its
 // coefficient once a note.
 @(private = "file")
@@ -733,6 +763,17 @@ One_Pole_State :: struct {
 	y:  [2]f32,
 	k:  f32, // its coefficient at a fixed cutoff
 	hz: f32, // the cutoff k is for (a lane moving it: k again)
+}
+
+@(private = "file")
+memory_one_pole :: proc(values: ^[MAX_FIELDS]f32, slots: []int) -> f64 {
+	return FX_FORGET / (math.TAU * max(f64(values[ONE_POLE_FREQUENCY]), 1))
+}
+
+// What remembers its last input only.
+@(private = "file")
+memory_one_sample :: proc(values: ^[MAX_FIELDS]f32, slots: []int) -> f64 {
+	return 1.0 / RATE
 }
 
 @(private = "file")
