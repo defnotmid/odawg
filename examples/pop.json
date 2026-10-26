@@ -26,11 +26,17 @@
     "drumbus": { "effects": [ { "name": "Compressor", "threshold": -16, "ratio": 3, "attack": 0.01, "release": 0.15 } ] },
     "synths": { "effects": [ { "name": "Compressor", "threshold": -20, "ratio": 2, "attack": 0.02, "release": 0.2 } ] }
   },
+  "automation": {
+    "parts/chords/gain_db": [ [ "intro", 0 ], [ "pre", 6.5, "step" ], [ "chorus", 0, "step" ] ],
+    "parts/strings/gain_db": [ [ "intro", 0 ], [ "break", -4.5, "step" ], [ "chorus2", 0, "step" ] ],
+    "parts/drums/gain_db": [ [ "intro", 0 ], [ "break", -3, "step" ], [ "chorus2", 0, "step" ] ]
+  },
   "parts": {
     "drums": {
+      "role": "drums",
       "instrument": "machines/808.json",
       "octave": 3,
-      "gain_db": 0,
+      "gain_db": -5.9,
       "room_db": 0,
       "sends": { "room": -18 },
       "to": "drumbus",
@@ -77,9 +83,10 @@
       ]
     },
     "sub": {
+      "role": "bass",
       "instrument": "sub_bass",
       "octave": 1,
-      "gain_db": -14,
+      "gain_db": -12.4,
       "room_db": 0,
       "sidechain": { "name": "drums/kick", "depth": 0.6, "release": 0.1 },
       "play": [
@@ -90,6 +97,7 @@
       ]
     },
     "bass": {
+      "role": "bass",
       "instrument": "bass",
       "octave": 2,
       "gain_db": -7,
@@ -101,9 +109,10 @@
       ]
     },
     "piano": {
+      "role": "comp",
       "instrument": { "name": "Sampler", "set": "vcsl/upright_piano", "release": 0.5 },
       "octave": 4,
-      "gain_db": -4,
+      "gain_db": -10.4,
       "room_db": -3,
       "sends": { "hall": -14 },
       "play": [
@@ -157,6 +166,7 @@
       ]
     },
     "chords": {
+      "role": "comp",
       "instrument": {
         "name": "Synth",
         "oscillator": { "type": "fatsawtooth", "count": 5, "spread": 24 },
@@ -184,9 +194,10 @@
       ]
     },
     "arp": {
+      "role": "counter",
       "instrument": "pluck",
       "octave": 4,
-      "gain_db": -12,
+      "gain_db": -10,
       "room_db": -6,
       "sends": { "echo": -12 },
       "to": "synths",
@@ -200,6 +211,7 @@
       ]
     },
     "lead": {
+      "role": "melody",
       "instrument": "lead",
       "octave": 5,
       "gain_db": -16,
@@ -229,6 +241,7 @@
       ]
     },
     "strings": {
+      "role": "pad",
       "instrument": { "name": "Sampler", "set": "vsco2/strings", "attack": 0.35, "release": 1.2 },
       "octave": 3,
       "gain_db": -16,
