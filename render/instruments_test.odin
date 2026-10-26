@@ -63,7 +63,7 @@ test_rows_render :: proc(t: ^testing.T) {
 		output_destroy(&out)
 		virtual.arena_destroy(&arena)
 	}
-	for machine in ([]string{"machines/808.json", "machines/909.json"}) {
+	for machine in ([]string{"machines/808.json", "machines/909.json", "machines/linn_80s.json", "machines/tight_modern.json", "machines/crunch_bap.json", "machines/cinematic_perc.json"}) {
 		pads := [?]string{"kick", "snare", "clap", "rim", "hat", "open_hat", "crash", "ride", "tom_low", "tom_mid", "tom_high", "shaker", "cowbell", "conga_low", "conga_mid", "conga_high", "clave", "maracas"}
 		for pad in pads {
 			arena: virtual.Arena
@@ -641,5 +641,87 @@ test_layers :: proc(t: ^testing.T) {
 		if int(tr.part) == song.part_index(s, "sw") {
 			testing.expect_value(t, song.track_note_count(s, ti), 4) // C4 twice a pass, two passes (not the switches, not the release notes)
 		}
+	}
+}
+
+// A layer whose instrument is itself layered (an SFZ is one) plays as its
+// layers: each only where both its own and the outer layer's conditions
+// hold (an outer trigger of attack, the default, keeps an inner release
+// layer), at the product of their levels; its keyswitches switch the row;
+// its groups are its own (an inner group 1 doesn't cut the row's off_by 1).
+// A machine can't be a layer: a finding. A range from an exact seek is the
+// same.
+@(test)
+test_nested_layers :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	tone :: `{ nodes: { env: { class: "Env", attack: 0.001, decay: 0.01, sustain: 1, release: 0.005 }, out: { class: "Osc", wave: "sine", amp: "env" } } }`
+	click :: `{ nodes: { env: { class: "Decay", time: 0.01 }, out: { class: "Noise", amp: "env" } } }`
+	inner :: `{ layers: [ { instrument: ` + tone + `, gain_db: -6 }, { instrument: ` + click + `, trigger: "release", rt_decay: 0 } ] }`
+	nested :: `{ layers: [ { instrument: ` + tone + ` }, { instrument: ` + inner + `, lo_vel: 64, gain_db: -6 } ] }`
+	plain :: `{ layers: [ { instrument: ` + tone + ` } ] }`
+	switched :: `{ layers: [ { instrument: { sw_lo: "C1", sw_hi: "C#1", sw_default: "C1", layers: [
+		{ instrument: ` + tone + `, sw_last_lo: "C1" }, { instrument: ` + tone + `, sw_last_lo: "C#1", gain_db: -20 } ] } } ] }`
+	grouped :: `{ layers: [ { instrument: ` + tone + `, off_by: 1 }, { instrument: { layers: [ { instrument: ` + tone + `, group: 1, gain_db: -40 } ] } } ] }`
+	text := strings.concatenate({`{ bpm: 120, gain_db: 0, sections: [ { name: "a", duration: "2m" } ], parts: {
+		loud: { gain_db: 0, instrument: `, nested, `, play: [ { name: "a", notes: "C4 . . .", subdivision: "4n", duration: "8n", velocity: 0.8 } ] },
+		loud_ref: { gain_db: 0, instrument: `, plain, `, play: [ { name: "a", notes: "C4 . . .", subdivision: "4n", duration: "8n", velocity: 0.8 } ] },
+		soft: { gain_db: 0, instrument: `, nested, `, play: [ { name: "a", notes: "C4 . . .", subdivision: "4n", duration: "8n", velocity: 0.3 } ] },
+		soft_ref: { gain_db: 0, instrument: `, plain, `, play: [ { name: "a", notes: "C4 . . .", subdivision: "4n", duration: "8n", velocity: 0.3 } ] },
+		sw: { gain_db: 0, instrument: `, switched, `, play: [ { name: "a", notes: "C4 . C#1 . C4 . . .", subdivision: "4n", duration: "8n" } ] },
+		grp: { gain_db: 0, instrument: `, grouped, `, play: [ { name: "a", events: [ { time: 0, note: "G4", duration: 2 }, { time: 0.5, note: "C4", duration: 0.25 } ] } ] } } }`}, context.temp_allocator)
+	s := compose_with(t, text, &arena)
+	out := output_from_song(s, {stems = true})
+	defer output_destroy(&out)
+	rms :: proc(st: [2][]f32, from, to: f64) -> f32 {
+		a, b := int(from * RATE), min(int(to * RATE), len(st[0]))
+		sum: f64
+		for i in a ..< b {
+			sum += f64(st[0][i] * st[0][i])
+		}
+		return f32(math.sqrt(sum / f64(max(b - a, 1))))
+	}
+	stem :: proc(out: Output, s: ^song.Song, name: string) -> [2][]f32 {return out.stems[song.part_index(s, name)]}
+	// at velocity 0.8 (MIDI 102) the inner tone joins the outer's, in phase,
+	// at -6 dB twice over: 1.25 times the plain row; at 0.3 (MIDI 38) it doesn't
+	loud := rms(stem(out, s, "loud"), 0.05, 0.2) / rms(stem(out, s, "loud_ref"), 0.05, 0.2)
+	soft := rms(stem(out, s, "soft"), 0.05, 0.2) / rms(stem(out, s, "soft_ref"), 0.05, 0.2)
+	testing.expectf(t, abs(loud - 1.25) < 0.01, "nested layer at velocity 0.8: %v of the plain row, want 1.25", loud)
+	testing.expectf(t, abs(soft - 1) < 1e-4, "nested layer at velocity 0.3: %v of the plain row, want 1", soft)
+	// the inner release layer: a click as the loud note ends (0.25 s), none
+	// from the plain row, none where the outer's velocity keeps it out
+	testing.expectf(t, rms(stem(out, s, "loud"), 0.26, 0.28) > 0.01, "no release click inside a nested layer: %v", rms(stem(out, s, "loud"), 0.26, 0.28))
+	testing.expectf(t, rms(stem(out, s, "soft"), 0.26, 0.28) < 1e-4, "a release click past the outer layer's velocity: %v", rms(stem(out, s, "soft"), 0.26, 0.28))
+	// the nested keyswitch: C4 (switch C1), C#1 (a switch: silent), C4 at -20 dB
+	sw := stem(out, s, "sw")
+	first, silent, second := rms(sw, 0.05, 0.2), rms(sw, 1.05, 1.2), rms(sw, 2.05, 2.2)
+	testing.expectf(t, first > 0.1 && silent < first * 0.01 && second > first * 0.05 && second < first * 0.2, "nested keyswitch: %v %v %v", first, silent, second)
+	// G4 held to 2 s; C4 at 0.5 s starts the inner group 1, which isn't the
+	// row's group 1: G4's outer voice (off_by 1) plays on
+	grp := stem(out, s, "grp")
+	testing.expectf(t, rms(grp, 0.9, 1.5) > rms(grp, 0.1, 0.4) * 0.5, "an inner group cut the row's voice: %v %v", rms(grp, 0.9, 1.5), rms(grp, 0.1, 0.4))
+	// the same from an exact seek
+	FROM :: 0.37
+	tp := test_pool(3)
+	defer test_pool_free(tp)
+	seg := output_from_song(s, {from = FROM, to = f64(out.frames) / RATE, pool = &tp.work_pool, stems = true})
+	defer output_destroy(&seg)
+	worst := seek_differs(out, seg, FROM)
+	testing.expectf(t, worst == 0, "from a seek it differs by %g", worst)
+	// a machine as a layer
+	{
+		context.allocator = virtual.arena_allocator(&arena)
+		sp := new(spec.Spec)
+		findings := make(base.Findings)
+		testing.expect(t, spec.spec_from_json(`{ bpm: 120, sections: [ { name: "a", duration: "1m" } ], parts: {
+			m: { instrument: { layers: [ { instrument: "machines/808.json" } ] }, play: [ { name: "a", notes: "C1" } ] } } }`, sp, &findings))
+		add_examples(sp, &findings)
+		m := new(song.Song)
+		song.song_from_spec(sp, m)
+		said := false
+		for f in m.findings {
+			said ||= f.code == "bad_value" && f.severity == .Error && strings.contains(f.message, "can't be a layer")
+		}
+		testing.expect(t, said, "a machine as a layer: no finding")
 	}
 }

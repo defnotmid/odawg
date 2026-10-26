@@ -540,24 +540,31 @@ compile_machine :: proc(progs: ^Programs, desc: ^Program_Desc, prog: Program, fi
 // whose programs have the same nodes, wiring and modulators share one, so
 // their voices play in one call), each layer its row of conditions and the
 // values where it differs from its shape's program (its zone, tuning,
-// level, times, velocity table).
+// level, times, velocity table). A layer that is itself layered (an SFZ, a
+// layered row) plays as its layers (layers_flat).
 @(private = "file")
 compile_layers :: proc(progs: ^Programs, desc: ^Program_Desc, prog: Program, findings: ^base.Findings) -> i32 {
 	m := prog
 	m.layer_mode = .All
+	flat: Flat_Layers
+	layers_flat(&flat, desc.layers, findings)
 	m.sw_lo, m.sw_hi, m.sw_default = desc.sw_lo, desc.sw_hi, desc.sw_default
+	if m.sw_lo == 0 {
+		m.sw_lo, m.sw_hi, m.sw_default = flat.sw_lo, flat.sw_hi, flat.sw_default
+	}
+	layers := flat.out
 	Shape :: struct {
 		key:     string,
 		program: i32,
 	}
 	shapes := make([dynamic]Shape, context.temp_allocator)
 	tables := make(map[u64]f32, context.temp_allocator) // a table's contents: its index
-	programs := make([]i32, len(desc.layers), context.temp_allocator)
+	programs := make([]i32, len(layers), context.temp_allocator)
 	state := i32(GRAPH_HEADER)
 	bufs := i32(RESERVED)
-	for &l, i in desc.layers {
+	for &l, i in layers {
 		programs[i] = -1
-		if l.program == nil || len(l.program.pads) > 0 || len(l.program.layers) > 0 {
+		if l.program == nil {
 			continue
 		}
 		for &n in l.program.nodes {
@@ -592,7 +599,7 @@ compile_layers :: proc(progs: ^Programs, desc: ^Program_Desc, prog: Program, fin
 		bufs = max(bufs, pp.bufs)
 	}
 	m.layers.first = i32(len(progs.layers))
-	for &l, i in desc.layers {
+	for &l, i in layers {
 		if programs[i] < 0 {
 			continue
 		}
@@ -606,6 +613,149 @@ compile_layers :: proc(progs: ^Programs, desc: ^Program_Desc, prog: Program, fin
 	m.state, m.bufs = state, bufs
 	append(&progs.programs, m)
 	return i32(len(progs.programs) - 1)
+}
+
+// A layered instrument's layers as one table: a layer whose instrument is
+// itself layered (an SFZ, a layered row) is its layers, each within the
+// outer's conditions (layer_within) at the product of their levels, its
+// groups its own (renumbered past the row's, so its off_by and polyphony
+// count only its own voices), the keyswitches the union of theirs (the
+// first default). The row's own layers are as written; a machine can't be
+// a layer (a finding).
+@(private = "file")
+Flat_Layers :: struct {
+	out:                      []Layer_Desc, // in temp memory
+	sw_lo, sw_hi, sw_default: u8,
+	next:                     i32, // the group a layered layer's next group becomes
+	spaces:                   i32, // layered layers so far: each its groups' own
+	groups:                   map[[2]i32]i32, // (its layered layer, its group): the table's
+}
+
+@(private = "file")
+layers_flat :: proc(f: ^Flat_Layers, layers: []Layer_Desc, findings: ^base.Findings) {
+	f.out = make([]Layer_Desc, layers_count(layers), context.temp_allocator)
+	f.groups = make(map[[2]i32]i32, context.temp_allocator)
+	for l in layers {
+		f.next = max(f.next, l.region.group + 1, l.region.off_by + 1)
+	}
+	at := 0
+	layers_fill(f, &at, layers, nil, 1, 0, findings)
+	f.out = f.out[:at]
+}
+
+@(private = "file")
+layers_count :: proc(layers: []Layer_Desc) -> int {
+	n := 0
+	for l in layers {
+		n += l.program != nil && len(l.program.layers) > 0 ? layers_count(l.program.layers) : 1
+	}
+	return n
+}
+
+@(private = "file")
+layers_fill :: proc(f: ^Flat_Layers, at: ^int, layers: []Layer_Desc, outer: ^Layer_Desc, gain: f32, space: i32, findings: ^base.Findings) {
+	for &l in layers {
+		x := l
+		if outer != nil {
+			ok: bool
+			if x.region, ok = layer_within(outer.region, l.region); !ok {
+				continue
+			}
+			x.gain = gain * (l.gain != 0 ? l.gain : 1)
+			x.region.group = layer_group(f, space, l.region.group)
+			if l.region.off_by != 0 {
+				x.region.off_by = layer_group(f, space, l.region.off_by)
+			}
+		}
+		switch {
+		case x.program == nil:
+			// nothing drafted (its finding says why)
+		case len(x.program.pads) > 0:
+			base.report(findings, "bad_value", .Error, l.path, "%s: a machine plays its pads by key; it can't be a layer (play it as a part of its own)", l.path)
+		case len(x.program.layers) > 0:
+			if r := l.region; r.group != 0 || r.off_by != 0 || r.polyphony != 0 || r.note_polyphony != 0 {
+				base.report(findings, "bad_value", .Warning, l.path, "%s: its instrument is layered: its own layers' groups and polyphony play, not this layer's", l.path)
+			}
+			p := x.program
+			if p.sw_lo != 0 {
+				f.sw_lo = f.sw_lo == 0 ? p.sw_lo : min(f.sw_lo, p.sw_lo)
+				f.sw_hi = max(f.sw_hi, p.sw_hi)
+			}
+			if f.sw_default == 0 {
+				f.sw_default = p.sw_default
+			}
+			f.spaces += 1
+			layers_fill(f, at, p.layers, &x, x.gain != 0 ? x.gain : 1, f.spaces, findings)
+		case:
+			f.out[at^] = x
+			at^ += 1
+		}
+	}
+}
+
+// A layered layer's group as the table's: its own, past the row's.
+@(private = "file")
+layer_group :: proc(f: ^Flat_Layers, space, group: i32) -> i32 {
+	key := [2]i32{space, group}
+	if id, found := f.groups[key]; found {
+		return id
+	}
+	f.groups[key] = f.next
+	f.next += 1
+	return f.next - 1
+}
+
+// A layer's conditions inside an outer layer's: both hold. An outer trigger
+// of attack (the default) leaves the inner's; two round robins on the one
+// count are one, of their lcm. False where no note can meet them.
+@(private = "file")
+layer_within :: proc(outer, inner: Layer_Region) -> (r: Layer_Region, ok: bool) {
+	r = inner
+	r.lo_key, r.hi_key = max(outer.lo_key, inner.lo_key), min(outer.hi_key, inner.hi_key)
+	r.lo_vel, r.hi_vel = max(outer.lo_vel, inner.lo_vel), min(outer.hi_vel, inner.hi_vel)
+	r.lo_rand, r.hi_rand = max(outer.lo_rand, inner.lo_rand), min(outer.hi_rand, inner.hi_rand)
+	if r.lo_key > r.hi_key || r.lo_vel > r.hi_vel || r.lo_rand >= r.hi_rand {
+		return r, false
+	}
+	if outer.trigger != .Attack {
+		if inner.trigger != .Attack && inner.trigger != outer.trigger {
+			return r, false
+		}
+		r.trigger = outer.trigger
+	}
+	if outer.sw_last_lo != 0 {
+		r.sw_last_lo, r.sw_last_hi = outer.sw_last_lo, outer.sw_last_hi
+		if inner.sw_last_lo != 0 {
+			r.sw_last_lo, r.sw_last_hi = max(outer.sw_last_lo, inner.sw_last_lo), min(outer.sw_last_hi, inner.sw_last_hi)
+			if r.sw_last_lo > r.sw_last_hi {
+				return r, false
+			}
+		}
+	}
+	if outer.seq_length > 1 {
+		r.seq_length, r.seq_position = outer.seq_length, outer.seq_position
+		if inner.seq_length > 1 {
+			a, b := int(outer.seq_length), int(inner.seq_length)
+			g, x := a, b
+			for x != 0 {
+				g, x = x, g % x
+			}
+			lcm := a / g * b
+			if lcm > int(max(u16)) {
+				return r, false
+			}
+			// the one position of the lcm (if any) where both hold
+			ok = false
+			for p in 0 ..< lcm {
+				if p % a + 1 == int(outer.seq_position) && p % b + 1 == int(inner.seq_position) {
+					r.seq_length, r.seq_position, ok = u16(lcm), u16(p + 1), true
+					break
+				}
+			}
+			return r, ok
+		}
+	}
+	return r, true
 }
 
 // What a desc's program is made of, but its values: its nodes, what each

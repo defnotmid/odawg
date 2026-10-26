@@ -67,8 +67,9 @@ wave_plain :: proc "contextless" (w: Wave) -> (plain: Wave, fat: bool) {
 
 // Fills `out` with the oscillator at the increments `inc` (cycles per
 // sample; they may be negative, as in deep FM, the phase wrapping either
-// way). The pulse has its DC offset removed.
-osc_run :: proc "contextless" (o: ^Osc, inc: []f64, out: []f32) #no_bounds_check {
+// way). The pulse has its DC offset removed (and may take a per-sample duty
+// cycle `widths`).
+osc_run :: proc "contextless" (o: ^Osc, inc: []f64, out: []f32, widths: []f32 = nil) #no_bounds_check {
 	plain, _ := wave_plain(o.wave)
 	t := o.phase
 	n := min(len(inc), len(out))
@@ -100,16 +101,29 @@ osc_run :: proc "contextless" (o: ^Osc, inc: []f64, out: []f32) #no_bounds_check
 			t = wrap(t + inc[i])
 		}
 	case .Square, .Fat_Square, .Pulse:
-		w := plain == .Pulse ? clamp(f64(o.width), 0.01, 0.99) : 0.5
-		dc := 2 * w - 1
-		for i in 0 ..< n {
-			dt := min(abs(inc[i]), 0.5)
-			v: f64 = t < w ? 1 : -1
-			if dt > 0 {
-				v += poly_blep(t, dt) - poly_blep(wrap(t - w), dt)
+		if plain == .Pulse && len(widths) >= n {
+			for i in 0 ..< n {
+				w := clamp(f64(widths[i]), 0.01, 0.99)
+				dt := min(abs(inc[i]), 0.5)
+				v: f64 = t < w ? 1 : -1
+				if dt > 0 {
+					v += poly_blep(t, dt) - poly_blep(wrap(t - w), dt)
+				}
+				out[i] = f32(v - (2 * w - 1))
+				t = wrap(t + inc[i])
 			}
-			out[i] = f32(v - dc)
-			t = wrap(t + inc[i])
+		} else {
+			w := plain == .Pulse ? clamp(f64(o.width), 0.01, 0.99) : 0.5
+			dc := 2 * w - 1
+			for i in 0 ..< n {
+				dt := min(abs(inc[i]), 0.5)
+				v: f64 = t < w ? 1 : -1
+				if dt > 0 {
+					v += poly_blep(t, dt) - poly_blep(wrap(t - w), dt)
+				}
+				out[i] = f32(v - dc)
+				t = wrap(t + inc[i])
+			}
 		}
 	}
 	o.phase = t
@@ -166,8 +180,9 @@ unison_init :: proc(u: ^Unison, wave: Wave, count: int, spread, width: f32, ster
 }
 
 // Writes the copies' sum at `hz` (per sample) into l and r. `inc` and `tmp`
-// are scratch as long as l.
-unison_run :: proc(u: ^Unison, hz: []f64, l, r: []f32, inc: []f64, tmp: []f32) #no_bounds_check {
+// are scratch as long as l; `widths` is an optional per-sample pulse duty
+// cycle.
+unison_run :: proc(u: ^Unison, hz: []f64, l, r: []f32, inc: []f64, tmp: []f32, widths: []f32 = nil) #no_bounds_check {
 	n := min(len(l), len(r), len(hz), len(inc), len(tmp))
 	for i in 0 ..< n {
 		l[i], r[i] = 0, 0
@@ -177,7 +192,7 @@ unison_run :: proc(u: ^Unison, hz: []f64, l, r: []f32, inc: []f64, tmp: []f32) #
 		for i in 0 ..< n {
 			inc[i] = hz[i] * ratio
 		}
-		osc_run(&u.oscs[v], inc[:n], tmp[:n])
+		osc_run(&u.oscs[v], inc[:n], tmp[:n], widths)
 		gl, gr := u.left[v], u.right[v]
 		for i in 0 ..< n {
 			l[i] += tmp[i] * gl

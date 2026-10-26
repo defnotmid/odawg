@@ -36,7 +36,7 @@ nodes_init :: proc "contextless" () {
 			{name = "wave", unit = .Choice, choices = WAVE_CHOICES, default = f32(dsp.Wave.Sine)},
 			{name = "count", unit = .Number, default = 3},
 			{name = "spread", unit = .Cents, default = 20},
-			{name = "width", unit = .Number, default = 0.5},
+			{name = "width", unit = .Number, default = 0.5, per_sample = true},
 			{name = "ratio", unit = .Number, default = 1},
 			{name = "tune", unit = .Number},
 			{name = "frequency", unit = .Hz, per_sample = true},
@@ -97,7 +97,10 @@ nodes_init :: proc "contextless" () {
 			{name = "gain", unit = .Db},
 		},
 	})
-	NODE_DRIVE = register_node(r, {name = "Drive", inputs = 1, stateless = true, process = process_drive, fields = {{name = "amount", unit = .Number, default = 1}}})
+	NODE_DRIVE = register_node(r, {
+		name = "Drive", inputs = 1, state = size_of(Drive_State), start = start_drive, process = process_drive,
+		fields = {{name = "amount", unit = .Number, default = 1}, {name = "oversample", unit = .Number}},
+	})
 	NODE_SLEW = register_node(r, {
 		name = "Slew", inputs = 1, keeps = true, state = size_of(Slew_State), process = process_slew, memory = memory_slew,
 		fields = {{name = "rise", unit = .Seconds, default = 0.01}, {name = "fall", unit = .Seconds, default = 0.01}},
@@ -314,7 +317,16 @@ process_osc :: proc(c: ^Node_Call) {
 				hz[i] = f64(varies ? moved[i] : v)
 			}
 		}
-		dsp.unison_run(&s.osc, hz[:n], l, r, inc[:n], tmp[:n])
+		widths: []f32
+		if c.node.mod_slots & (u64(1) << OSC_WIDTH) != 0 && s.osc.oscs[0].wave == .Pulse {
+			varies, w := node_curve(c, &lane, OSC_WIDTH, v[OSC_WIDTH], moved[:n])
+			if varies {
+				widths = moved[:n]
+			} else {
+				s.osc.oscs[0].width = w
+			}
+		}
+		dsp.unison_run(&s.osc, hz[:n], l, r, inc[:n], tmp[:n], widths)
 	}
 }
 
@@ -838,18 +850,53 @@ ladder :: proc(y: ^[4]f32, x_last: ^f32, x: []f32, hz: []f32, q: []f32) {
 // ---- Drive, Slew, Map, Mix, Mul ----------------------------------------------------
 
 @(private = "file")
+Drive_State :: struct {
+	x_last: [2]f32,
+}
+
+@(private = "file")
+start_drive :: proc(c: ^Node_Call, lane: ^Lane) {
+	if lane.fresh {
+		node_state(c, lane, Drive_State)^ = {}
+	}
+}
+
+// Soft saturation (tanh(a x) / tanh(a)); when `oversample` > 0, runs 2x
+// oversampled with linear midpoint interpolation and boxcar averaging.
+@(private = "file")
 process_drive :: proc(c: ^Node_Call) {
 	for &lane in c.lanes {
+		s := node_state(c, &lane, Drive_State)
 		a := max(node_value(c, &lane, 3), 1e-3)
-		norm := 1 / f32(math.tanh(f64(a)))
+		over := node_values(c, &lane)[4] > 0
+		norm := (over ? f32(0.5) : f32(1)) / f32(math.tanh(f64(a)))
 		il, ir := node_input(c, &lane, 0)
 		l, r := node_out(c, &lane)
-		for i in 0 ..< len(l) {
-			l[i] = dsp.tanh_fast(a * il[i]) * norm
-		}
-		if c.node.stereo {
-			for i in 0 ..< len(r) {
-				r[i] = dsp.tanh_fast(a * ir[i]) * norm
+		if over {
+			last_l := s.x_last[0]
+			for i in 0 ..< len(l) {
+				xi := il[i]
+				l[i] = (dsp.tanh_fast(a * 0.5 * (last_l + xi)) + dsp.tanh_fast(a * xi)) * norm
+				last_l = xi
+			}
+			s.x_last[0] = last_l
+			if c.node.stereo {
+				last_r := s.x_last[1]
+				for i in 0 ..< len(r) {
+					xi := ir[i]
+					r[i] = (dsp.tanh_fast(a * 0.5 * (last_r + xi)) + dsp.tanh_fast(a * xi)) * norm
+					last_r = xi
+				}
+				s.x_last[1] = last_r
+			}
+		} else {
+			for i in 0 ..< len(l) {
+				l[i] = dsp.tanh_fast(a * il[i]) * norm
+			}
+			if c.node.stereo {
+				for i in 0 ..< len(r) {
+					r[i] = dsp.tanh_fast(a * ir[i]) * norm
+				}
 			}
 		}
 	}

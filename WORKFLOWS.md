@@ -1,6 +1,6 @@
 # Workflows: making videos with odawg in onimite
 
-Five runs through the API in [API.md](API.md), as the agent would write them. After each
+Six runs through the API in [API.md](API.md), as the agent would write them. After each
 are the problems it hit and what changed in the API because of them.
 
 ---
@@ -243,6 +243,53 @@ skill doc should state the rule: per moment, decide who leads.
 
 ---
 
+## W6. An instrument the sets don't have
+
+The brief: a lead doubled by a real violin, then a chamber piece on harp, flute, violin,
+trumpet and cellos. None of them is a sample set. The steps are SOUND_DESIGN.md's (an
+instrument the sets don't have); `examples/sfz_chamber.json` and `velvet_horizon.json`'s
+`velvet_lead` are the result.
+
+```json
+"sources": {
+  "vsco": {
+    "url": "https://raw.githubusercontent.com/sgossner/VSCO-2-CE/6dd651d55dde97fd4028699be9d4481f26917891/",
+    "page": "https://github.com/sgossner/VSCO-2-CE/tree/SFZ",
+    "licence": "CC0-1.0",
+    "credit": "VS Chamber Orchestra 2: Community Edition by Versilian Studios LLC ...",
+    "pins": "pins/vsco.pins"
+  }
+},
+"parts": { "violin": { "instrument": { "name": "vsco/SViolinVib.sfz", "ampeg_release": 0.5 }, ... } }
+```
+
+```
+$ odawg pin examples/sfz_chamber.json
+vsco: 43 pinned (32 new) in examples/pins/vsco.pins, licence CC0-1.0
+```
+
+What went wrong on the way, and what changed:
+
+- **Mapping samples by file name.** The first attempt added six sets to odawg's register,
+  their zones written from the file names. Trumpet and flute came out an octave high:
+  VS Chamber Orchestra 2 names some files an octave low, and its own SFZ (on the
+  repository's `SFZ` branch) maps them right. Those sets were dropped. A library's SFZ is
+  played through `sources` instead, and SOUND_DESIGN.md says so.
+- **An SFZ as a layer was silent.** A layer whose instrument was itself layered (an SFZ, a
+  layered row) was dropped without a finding, and so was a machine. Now nested layers play
+  as one table: conditions intersected, levels multiplied, each SFZ's groups its own. A
+  machine as a layer is an error.
+- **`odawg pin` succeeded when a fetch failed.** It printed the error but exited 0, so a
+  script carried on with incomplete pins. It now exits non-zero.
+- **Levels.** One note at velocity 0.8 spans 17.6 dB across the five SFZ files (the cellos
+  -21.8 LUFS max momentary, the flute -39.4). A part's register and velocities move it
+  further: the violin needed 10 dB more than its C4 calibration where it played. Every
+  part's `gain_db` was set from `odawg analyze`'s loudness per section. Next: `odawg pin`
+  measures a reference level for each SFZ a song plays, at the notes it plays, so a part
+  starts at synths.json's reference.
+
+---
+
 ## What the walkthroughs changed in API.md
 
 **In odawg:**
@@ -253,6 +300,8 @@ skill doc should state the rule: per moment, decide who leads.
 - The `no_events` finding.
 - `duration_unreachable` lists the minimums.
 - From-file songs: `at` per section, and `duration` cuts at bar lines.
+- An SFZ (or any layered row) can be a layer; a machine as a layer is an error (W6).
+- `odawg pin` exits non-zero when a file couldn't be fetched (W6).
 
 **In onimite:**
 

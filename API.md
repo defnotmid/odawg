@@ -370,6 +370,13 @@ program (§3.4): a note starts every region whose conditions it meets, each a vo
   moves is read at that value, once, when the instrument is compiled, and a region whose
   `loccN`/`hiccN` it fails isn't placed. They read back as the instrument's controls;
   changing one after compose is refused until automation.
+- **As a layer** of another row (`layers = { { instrument = "vsco/SViolinVib.sfz", lo_vel = 64 }, ... }`),
+  an SFZ's regions join the row's layers: each plays where both its own conditions and the
+  layer's hold (key, velocity, random and keyswitch ranges intersected; two round robins one
+  of their lcm; the layer's trigger, unless it is attack, the default, which keeps the
+  regions' own), at the product of their levels. Its groups stay its own (`off_by` and
+  `polyphony` count only its voices), and its keyswitches switch the row. A layered row as a
+  layer plays the same way. A machine can't be a layer: its pads go by key (an error).
 - **An opcode written on the row** by its name sets it for every region
   (`ampeg_release = 0.4`). v0.0.5's `{ "Sampler", set = "x.sfz", attack, release }` still
   works: its attack and release are every region's `ampeg_attack` and `ampeg_release`, with
@@ -399,7 +406,8 @@ parts = { bass = { instrument = { "fashionbass/fashionbass_clean.sfz", ampeg_rel
   fetches tens of megabytes of a library, not the whole of it.
 - Every fetched file is verified against its line in the pins file: `sha256 size path`.
   A file the pins don't list is a `not_pinned` finding.
-- `odawg pin SPEC` fetches what the song plays and writes the pins. It trusts whatever
+- `odawg pin SPEC` fetches what the song plays and writes the pins. It exits non-zero when
+  a file couldn't be fetched (what was fetched is pinned; run it again). It trusts whatever
   the URL serves the first time. Pin from the author's own published pins (or hashes)
   when they have them, read the licence, and look over the new lines before committing
   them.

@@ -24,6 +24,10 @@ EXAMPLE_FILES := [?]struct {
 	{"instruments/909_bass.json", #load("../examples/instruments/909_bass.json", string), false},
 	{"machines/808.json", #load("../examples/machines/808.json", string), false},
 	{"machines/909.json", #load("../examples/machines/909.json", string), false},
+	{"machines/linn_80s.json", #load("../examples/machines/linn_80s.json", string), false},
+	{"machines/tight_modern.json", #load("../examples/machines/tight_modern.json", string), false},
+	{"machines/crunch_bap.json", #load("../examples/machines/crunch_bap.json", string), false},
+	{"machines/cinematic_perc.json", #load("../examples/machines/cinematic_perc.json", string), false},
 }
 
 add_examples :: proc(s: ^spec.Spec, findings: ^base.Findings) {

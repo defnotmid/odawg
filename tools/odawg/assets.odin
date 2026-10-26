@@ -141,7 +141,9 @@ run_pin :: proc(a: ^Args) -> bool {
 		}
 		fmt.printfln("%s: %d pinned (%d new) in %s, licence %s", u.source, u.total, u.added, path, u.licence)
 	}
-	return all
+	// what was fetched is pinned either way; a file that couldn't be (its
+	// error above) fails the command, so a script running it knows
+	return all && !base.has_errors(l.findings[:])
 }
 
 // The register: every set, its licence, its download size and whether it
