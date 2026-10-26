@@ -150,8 +150,9 @@ trumpet and cellos from VS Chamber Orchestra 2.
    uses and how odawg plays it.
 7. **Level it by measurement.** An SFZ plays at its author's levels, which
    differ a lot: one note at the same velocity spans 17.6 dB across
-   `sfz_chamber`'s five files. Set each part's `gain_db` from
-   `odawg analyze`'s loudness per section (below); `inspect` reports a part
+   `sfz_chamber`'s five files. Set each part's `gain_db` from the
+   balance table, `odawg inspect SPEC --balance`: every part's LU under the
+   mix and its peak in every section, from one render. `inspect` reports a part
    more than 15 LU under the mix in every section it plays (`buried_part`)
    with the raise that puts it 12 LU under.
 
@@ -188,9 +189,11 @@ Freesound (its CC0 filter), Kenney's packs, OpenGameArt's CC0 section.
   same way. A chord of four notes comes out about 6 dB louder, and a voice
   played well above or below C4 lands off the reference (`lead`, played
   at E5–A6, about 0.5 to 1 LU over it), so check a part where it plays.
-- **Levels, energy arc and spectrograms.** Run `odawg analyze SPEC --master streaming`
-  to check every section's loudness, stereo width, crest factor and the
-  `crowding` table:
+- **Levels, energy arc and spectrograms.** `odawg inspect SPEC --balance` prints
+  every part's LU under the mix (and its peak) in every section and over the
+  song, from one render. Run `odawg analyze SPEC --master streaming` to check
+  every section's loudness, stereo width, crest factor and the `crowding`
+  table:
   - The section loudness should follow the arrangement's `energy` arc (e.g.
     `intro` −19 LUFS → `verse` −16 LUFS → `build` −15 LUFS → `drop` −12 LUFS).
   - Inside a drop, drums and bass anchor the mix, the lead sits 3–5 LU above

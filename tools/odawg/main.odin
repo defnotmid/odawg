@@ -13,6 +13,7 @@ package main
 
 import "core:encoding/json"
 import "core:fmt"
+import "core:math"
 import "core:mem/virtual"
 import "core:os"
 import "core:path/filepath"
@@ -40,6 +41,7 @@ Args :: struct {
 	float:      bool,
 	json:       bool,
 	verify:     bool,
+	balance:    bool,
 	threads:    int,
 	pool:       ^common.Work_Pool, // the app's one pool, lent to everything it runs (nil: --threads 1)
 }
@@ -68,6 +70,7 @@ FLAG_TABLE := []Flag_Row {
 	{{"--float"}, .Switch, offset_of(Args, float)},
 	{{"--json"}, .Switch, offset_of(Args, json)},
 	{{"--verify"}, .Switch, offset_of(Args, verify)},
+	{{"--balance"}, .Switch, offset_of(Args, balance)},
 }
 
 Command_Row :: struct {
@@ -82,7 +85,7 @@ COMMAND_TABLE := []Command_Row {
 	{"timeline", "timeline SPEC [--json]", "sections (start, bars, tempo, style), parts and tracks, markers, findings", run_timeline},
 	{"show", "show SPEC PATH [--json]", "one thing: sections/NAME, parts/NAME (its notes, its instrument's controls); or instrument/NAME (a built-in row, to copy)", run_show},
 	{"at", "at SPEC POSITION", "what plays at a position: the section and bar, the chord, the notes sounding", run_at},
-	{"inspect", "inspect SPEC [--range R]", "renders and reports: findings from the spec, the form and the sound", run_inspect},
+	{"inspect", "inspect SPEC [--range R] [--balance]", "renders and reports: findings from the spec, the form and the sound; --balance: every part's LU under the mix in every section", run_inspect},
 	{"analyze", "analyze SPEC [--master M] [--reference REF.wav] [--json]", "what the sound is made of, per section, for the mix and every stem: loudness, true peak, crest, stereo width, 31 third-octave bands, the parts crowding each other; beside a reference recording's", run_analyze},
 	{"sets", "sets", "the sample sets in the register: what each is, its licence and size", run_sets},
 	{"fetch", "fetch [SPEC|SET ...] [--verify]", "downloads now what a render would on first use: what a song's notes reach, from the register and its sources, each file checked against its pin and decoded; a set by name, all of it (every set when nothing is named); --verify hashes what is already on disk", run_fetch},
@@ -541,7 +544,41 @@ run_inspect :: proc(a: ^Args) -> bool {
 	measures := check.measures_from(&m)
 	check.findings_from_measures(s, &measures, &l.findings)
 	print_findings(l.findings[:])
+	if a.balance {
+		print_balance(s, check.balance_from_measures(s, &measures))
+	}
 	return !base.has_errors(l.findings[:])
+}
+
+// The balance table: a row a part, a column a section and one for the
+// song: how far under the mix it sits there (LU), then its peak (dBFS) to
+// tell a quiet part from a hit that lands; "·" where it has no notes, "-"
+// where it has notes and no sound.
+print_balance :: proc(s: ^song.Song, rows: []check.Balance_Row) {
+	per := len(s.sections) + 1
+	if len(rows) == 0 {
+		fmt.println("balance: no part measured")
+		return
+	}
+	for table in 0 ..< 2 {
+		fmt.println(table == 0 ? "balance: LU under the mix (· no notes there, - silent)" : "balance: peak dBFS")
+		fmt.printf("%-14s", "part")
+		for sec in s.sections {
+			fmt.printf(" %8s", sec.name[:min(len(sec.name), 8)])
+		}
+		fmt.printf(" %8s\n", "song")
+		for i in 0 ..< len(rows) / per {
+			fmt.printf("%-14s", s.parts[i][:min(len(s.parts[i]), 14)])
+			for b in rows[i * per:][:per] {
+				cell := "·"
+				if b.plays {
+					cell = math.is_inf(b.lufs) ? "-" : fmt.tprintf("%.1f", table == 0 ? b.under : b.peak_db)
+				}
+				fmt.printf(" %8s", cell)
+			}
+			fmt.println()
+		}
+	}
 }
 
 // Each song rendered whole on one core (no pool), timed:

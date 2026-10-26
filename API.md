@@ -776,6 +776,16 @@ Checks that stand in for listening:
 | `off_key`, `note_range` | notes |
 | `silent_part` | a part with notes in the range that makes no sound (a part with none isn't judged) |
 | `buried_part` | a part more than 15 LU under the mix in every section it plays (has notes in; its tails don't count); names the `gain_db` raise to 12 LU under where it's loudest |
+
+The balance table is what these read: `check.balance_from_measures(song, measures)` over what
+`check.Measuring` measured as the render streamed (its stems pushed), with no render of its
+own. It gives every part against the mix in every section and over the song: part-major,
+`len(sections) + 1` rows a part, each `{ lufs, mix, under, peak_db, plays }`. `under` is LU
+under the mix (+inf where the part is silent). `peak_db` is its sample peak there: a hit
+that lands reads loud in peak and low in loudness. `plays` means a note of its is written
+there (by its beat, so humanize and swing don't move it) or sounds through 400 ms of it.
+The song row compares the part over the sections it plays with the mix over the same.
+`odawg inspect SPEC --balance` prints it.
 | `no_events` | `pulse`/`hits` read a part with nothing in that range (a style without it) |
 | `start_unreachable`, `duration_unreachable` | a timing constraint that can't be met; lists each section's minimum |
 

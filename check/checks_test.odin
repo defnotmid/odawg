@@ -1,6 +1,7 @@
 package odawg_check
 
 import "core:mem/virtual"
+import "core:math"
 import "core:slice"
 import "core:strconv"
 import "core:strings"
@@ -51,6 +52,9 @@ test_measured_streaming :: proc(t: ^testing.T) {
 		testing.expectf(t, a.loudness.integrated == b.loudness.integrated && a.loudness.range == b.loudness.range && a.loudness.true_peak == b.loudness.true_peak && a.loudness.sample_peak == b.loudness.sample_peak, "in chunks of %d: %v, whole: %v", chunk, b.loudness, a.loudness)
 		testing.expectf(t, slice.equal(a.loudness.momentary, b.loudness.momentary) && slice.equal(a.loudness.short_term, b.loudness.short_term), "in chunks of %d the momentary or short-term loudness differs", chunk)
 		testing.expect(t, a.mix_peak == b.mix_peak && slice.equal(a.part_peaks, b.part_peaks))
+		for st, p in a.part_peak_steps {
+			testing.expectf(t, slice.equal(st, b.part_peak_steps[p]), "in chunks of %d part %d's step peaks differ", chunk, p)
+		}
 		testing.expectf(t, slice.equal(a.mix_energy, b.mix_energy) && len(a.part_energy) == len(b.part_energy), "in chunks of %d the mix's energy differs", chunk)
 		for e, p in a.part_energy {
 			testing.expectf(t, slice.equal(e, b.part_energy[p]), "in chunks of %d part %d's energy differs", chunk, p)
@@ -139,4 +143,72 @@ test_buried_part :: proc(t: ^testing.T) {
 			testing.expectf(t, db > 10 && db < 25, "from %v: a raise of %v dB for a part 32 dB down beside one 10 dB down", cs.from, db)
 		}
 	}
+}
+
+// The balance table: every part against the mix in every section and over
+// the song (part-major, sections + 1 rows a part). Where a part plays is
+// where its notes are written: one humanized ahead of its section's first
+// beat plays in that section, not the one before. A row's peak is its
+// stem's over the section; a click reads loud in peak and low in loudness,
+// so it can be told from a quiet part.
+@(test)
+test_balance_rows :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	_ = virtual.arena_init_growing(&arena)
+	defer virtual.arena_destroy(&arena)
+	context.allocator = virtual.arena_allocator(&arena)
+	sp := new(spec.Spec)
+	findings := make(base.Findings)
+	testing.expect(t, spec.spec_from_json(`{ bpm: 120, seed: 7, sections: [ { name: "a", duration: "2m", chords: "C F" }, { name: "b", duration: "2m", chords: "G C" } ],
+		parts: { pad: { instrument: "Synth", play: [ { name: ["a", "b"], chords: { voicing: "open" }, octave: 4 } ] },
+		         hit: { instrument: { name: "NoiseSynth", "envelope/decay": 0.02, "envelope/sustain": 0 }, play: [ { name: "b", notes: "C4", subdivision: "1m" } ] },
+		         late: { instrument: "Synth", play: [ { name: "b", notes: "E4 G4 C5 G4", subdivision: "4n", humanize: 0.02 } ] } } }`, sp, &findings))
+	s := new(song.Song)
+	testing.expect(t, song.song_from_spec(sp, s))
+	// late's first note, written on b's first beat, humanized ahead of it
+	early := false
+	for i in 0 ..< len(s.notes) {
+		early ||= s.parts[s.tracks[0].part] != "" && s.notes.beat[i] == s.sections[1].beat && s.notes.time[i] < s.sections[1].start
+	}
+	testing.expect(t, early, "no note humanized ahead of b (the seed): the test can't see it")
+	out := render.output_from_song(s, {stems = true})
+	m: Measuring
+	measuring_init(&m, s)
+	defer measuring_destroy(&m)
+	measuring_push(&m, out.left, out.right, out.stems)
+	measures := measures_from(&m)
+	rows := balance_from_measures(s, &measures)
+	per := len(s.sections) + 1
+	testing.expect_value(t, len(rows), len(s.parts) * per)
+	row :: proc(s: ^song.Song, rows: []Balance_Row, part: string, section: int) -> Balance_Row {
+		return rows[song.part_index(s, part) * (len(s.sections) + 1) + section]
+	}
+	testing.expect(t, row(s, rows, "pad", 0).plays && row(s, rows, "pad", 1).plays, "pad plays in a and b")
+	testing.expect(t, !row(s, rows, "late", 0).plays && row(s, rows, "late", 1).plays, "late plays in b alone, its early note too")
+	testing.expect(t, !row(s, rows, "hit", 0).plays && row(s, rows, "hit", 1).plays, "hit plays in b alone")
+	for r in rows {
+		if r.plays && !math.is_inf(r.lufs) {
+			testing.expectf(t, abs(r.under - (r.mix - r.lufs)) < 1e-9, "under %v is not mix %v less lufs %v", r.under, r.mix, r.lufs)
+		}
+	}
+	// the song row: over the sections it plays
+	pad_song, late_song := row(s, rows, "pad", 2), row(s, rows, "late", 2)
+	lo, hi := min(row(s, rows, "pad", 0).lufs, row(s, rows, "pad", 1).lufs), max(row(s, rows, "pad", 0).lufs, row(s, rows, "pad", 1).lufs)
+	testing.expectf(t, pad_song.plays && pad_song.lufs >= lo - 0.5 && pad_song.lufs <= hi + 0.5, "pad over the song %v, its sections %v..%v", pad_song.lufs, lo, hi)
+	testing.expectf(t, late_song.lufs == row(s, rows, "late", 1).lufs && late_song.mix == row(s, rows, "late", 1).mix, "late over the song is late in b")
+	// each row's peak is its stem's over the section's whole steps
+	STEP :: render.RATE / 10
+	for p in 0 ..< len(s.parts) {
+		st := out.stems[p]
+		for sec, j in s.sections {
+			first := (int(math.round(sec.start * render.RATE)) + STEP - 1) / STEP
+			last := int(math.round(sec.stop * render.RATE)) / STEP
+			want := base.gain_to_db(f64(render.peak_from_samples(st[0][first * STEP:min(last * STEP, len(st[0]))], st[1][first * STEP:min(last * STEP, len(st[1]))])))
+			testing.expectf(t, rows[p * per + j].peak_db == want, "%s in %s: peak %v, its stem's %v", s.parts[p], sec.name, rows[p * per + j].peak_db, want)
+		}
+	}
+	// a click (20 ms of noise): its peak far over its loudness, more than a
+	// held part's
+	hit, pad := row(s, rows, "hit", 1), row(s, rows, "pad", 1)
+	testing.expectf(t, hit.peak_db - hit.lufs > pad.peak_db - pad.lufs + 3, "hit peak %.1f / %.1f LUFS against pad %.1f / %.1f", hit.peak_db, hit.lufs, pad.peak_db, pad.lufs)
 }

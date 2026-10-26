@@ -124,6 +124,26 @@ loudness_of_span :: proc(energy: []f64, first, last: int) -> f64 {
 	return gated_loudness(blocks)
 }
 
+// The integrated loudness of several spans of steps taken as one (each
+// [first, last)): their blocks gated together, as loudness_of_span gates
+// one span's.
+loudness_of_spans :: proc(energy: []f64, spans: [][2]int) -> f64 {
+	count := 0
+	for sp in spans {
+		count += max(min(sp[1], len(energy)) - max(sp[0], 0) - 3, 0)
+	}
+	blocks := make([]Loudness_Block, count, context.temp_allocator)
+	at := 0
+	for sp in spans {
+		first, last := max(sp[0], 0), min(sp[1], len(energy))
+		for s := first; s + 4 <= last; s += 1 {
+			blocks[at] = block_loudness(energy, s, 4)
+			at += 1
+		}
+	}
+	return gated_loudness(blocks)
+}
+
 // A block's mean square and its loudness.
 @(private = "file")
 Loudness_Block :: struct {

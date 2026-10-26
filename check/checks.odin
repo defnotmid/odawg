@@ -30,6 +30,7 @@ Measures :: struct {
 	part_peaks:  []f32,
 	mix_energy:  []f64,
 	part_energy: [][]f64,
+	part_peak_steps: [][]f32, // each measured part's sample peak (linear) every 100 ms step
 	from:        f64,
 	samples:     i64,
 }
@@ -59,6 +60,70 @@ Context :: struct {
 	findings: ^base.Findings,
 	spans:    []Section_Span,
 	plays:    []bool,
+	balance:  []Balance_Row, // balance_from_measures's
+}
+
+// A part in a section against the mix (balance_from_measures): its
+// integrated loudness over the section (BS.1770's gates: where it sounds;
+// -inf where it's silent or the span holds no 400 ms block), the mix's over
+// the same span, how far under the mix it sits (LU; +inf where it's
+// silent), its sample peak there (dBFS: a hit that lands reads loud here
+// and low in loudness), and whether a note of its sounds there.
+Balance_Row :: struct {
+	lufs:    f64,
+	mix:     f64,
+	under:   f64,
+	peak_db: f64,
+	plays:   bool,
+}
+
+// Every measured part (song.parts order) against the mix in every section
+// of the render (clipped to its range), then over the song: part-major,
+// len(s.sections) + 1 rows a part. row(part, section) is
+// rows[part * (len(s.sections) + 1) + section]; at section
+// len(s.sections), the part over the sections it plays and the mix over
+// the same. From what Measuring measured as the render streamed (its stems
+// pushed): no render of its own. In `allocator`.
+balance_from_measures :: proc(s: ^song.Song, m: ^Measures, allocator := context.allocator) -> []Balance_Row {
+	spans, plays := section_plays(s, m)
+	return balance_rows(s, m, spans, plays, allocator)
+}
+
+@(private = "file")
+balance_rows :: proc(s: ^song.Song, m: ^Measures, spans: []Section_Span, plays: []bool, allocator := context.allocator) -> []Balance_Row {
+	parts := min(len(m.part_energy), len(s.parts))
+	per := len(spans) + 1
+	rows := make([]Balance_Row, parts * per, allocator)
+	mix := make([]f64, len(spans), context.temp_allocator)
+	for sp, j in spans {
+		mix[j] = analyze.loudness_of_span(m.mix_energy, sp.first, sp.last)
+	}
+	played := make([dynamic][2]int, context.temp_allocator)
+	for energy, i in m.part_energy[:parts] {
+		peaks := m.part_peak_steps[i]
+		peak_over :: proc(peaks: []f32, first, last: int) -> f32 {
+			p: f32
+			for v in peaks[clamp(first, 0, len(peaks)):clamp(last, 0, len(peaks))] {
+				p = max(p, v)
+			}
+			return p
+		}
+		clear(&played)
+		song_peak: f32
+		for sp, j in spans {
+			part := analyze.loudness_of_span(energy, sp.first, sp.last)
+			peak := peak_over(peaks, sp.first, sp.last)
+			rows[i * per + j] = {lufs = part, mix = mix[j], under = mix[j] - part, peak_db = base.gain_to_db(f64(peak)), plays = plays[i * len(spans) + j]}
+			if plays[i * len(spans) + j] {
+				append(&played, [2]int{sp.first, sp.last})
+				song_peak = max(song_peak, peak)
+			}
+		}
+		part := analyze.loudness_of_spans(energy, played[:])
+		whole := analyze.loudness_of_spans(m.mix_energy, played[:])
+		rows[i * per + len(spans)] = {lufs = part, mix = whole, under = whole - part, peak_db = base.gain_to_db(f64(song_peak)), plays = len(played) > 0}
+	}
+	return rows
 }
 
 // Whether part i plays anywhere in the render.
@@ -97,16 +162,12 @@ CHECK_TABLE := [Check]Check_Row {
 			}
 		}},
 	.Buried_Part = {"buried_part", proc(c: ^Context) {
-			m := c.measures
-			for energy, i in m.part_energy[:min(len(m.part_energy), len(c.song.parts))] {
+			sections := len(c.spans)
+			for i in 0 ..< len(c.balance) / (sections + 1) {
 				least := math.INF_F64 // how far under the mix it sits where it's loudest against it
-				for sp, j in c.spans {
-					if !c.plays[i * len(c.spans) + j] {
-						continue
-					}
-					part := analyze.loudness_of_span(energy, sp.first, sp.last)
-					if !math.is_inf(part) {
-						least = min(least, analyze.loudness_of_span(m.mix_energy, sp.first, sp.last) - part)
+				for b in c.balance[i * (sections + 1):][:sections] {
+					if b.plays && !math.is_inf(b.lufs) {
+						least = min(least, b.under)
 					}
 				}
 				if !math.is_inf(least) && least > BURIED_LU {
@@ -129,6 +190,7 @@ CHECK_TABLE := [Check]Check_Row {
 findings_from_measures :: proc(s: ^song.Song, m: ^Measures, findings: ^base.Findings) {
 	c := Context{song = s, measures = m, findings = findings}
 	c.spans, c.plays = section_plays(s, m)
+	c.balance = balance_rows(s, m, c.spans, c.plays, context.temp_allocator)
 	for row in CHECK_TABLE {
 		row.rule(&c)
 	}
@@ -158,8 +220,15 @@ section_plays :: proc(s: ^song.Song, m: ^Measures) -> (spans: []Section_Span, pl
 			}
 			t0 := s.notes.time[n]
 			t1 := t0 + s.notes.duration[n]
+			beat := s.notes.beat[n]
 			for sp, j in spans {
-				if t0 < sp.to && (t1 > sp.from || t0 >= sp.from) {
+				// it's written there (its beat: humanize and swing move its
+				// time, not where it belongs) and sounds within the render, or
+				// it sounds through a loudness block of it (a held note); a
+				// note's last moments past a section's end aren't playing in it
+				sec := s.sections[j]
+				written := beat >= sec.beat && beat < sec.beat + sec.beats && t0 < sp.to && t1 > sp.from
+				if written || min(t1, sp.to) - max(t0, sp.from) >= 0.4 {
 					plays[int(t.part) * len(spans) + j] = true
 				}
 			}
@@ -185,7 +254,7 @@ findings_from_render :: proc(s: ^song.Song, out: ^render.Output, findings: ^base
 // measured. `from`: the song second it starts at (a range's).
 Measuring :: struct {
 	meter:      analyze.Meter,
-	part_peaks: []f32,
+	peak_steps: [][dynamic]f32, // each part's sample peak every 100 ms step (the steps' grid)
 	parts:      []analyze.Steps,
 	measured:   int, // the parts whose stems came
 	from:       f64,
@@ -193,7 +262,10 @@ Measuring :: struct {
 
 measuring_init :: proc(m: ^Measuring, s: ^song.Song, allocator := context.allocator, from := 0.0) {
 	analyze.meter_init(&m.meter, render.RATE, allocator)
-	m.part_peaks = make([]f32, len(s.parts), allocator)
+	m.peak_steps = make([][dynamic]f32, len(s.parts), allocator)
+	for &p in m.peak_steps {
+		p = make([dynamic]f32, allocator)
+	}
 	m.parts = make([]analyze.Steps, len(s.parts), allocator)
 	for &p in m.parts {
 		analyze.steps_init(&p, render.RATE, allocator)
@@ -206,15 +278,39 @@ measuring_destroy :: proc(m: ^Measuring) {
 	for &p in m.parts {
 		analyze.steps_destroy(&p)
 	}
+	for p in m.peak_steps {
+		delete(p)
+	}
 }
 
 // The next chunk: the mix, and the stems (stem_count's order: the parts'
 // first; nil or fewer: those parts unmeasured).
 measuring_push :: proc(m: ^Measuring, l, r: []f32, stems: [][2][]f32) {
+	STEP :: i64(render.RATE / 10)
+	at := m.meter.pushed // the chunk's first sample, counted from the render's
 	analyze.meter_push(&m.meter, l, r)
-	m.measured = max(m.measured, min(len(stems), len(m.part_peaks)))
-	for st, i in stems[:min(len(stems), len(m.part_peaks))] {
-		m.part_peaks[i] = max(m.part_peaks[i], render.peak_from_samples(st[0], st[1]))
+	k := min(len(stems), len(m.parts))
+	m.measured = max(m.measured, k)
+	n := len(l)
+	for st in stems[:k] {
+		n = min(n, len(st[0]), len(st[1]))
+	}
+	// each part's peak a step at a time: the chunk cut where steps begin,
+	// once for every part (a streamed chunk is one step or two)
+	for j := 0; j < n; {
+		g := at + i64(j)
+		step := int(g / STEP)
+		end := min(n, j + int(STEP - g % STEP))
+		for st, i in stems[:k] {
+			p := &m.peak_steps[i]
+			if len(p) <= step {
+				resize(p, step + 1)
+			}
+			p[step] = max(p[step], render.peak_from_samples(st[0][j:end], st[1][j:end]))
+		}
+		j = end
+	}
+	for st, i in stems[:k] {
 		analyze.steps_push(&m.parts[i], st[0], st[1])
 	}
 }
@@ -223,8 +319,15 @@ measuring_push :: proc(m: ^Measuring, l, r: []f32, stems: [][2][]f32) {
 // destroyed).
 measures_from :: proc(m: ^Measuring, allocator := context.allocator) -> Measures {
 	energy := make([][]f64, m.measured, allocator)
+	steps := make([][]f32, m.measured, allocator)
+	peaks := make([]f32, m.measured, allocator)
 	for &e, i in energy {
 		e = m.parts[i].energy[:]
+		// its finished steps' (the loudness steps'), and the whole render's
+		steps[i] = m.peak_steps[i][:min(len(m.peak_steps[i]), len(e))]
+		for v in m.peak_steps[i] {
+			peaks[i] = max(peaks[i], v)
+		}
 	}
-	return {loudness = analyze.loudness_from_meter(&m.meter, allocator), mix_peak = m.meter.sample_peak, part_peaks = m.part_peaks[:m.measured], mix_energy = m.meter.energy[:], part_energy = energy, from = m.from, samples = m.meter.pushed}
+	return {loudness = analyze.loudness_from_meter(&m.meter, allocator), mix_peak = m.meter.sample_peak, part_peaks = peaks, mix_energy = m.meter.energy[:], part_energy = energy, part_peak_steps = steps, from = m.from, samples = m.meter.pushed}
 }
