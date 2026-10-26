@@ -20,7 +20,7 @@
   },
   "phaser6": {
     "name": "phaser",
-    "description": "The phaser with six stages, as the classic small pedals have: three notches sweeping instead of two, a deeper, more liquid sweep. The same options.",
+    "description": "The phaser with six stages, as the classic small pedals have: three notches sweeping instead of two, a deeper, more liquid sweep. It is the phaser (its name) with two more stages: the phaser's options (rate, depth, center, feedback) reach all six through ap*, and mix is the sixth stage's. odawg show SPEC parts/NAME lists them as placed.",
     "nodes": {
       "ap5": { "class": "Filter", "type": "allpass", "input": "ap4", "q": 1, "frequency": { "base": 700, "by": "lfo", "octaves": 1.5 } },
       "ap6": { "class": "Filter", "type": "allpass", "input": "ap5", "q": 1, "frequency": { "base": 700, "by": "lfo", "octaves": 1.5 } },

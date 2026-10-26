@@ -83,7 +83,7 @@ Command_Row :: struct {
 COMMAND_TABLE := []Command_Row {
 	{"render", "render SPEC -o OUT.wav [--range R] [--master streaming|podcast|broadcast] [--stems DIR] [--float]", "the mix (and a WAV per stem with --stems: each part, return and bus)", run_render},
 	{"timeline", "timeline SPEC [--json]", "sections (start, bars, tempo, style), parts and tracks, markers, findings", run_timeline},
-	{"show", "show SPEC PATH [--json]", "one thing: sections/NAME, parts/NAME (its notes, its instrument's controls); or instrument/NAME (a built-in row, to copy)", run_show},
+	{"show", "show SPEC PATH [--json]", "one thing: sections/NAME, parts/NAME (its notes, its instrument's controls, its effects), returns/NAME, buses/NAME (their effects); or instrument/NAME (a built-in row, to copy)", run_show},
 	{"at", "at SPEC POSITION", "what plays at a position: the section and bar, the chord, the notes sounding", run_at},
 	{"inspect", "inspect SPEC [--range R] [--balance]", "renders and reports: findings from the spec, the form and the sound; --balance: every part's LU under the mix in every section", run_inspect},
 	{"analyze", "analyze SPEC [--master M] [--reference REF.wav] [--json]", "what the sound is made of, per section, for the mix and every stem: loudness, true peak, crest, stereo width, 31 third-octave bands, the parts crowding each other; beside a reference recording's", run_analyze},
@@ -470,6 +470,7 @@ run_show :: proc(a: ^Args) -> bool {
 						fmt.printfln("  control %s/%s = %g", p, s.programs.control_names[k], s.programs.controls[k].value)
 					}
 				}
+				print_chain(s, tr.chain, strings.concatenate({p, "/effects"}))
 				for i in tr.notes.first ..< base.span_end(tr.notes) {
 					n := s.notes[i]
 					fmt.printfln("  %8.3fs  beat %7.2f  %-8s %.3fs  vel %.2f", n.time, n.beat, song.note_name(s, n.pad, n.pitch), n.duration, n.velocity)
@@ -480,11 +481,52 @@ run_show :: proc(a: ^Args) -> bool {
 			fmt.eprintfln("odawg show: no part %q", name)
 			return false
 		}
+	case "returns", "buses":
+		node, ok := song.node_ref_from_name(s, name)
+		if !ok || (node.kind != .Return && node.kind != .Bus) || (group == "returns") != (node.kind == .Return) {
+			fmt.eprintfln("odawg show: no %s %q", group[:len(group) - 1], name)
+			return false
+		}
+		fmt.printfln("%s %s", group[:len(group) - 1], name)
+		print_chain(s, song.NODE_CHAIN[node.kind](s, node.ref), path)
 	case:
-		fmt.eprintfln("odawg show: %q: sections/NAME or parts/NAME", path)
+		fmt.eprintfln("odawg show: %q: sections/NAME, parts/NAME, returns/NAME or buses/NAME", path)
 		return false
 	}
 	return true
+}
+
+// A chain's effects in order, each by the label a lane or a command names
+// it by: a built-in with the values of what it reads, an effect row with
+// its controls (its options, its base rows' merged in) as compiled.
+@(private = "file")
+print_chain :: proc(s: ^song.Song, chain: base.Span, prefix: string) {
+	for d, i in s.chain[chain.first:base.span_end(chain)] {
+		label := s.labels[d] != "" ? s.labels[d] : fmt.tprint(i + 1)
+		row := device.DEVICE_TABLE[s.devices[d]]
+		if row.program {
+			fmt.printfln("  effect %d  %s  (an effect row)", i + 1, label)
+			if program := i32(s.params[d][.Program]); program >= 0 {
+				c := s.programs.programs[program].controls
+				for k in c.first ..< base.span_end(c) {
+					fmt.printfln("    control %s/%s/%s = %g", prefix, label, s.programs.control_names[k], s.programs.controls[k].value)
+				}
+			}
+			continue
+		}
+		fmt.printfln("  effect %d  %s", i + 1, label)
+		for q in row.reads {
+			pr := device.PARAM_TABLE[q]
+			if pr.path == "" {
+				continue
+			}
+			if v := int(s.params[d][q]); pr.unit == .Choice && v >= 0 && v < len(pr.choices) {
+				fmt.printfln("    param %s/%s/%s = %s", prefix, label, pr.path, pr.choices[v])
+			} else {
+				fmt.printfln("    param %s/%s/%s = %g", prefix, label, pr.path, s.params[d][q])
+			}
+		}
+	}
 }
 
 run_at :: proc(a: ^Args) -> bool {
