@@ -175,6 +175,9 @@ source_read :: proc(d: ^Declaring, src: ^spec.Source_Spec, pins: string) -> ^Sou
 @(private)
 pinning :: proc(host: ^Bank_Host) -> bool {return host != nil && host.pinning}
 
+@(private)
+verifying :: proc(host: ^Bank_Host) -> bool {return host != nil && host.verify}
+
 @(private = "file")
 licences_joined :: proc() -> string {
 	names := make([dynamic]string, context.temp_allocator)

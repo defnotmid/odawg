@@ -27,8 +27,10 @@ import common "deps:odecs/common"
 // identity (a changed file declares its set again); without them, from
 // root, by its size and time. `pinning`: fetch a source's files its pins
 // don't list yet, trusting what comes (odawg pin; the bank's files then
-// carry their pins to write). `fetched`: where fetched files go (""
-// the data directory).
+// carry their pins to write). `verify`: hash every fetched file already
+// on disk against its pin (else its size and the hash stamped when it
+// came), fetching it again where it differs. `fetched`: where fetched
+// files go ("" the data directory).
 Bank_Host :: struct {
 	data:    rawptr,
 	root:    string,
@@ -36,6 +38,7 @@ Bank_Host :: struct {
 	text:    proc(data: rawptr, path: string) -> (text: string, ok: bool),
 	stamp:   proc(data: rawptr, path: string) -> u64,
 	pinning: bool,
+	verify:  bool,
 	fetched: string,
 	pool:    ^common.Work_Pool, // the host's threads, lent to decode on (nil: the caller's alone)
 }

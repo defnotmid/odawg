@@ -264,7 +264,7 @@ bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Ne
 		if bf.register < 0 {
 			continue
 		}
-		if err := trust_disk ? nil : ensure_file(root, &FILE_TABLE[bf.register]); err != nil {
+		if err := trust_disk ? nil : ensure_file(root, &FILE_TABLE[bf.register], verifying(host)); err != nil {
 			miss(&missing, w.set, err.?)
 			w.file, ok = -1, false
 		}
@@ -284,7 +284,7 @@ bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Ne
 			w.file, ok = -1, false
 			continue
 		}
-		got, size, err := ensure_pinned(bf.path, bf.url, bf.sha256, bf.size)
+		got, size, err := ensure_pinned(bf.path, bf.url, bf.sha256, bf.size, verifying(host))
 		if err != nil {
 			miss(&missing, w.set, err.?)
 			w.file, ok = -1, false

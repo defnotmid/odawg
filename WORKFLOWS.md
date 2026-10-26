@@ -281,6 +281,10 @@ What went wrong on the way, and what changed:
   machine as a layer is an error.
 - **`odawg pin` succeeded when a fetch failed.** It printed the error but exited 0, so a
   script carried on with incomplete pins. It now exits non-zero.
+- **`odawg fetch SPEC` ignored the song's sources.** It knew only the register's sets, so for
+  an SFZ song it fetched none of its files and, the song naming no set, every set instead.
+  Now it loads the song as a render does: what the notes reach, sources included, each
+  file checked against its pin.
 - **Levels.** One note at velocity 0.8 spans 17.6 dB across the five SFZ files (the cellos
   -21.8 LUFS max momentary, the flute -39.4). A part's register and velocities move it
   further: the violin needed 10 dB more than its C4 calibration where it played. Every
@@ -302,6 +306,7 @@ What went wrong on the way, and what changed:
 - From-file songs: `at` per section, and `duration` cuts at bar lines.
 - An SFZ (or any layered row) can be a layer; a machine as a layer is an error (W6).
 - `odawg pin` exits non-zero when a file couldn't be fetched (W6).
+- `odawg fetch SPEC` fetches what the song plays, its sources' files too (W6).
 
 **In onimite:**
 

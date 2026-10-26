@@ -85,7 +85,7 @@ COMMAND_TABLE := []Command_Row {
 	{"inspect", "inspect SPEC [--range R]", "renders and reports: findings from the spec, the form and the sound", run_inspect},
 	{"analyze", "analyze SPEC [--master M] [--reference REF.wav] [--json]", "what the sound is made of, per section, for the mix and every stem: loudness, true peak, crest, stereo width, 31 third-octave bands, the parts crowding each other; beside a reference recording's", run_analyze},
 	{"sets", "sets", "the sample sets in the register: what each is, its licence and size", run_sets},
-	{"fetch", "fetch [SET|SPEC ...] [--verify]", "downloads sample sets now (every set when none is named; songs fetch theirs on first use)", run_fetch},
+	{"fetch", "fetch [SPEC|SET ...] [--verify]", "downloads now what a render would on first use: what a song's notes reach, from the register and its sources, each file checked against its pin and decoded; a set by name, all of it (every set when nothing is named); --verify hashes what is already on disk", run_fetch},
 	{"credits", "credits SPEC|SET ...", "what to credit for the sample sets and sources a song plays", run_credits},
 	{"pin", "pin SPEC", "fetches what the song plays from its sources and writes their pins (SHA-256 and size per file)", run_pin},
 	{"bench", "bench SPEC ... [-o OUT.f32]", "how fast songs render on one core (seconds of sound per CPU second), the mix written raw to compare", run_bench},
@@ -192,7 +192,7 @@ load :: proc(a: ^Args, l: ^Loaded, pinning := false) -> bool {
 	// then its sample sets declared (names to indices: the register's, its
 	// own, SFZ files), then only the zones the notes reach loaded (the
 	// register's fetched on first use)
-	host := assets.Bank_Host{root = filepath.dir(path), pinning = pinning, pool = a.pool}
+	host := assets.Bank_Host{root = filepath.dir(path), pinning = pinning, verify = a.verify, pool = a.pool}
 	read_style_files(&host, &l.spec, &l.findings)
 	assets.bank_declare_spec(&l.bank, &l.spec, &l.findings, &host)
 	ok := song.song_from_spec(&l.spec, &l.song, &l.bank)

@@ -1,6 +1,7 @@
 package main
 
 import "core:fmt"
+import "core:mem/virtual"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
@@ -63,24 +64,48 @@ set_names_from_args :: proc(a: ^Args) -> (names: [dynamic]string, ok: bool, sour
 	return
 }
 
-// Downloads (and verifies) the named sets, or every set.
+// Downloads now what a render would on first use: for a song, what its
+// notes reach (the register's and its sources', each checked against its
+// pin), loaded as a render loads it; for a set named, all of it; with
+// nothing named, every set. --verify hashes what is already on disk.
 run_fetch :: proc(a: ^Args) -> bool {
-	names, ok, _ := set_names_from_args(a)
-	if !ok {
-		return false
-	}
-	verify := a.verify
-	if len(names) == 0 {
-		for s in assets.SET_TABLE {
-			append(&names, s.name)
-		}
-	}
 	root, err := assets.data_dir(context.temp_allocator)
 	if err != nil {
 		fmt.eprintfln("odawg fetch: %s", err.?)
 		return false
 	}
+	verify := a.verify
 	all := true
+	names := make([dynamic]string, context.temp_allocator)
+	for arg in a.positional {
+		if strings.has_suffix(arg, ".json") {
+			one := a^
+			one.positional = make([dynamic]string, context.temp_allocator)
+			append(&one.positional, arg)
+			l: Loaded
+			ok := load(&one, &l)
+			defer virtual.arena_destroy(&l.arena) // its samples, decoded: not kept past the check
+			print_findings(l.findings[:])
+			if !ok || base.has_errors(l.findings[:]) {
+				fmt.eprintfln("odawg fetch: %s: not everything it plays could be had (above)", arg)
+				all = false
+				continue
+			}
+			fmt.printfln("%s: what it plays is in %s", arg, root)
+			continue
+		}
+		if _, found := assets.set_row_from_name(arg); !found {
+			fmt.eprintfln("odawg: no sample set %q (odawg sets lists them)", arg)
+			all = false
+			continue
+		}
+		append(&names, arg)
+	}
+	if len(a.positional) == 0 {
+		for s in assets.SET_TABLE {
+			append(&names, s.name)
+		}
+	}
 	for name in names {
 		s, _ := assets.set_row_from_name(name)
 		if ferr := assets.ensure_set(root, s, verify); ferr != nil {

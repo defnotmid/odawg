@@ -408,7 +408,12 @@ parts = { bass = { instrument = { "fashionbass/fashionbass_clean.sfz", ampeg_rel
   A file the pins don't list is a `not_pinned` finding.
 - `odawg pin SPEC` fetches what the song plays and writes the pins. It exits non-zero when
   a file couldn't be fetched (what was fetched is pinned; run it again). It trusts whatever
-  the URL serves the first time. Pin from the author's own published pins (or hashes)
+  the URL serves the first time.
+- `odawg fetch SPEC` downloads now what a render would on first use (for working offline,
+  or a build that shouldn't fetch mid-render): what the song's notes reach, from the
+  register and its sources, each file checked against its pin and decoded; non-zero when
+  anything couldn't be had. A file already on disk is trusted by its size and the hash
+  stamped when it came; `--verify` hashes it again and fetches it anew where it differs. Pin from the author's own published pins (or hashes)
   when they have them, read the licence, and look over the new lines before committing
   them.
 - Treat a song's or a style's `sources` like code you run: they decide what is downloaded

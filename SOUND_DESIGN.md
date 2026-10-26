@@ -140,7 +140,10 @@ trumpet and cellos from VS Chamber Orchestra 2.
 5. **`odawg pin SPEC`** fetches what the song's notes reach and writes each
    file's SHA-256 and size to the pins. It fails (non-zero) when a file
    couldn't be fetched; run it again. Look over the new lines and commit
-   them with the song.
+   them with the song. Any command that loads the song (`render`, `inspect`,
+   `analyze`) fetches a pinned file the first time a note needs it;
+   `odawg fetch SPEC` fetches them all ahead of time (`--verify` hashes
+   what is already on disk again).
 6. **Read the findings:** `unsupported_opcode` names what odawg doesn't play
    (VS Chamber Orchestra 2's `ampeg_dynamic` only matters when a CC moves an
    envelope during a note); `odawg sfz-check FILE` lists every opcode a file
