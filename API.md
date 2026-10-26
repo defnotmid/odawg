@@ -401,6 +401,8 @@ parts = { keys = { instrument = "pluck", effects = { "autowah", { "tremolo", dep
 
 ### 3.5 Styles
 
+A style is optional: a section without one plays only the parts the song writes, and a
+song of its own parts, instruments and effects needs no preset at all (SOUND_DESIGN.md).
 A style is a partial spec: its parts with play entries for each energy band, plus a mix
 template. A band `{ 0.4, 0.7 }` runs from 0.4 up to, not including, 0.7 (a band ending at 1
 includes it), so two bands that touch never both play. There's no new schema, and none ship in the library: a song's own `styles = { name = {

@@ -7,6 +7,21 @@ sounds to reuse: a song should pick its own sounds, key, tempo and feel.
 built-in row, and `examples/instruments/synths.json` has the voices below
 written out.
 
+**You don't need a preset.** The example styles (`styles/`), the library rows
+(`instruments/synths.json`, `instruments/effects.json`) and the built-in
+Tone rows are shortcuts. A song can name none of them:
+- a section with no `style`;
+- parts that write their own `play`;
+- instruments as rows of nodes (or an SFZ file, or a sample set);
+- effects as built-ins or rows of nodes;
+- `transition: "none"` where a preset's fill would land.
+
+Start from a preset when it's the sound you want, change it by name (`{ "name":
+"pad", "cutoff": 900 }`), or skip it. The sections below are how to build each
+piece yourself. Recorded sounds (sample sets, SFZ libraries) are fetched when
+first played (or with `odawg fetch SPEC`) and checked against their pins;
+none of them ship in the download.
+
 ## What makes a voice sound expensive
 
 Most cheap-sounding synths are missing the same few things:

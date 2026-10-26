@@ -3,6 +3,17 @@
 Six runs through the API in [API.md](API.md), as the agent would write them. After each
 are the problems it hit and what changed in the API because of them.
 
+**Presets are a shortcut, not the way.** The walkthroughs lean on the example styles
+(`styles/lofi.json`, `styles/house.json`) and library rows (`synths.json`, `effects.json`)
+to stay short. A song doesn't need any of them. Leave out `style`, write each part's
+`play` yourself, give each part an instrument (a row of nodes, an SFZ file, a sample
+set) and its own effects (built-ins or rows of nodes), and set `transition = "none"` where
+a preset's fill isn't wanted. A song made of its own choices is the one that won't sound
+like every other one ([SOUND_DESIGN.md](SOUND_DESIGN.md)). Whatever recorded sound a
+preset or a song plays (a sample set, an SFZ library) is downloaded when it's first
+played, or with `odawg fetch SPEC`, and checked against its pins. None of it ships in
+the download.
+
 ---
 
 ## W1. A narrated explainer: the narration leads
