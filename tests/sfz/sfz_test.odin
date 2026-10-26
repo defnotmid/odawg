@@ -190,3 +190,69 @@ test_sfz_instrument :: proc(t: ^testing.T) {
 	}
 	near(t, "F5: a 44.1 kHz recording from its offset, in its own frames", out, 8, 880)
 }
+
+// A layered row whose SFZ layer can't play a note yet (its region's file
+// isn't loaded: a host plays on until it is): that region's voice is
+// silent from its first sample, and a voice of the same program starting
+// while it holds (the loaded region) plays beside it. Every voice a call
+// runs has its nodes started (v0.0.36 ran the silent voice's envelope
+// unstarted: a crash), the missing region plays silence and the rest
+// sound.
+@(test)
+test_layer_unavailable :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	_ = virtual.arena_init_growing(&arena)
+	context.allocator = virtual.arena_allocator(&arena)
+	join :: proc(parts: ..string) -> string {
+		p, _ := filepath.join(parts, context.temp_allocator)
+		return p
+	}
+	tmp := os.get_env("TMPDIR", context.temp_allocator)
+	root := join(tmp != "" ? tmp : "/tmp", fmt.tprintf("odawg_sfz_missing_%d", os.get_pid()))
+	defer os.remove_all(root)
+	_ = os.make_directory_all(join(root, "inst", "samples"))
+	write :: proc(root, path: string, data: []u8) {
+		p, _ := filepath.join({root, path}, context.temp_allocator)
+		_ = os.write_entire_file(p, data)
+	}
+	// soft.wav is never written: its region can't play
+	write(root, "inst/two.sfz", transmute([]u8)string(`<control> default_path=samples/
+<global> amp_veltrack=0 ampeg_release=0.05
+<region> sample=soft.wav lovel=0 hivel=63
+<region> sample=loud.wav lovel=64 hivel=127
+`))
+	write(root, "inst/samples/loud.wav", sine_wav(660, 2))
+	sp := new(spec.Spec)
+	findings := make(base.Findings)
+	testing.expect(t, spec.spec_from_json(`{ bpm: 120, gain_db: 0, seed: 1, sections: [ { name: "a", duration: "2m" } ],
+		instruments: { grit: { mono: true, portamento: 0.03, nodes: {
+			env: { class: "Env", attack: 0.01, decay: 0.2, sustain: 0.6, release: 0.1 },
+			out: { class: "Osc", wave: "triangle", amp: "env", gain_db: -12 } } } },
+		parts: { p: { gain_db: 0, instrument: { layers: [ { instrument: "grit" }, { instrument: { name: "inst/two.sfz" }, gain_db: -8 } ] }, play: [ { name: "a", events: [
+			{ time: 0, note: "F1", duration: 2, velocity: 0.3 },
+			{ time: 0.5, note: "C4", duration: 1, velocity: 0.85 },
+			{ time: 2.5, note: "F1", duration: 0.5, velocity: 0.3 } ] } ] } } }`, sp, &findings))
+	host := assets.Bank_Host{root = root}
+	bank: device.Bank
+	defer device.bank_destroy(&bank)
+	_ = assets.bank_declare_spec(&bank, sp, &findings, &host)
+	s := new(song.Song)
+	testing.expect(t, song.song_from_spec(sp, s, &bank))
+	needs := make([dynamic]device.Sample_Need)
+	song.sample_needs(s, &needs)
+	_ = assets.bank_load(&bank, needs[:], &findings, nil, &host) // soft.wav: a finding, and it plays on
+	out := render.output_from_song(s, {})
+	defer render.output_destroy(&out)
+	level :: proc(out: render.Output, from, to: f64) -> (peak: f32) {
+		for i in int(from * RATE) ..< min(int(to * RATE), out.frames) {
+			peak = max(peak, abs(out.left[i]), abs(out.right[i]))
+		}
+		return
+	}
+	testing.expectf(t, level(out, 0.1, 0.4) > 0.01, "the row's other layer under the missing region: silent")
+	testing.expectf(t, level(out, 0.6, 1.4) > 0.05, "the loaded region beside the missing one's voice: silent")
+	for v in out.left {
+		testing.expect(t, !math.is_nan(v) && abs(v) < 4)
+	}
+}

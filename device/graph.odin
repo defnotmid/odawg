@@ -985,7 +985,11 @@ graph_run :: proc(progs: ^Programs, env: ^Voice_Env, play: i32, voices: []Graph_
 				heard ||= lane.silent & bit == 0
 			}
 			if !heard {
-				// over for every voice: silence, nothing run
+				// over for every voice: silence, nothing run but the starts of
+				// the voices starting (a voice silent from its first sample, a
+				// region whose sample isn't loaded, is run later beside one
+				// that hears the node: its state must be started then)
+				node_starts(&c)
 				for &lane in lanes {
 					ol, or := node_out(&c, &lane)
 					slice_zero(ol)

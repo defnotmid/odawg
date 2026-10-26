@@ -48,9 +48,15 @@ Adsr_Row :: struct {
 }
 
 ADSR_STAGES := [Adsr_Stage]Adsr_Row {
+	// Idle and Sustain never end; an envelope never started (all zero: Idle
+	// ending at 0) finishes into an Idle that doesn't, silent
 	.Idle = {
 		enter = proc "contextless" (e: ^Adsr) {e.end = max(int)},
 		fill = proc "contextless" (e: ^Adsr, out: []f32) {fill(out, 0)},
+		finish = proc "contextless" (e: ^Adsr) -> f32 {
+			e.end = max(int)
+			return 0
+		},
 	},
 	.Delay = {
 		enter = proc "contextless" (e: ^Adsr) {e.end = first_reaching(f64(e.delay) * RATE)},
@@ -113,6 +119,10 @@ ADSR_STAGES := [Adsr_Stage]Adsr_Row {
 	.Sustain = {
 		enter = proc "contextless" (e: ^Adsr) {e.end = max(int)},
 		fill = proc "contextless" (e: ^Adsr, out: []f32) {fill(out, e.sustain)},
+		finish = proc "contextless" (e: ^Adsr) -> f32 {
+			e.end = max(int)
+			return e.sustain
+		},
 	},
 	.Release = {
 		enter = proc "contextless" (e: ^Adsr) {approach_enter(e, e.release, 0)},

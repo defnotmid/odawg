@@ -186,3 +186,19 @@ stepped_sample :: proc(x: ^Stepped, gate_closes: bool) -> f32 {
 	e.samples += 1
 	return e.value
 }
+
+// An envelope never started (all zero) plays silence, released or not: a
+// node run over a voice whose start was missed is silent, never a crash.
+@(test)
+test_adsr_unstarted :: proc(t: ^testing.T) {
+	e: Adsr
+	out: [300]f32
+	for &v in out {
+		v = 1
+	}
+	adsr_run(&e, out[:], 100)
+	for v in out {
+		testing.expect_value(t, v, 0)
+	}
+	testing.expect(t, e.stage == .Idle)
+}
