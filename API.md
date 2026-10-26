@@ -283,8 +283,15 @@ A row:
   `delay_time`, an AutoFilter's `frequency`) is read once, at the tempo of the first
   section its part or chain plays in. Where that part or chain plays at another tempo,
   it keeps the time it had and drifts off the beat: a `tempo_fixed` warning names the
-  field and the sections. In a mix, each placed song keeps its own tempo map
+  field and the sections. A part entering after an intro at another tempo reads at the
+  tempo where it enters. In a mix, each placed song keeps its own tempo map
   (`Song.placement_tempo`), so its voices and rows are on its own beat.
+- **Two sides.** An Lfo's `spread` (degrees) makes it two-sided: its right side runs that
+  far ahead of its left. A modulator of two sides moves what it moves a side each, and
+  makes a mono node two-sided. This covers a Filter's cutoff and q, a Ladder's, a OnePole's
+  cutoff, a Comb's delay, and any node's `amp` and `pan`. So a phaser's stages or a flanger's
+  line sweep the sides apart and a tremolo dips them apart. Exact from a seek, as everything
+  else.
 - **Steady values:** a node reading only what holds for the note (velocity, accent, a
   Random, another such node) through a stateless kind (Map, Mul, Mix, Drive) runs one
   sample a chunk.
@@ -370,7 +377,8 @@ parts = { keys = { instrument = "pluck", effects = { "autowah", { "tremolo", dep
   names rows from it as a song's part does, on the clip clock: no tempo, so 120 bpm. With
   no `host_rows`, a row's name on a clip is `unknown_effect`.
 - **The library** is `examples/instruments/effects.json`, beside `synths.json`:
-  - `phaser`: 4 swept all-pass stages against the dry signal.
+  - `phaser`: 4 swept all-pass stages against the dry signal, the right side's sweep 90
+    degrees ahead (`spread`; 0 sweeps both together).
   - `phaser6`: the same with 6 stages, written as `phaser` plus two nodes.
   - `flanger`: a swept 1–5 ms comb with feedback, set against the dry signal.
   - `tremolo`.
@@ -383,9 +391,9 @@ parts = { keys = { instrument = "pluck", effects = { "autowah", { "tremolo", dep
 
   | effect | time |
   | --- | --- |
-  | `phaser` | 2.7 ms |
+  | `phaser` | 5.5 ms with its default spread (2.9 at spread 0: the sides' coefficients are swept apart) |
   | built-in `Chorus` | 1.2 ms |
-  | `phaser6` | 4.2 ms |
+  | `phaser6` | 8.0 ms with its default spread (4.2 at spread 0) |
   | `flanger` | 0.4 ms |
   | `autowah` | 0.9 ms |
 

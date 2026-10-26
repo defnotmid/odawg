@@ -79,7 +79,7 @@ nodes_init :: proc "contextless" () {
 		fields = {{name = "from", unit = .Number}, {name = "to", unit = .Number, default = 1}, {name = "time", unit = .Seconds}, {name = "curve", unit = .Number, default = 1}},
 	})
 	NODE_LFO = register_node(r, {
-		name = "Lfo", state = size_of(dsp.Osc), start = start_lfo, process = process_lfo,
+		name = "Lfo", state = size_of(Lfo_State), sides = lfo_sides, start = start_lfo, process = process_lfo,
 		fields = {
 			{name = "wave", unit = .Choice, choices = PLAIN_WAVES, at_start = true},
 			{name = "rate", unit = .Hz, default = 4, per_sample = true, pace = true, syncs = true},
@@ -87,6 +87,7 @@ nodes_init :: proc "contextless" () {
 			{name = "fade", unit = .Seconds},
 			{name = "phase", unit = .Number, at_start = true},
 			{name = "sync", unit = .Number, at_start = true, sync = true}, // 1: rate is cycles a beat (a Tone length written there)
+			{name = "spread", unit = .Number, at_start = true}, // degrees the right side runs ahead (0: one side)
 		},
 	})
 	NODE_FILTER = register_node(r, {
@@ -556,6 +557,20 @@ LFO_RATE :: 4
 LFO_PHASE :: 7
 @(private = "file")
 LFO_SYNC :: 8
+@(private = "file")
+LFO_SPREAD :: 9
+
+// A side each: the right `spread` degrees ahead of the left.
+@(private = "file")
+Lfo_State :: struct {
+	osc: [2]dsp.Osc,
+}
+
+// Two sides where it spreads.
+@(private = "file")
+lfo_sides :: proc(values: ^[MAX_FIELDS]f32) -> bool {
+	return values[LFO_SPREAD] != 0
+}
 
 // A voice starting: its oscillator at its phase, where its clock has it (a
 // note's starts at 0; an effect row's is the song's, so a seek puts it
@@ -563,17 +578,19 @@ LFO_SYNC :: 8
 // in beats (sync) counts the clock in beats: a row's Lfo is on the bar.
 @(private = "file")
 start_lfo :: proc(c: ^Node_Call, lane: ^Lane) {
-	s := node_state(c, lane, dsp.Osc)
+	s := node_state(c, lane, Lfo_State)
 	vals := node_values(c, lane)
 	phase := f64(vals[LFO_PHASE]) + (vals[LFO_SYNC] != 0 ? f64(vals[LFO_RATE]) * lane.beat : f64(vals[LFO_RATE]) * f64(lane.clock) / RATE)
-	s^ = {wave = dsp.Wave(u8(vals[3])), width = 0.5, phase = phase - math.floor(phase)}
+	s.osc[0] = {wave = dsp.Wave(u8(vals[3])), width = 0.5, phase = phase - math.floor(phase)}
+	right := phase + f64(vals[LFO_SPREAD]) / 360
+	s.osc[1] = {wave = s.osc[0].wave, width = 0.5, phase = right - math.floor(right)}
 }
 
 @(private = "file")
 process_lfo :: proc(c: ^Node_Call) {
 	n := c.frames
 	for &lane in c.lanes {
-		s := node_state(c, &lane, dsp.Osc)
+		s := node_state(c, &lane, Lfo_State)
 		vals := node_values(c, &lane)
 		rate: [NODE_CHUNK]f32 = ---
 		inc: [NODE_CHUNK]f64 = ---
@@ -592,13 +609,19 @@ process_lfo :: proc(c: ^Node_Call) {
 				inc[i] = lane.clock + i64(i) < delay ? 0 : f64(varies ? rate[i] : v) / RATE
 			}
 		}
-		l, _ := node_out(c, &lane)
-		dsp.osc_run(s, inc[:n], l)
+		l, r := node_out(c, &lane)
+		dsp.osc_run(&s.osc[0], inc[:n], l)
+		if c.node.sides {
+			dsp.osc_run(&s.osc[1], inc[:n], r)
+		}
 		if delay > 0 || fade > 0 {
 			for i in 0 ..< n {
 				k := lane.clock + i64(i) - delay
 				g: f32 = k < 0 ? 0 : (fade > 0 && f64(k) < fade ? f32(f64(k) / fade) : 1)
 				l[i] *= g
+				if c.node.sides {
+					r[i] *= g
+				}
 			}
 		}
 	}
@@ -656,6 +679,11 @@ process_filter :: proc(c: ^Node_Call) {
 			copy(r, ir)
 		}
 		sides := c.node.stereo ? 2 : 1
+		if c.node.split {
+			// a modulator of two sides: each side's cutoff and q its own
+			filter_split(c, &lane, s, v, l, r)
+			continue
+		}
 		hz, q: [NODE_CHUNK]f32 = ---, ---
 		swept, cutoff := node_curve(c, &lane, FILTER_FREQUENCY, v[FILTER_FREQUENCY], hz[:n])
 		resonant, res := node_curve(c, &lane, FILTER_Q, v[FILTER_Q], q[:n])
@@ -708,6 +736,23 @@ memory_filter_node :: proc(values: ^[MAX_FIELDS]f32, slots: []int) -> f64 {
 	return FX_FORGET / max(sigma, 1e-3) + f64(stages - 1) / RATE
 }
 
+// A Filter whose cutoff or q a modulator of two sides moves: each side's
+// coefficients from its own curves, both sides in one pass.
+@(private = "file")
+filter_split :: proc(c: ^Node_Call, lane: ^Lane, s: ^Filter_State, v: ^[MAX_FIELDS]f32, l, r: []f32) {
+	n := len(l)
+	coefficients: [2][NODE_CHUNK]dsp.Svf = ---
+	for side in 0 ..< 2 {
+		hz, q: [NODE_CHUNK]f32 = ---, ---
+		swept, cutoff := node_curve(c, lane, FILTER_FREQUENCY, v[FILTER_FREQUENCY], hz[:n], side)
+		resonant, res := node_curve(c, lane, FILTER_Q, v[FILTER_Q], q[:n], side)
+		for i in 0 ..< n {
+			coefficients[side][i] = dsp.svf_coefficients(s.chain.type, swept ? hz[i] : cutoff, resonant ? q[i] : res, v[FILTER_GAIN])
+		}
+	}
+	dsp.filter_chain_run_split(&s.chain, coefficients[0][:n], coefficients[1][:n], l, r)
+}
+
 // The 303's diode ladder (its stages carry across a mono program's slide).
 @(private = "file")
 LADDER_FREQUENCY :: 3
@@ -743,19 +788,22 @@ process_ladder :: proc(c: ^Node_Call) {
 			copy(r, ir)
 		}
 		hz, q: [NODE_CHUNK]f32 = ---, ---
-		swept, cutoff := node_curve(c, &lane, LADDER_FREQUENCY, v[LADDER_FREQUENCY], hz[:n])
-		resonant, res := node_curve(c, &lane, LADDER_Q, v[LADDER_Q], q[:n])
-		if !swept {
-			for i in 0 ..< n {
-				hz[i] = cutoff
-			}
-		}
-		if !resonant {
-			for i in 0 ..< n {
-				q[i] = res
-			}
-		}
 		for side in 0 ..< (c.node.stereo ? 2 : 1) {
+			// the cutoff and q: once, or a side each where it splits
+			if side == 0 || c.node.split {
+				swept, cutoff := node_curve(c, &lane, LADDER_FREQUENCY, v[LADDER_FREQUENCY], hz[:n], side)
+				resonant, res := node_curve(c, &lane, LADDER_Q, v[LADDER_Q], q[:n], side)
+				if !swept {
+					for i in 0 ..< n {
+						hz[i] = cutoff
+					}
+				}
+				if !resonant {
+					for i in 0 ..< n {
+						q[i] = res
+					}
+				}
+			}
 			ladder(&s.y[side], &s.x_last[side], side == 0 ? l : r, hz[:n], q[:n])
 		}
 	}
@@ -809,8 +857,25 @@ process_one_pole :: proc(c: ^Node_Call) {
 		l, r := node_out(c, &lane)
 		hz: [NODE_CHUNK]f32 = ---
 		base_hz := node_values(c, &lane)[ONE_POLE_FREQUENCY]
-		swept, cutoff := node_curve(c, &lane, ONE_POLE_FREQUENCY, base_hz, hz[:n])
 		ks: [NODE_CHUNK]f32 = ---
+		if c.node.split {
+			// a modulator of two sides: each side's cutoff its own
+			for side in 0 ..< 2 {
+				x, out := side == 0 ? il : ir, side == 0 ? l : r
+				swept, cutoff := node_curve(c, &lane, ONE_POLE_FREQUENCY, base_hz, hz[:n], side)
+				for i in 0 ..< n {
+					ks[i] = 1 - dsp.exp_decay(-math.TAU * min(swept ? hz[i] : cutoff, 0.49 * RATE) / RATE)
+				}
+				y := s.y[side]
+				for i in 0 ..< n {
+					y += ks[i] * (x[i] - y)
+					out[i] = y
+				}
+				s.y[side] = y
+			}
+			continue
+		}
+		swept, cutoff := node_curve(c, &lane, ONE_POLE_FREQUENCY, base_hz, hz[:n])
 		if swept {
 			for i in 0 ..< n {
 				ks[i] = 1 - dsp.exp_decay(-math.TAU * min(hz[i], 0.49 * RATE) / RATE)
@@ -1148,13 +1213,19 @@ process_comb :: proc(c: ^Node_Call) {
 		s := node_state(c, &lane, Comb_State)
 		fb := node_value(c, &lane, COMB_FEEDBACK)
 		release := f64(node_value(c, &lane, COMB_RELEASE)) * RATE
-		delays: [NODE_CHUNK]f32 = ---
-		moved, d := node_curve(c, &lane, COMB_DELAY, f32(s.delay / RATE), delays[:n])
-		if !moved {
-			for i in 0 ..< n {
-				delays[i] = d
+		// its delay over the chunk: once, or a side each where a modulator
+		// of two sides moves it (it splits)
+		delays: [2][NODE_CHUNK]f32 = ---
+		moved: [2]bool
+		for side in 0 ..< (c.node.split ? 2 : 1) {
+			m, d := node_curve(c, &lane, COMB_DELAY, f32(s.delay / RATE), delays[side][:n], side)
+			if !m {
+				for i in 0 ..< n {
+					delays[side][i] = d
+				}
+				m = d != f32(s.delay / RATE)
 			}
-			moved = d != f32(s.delay / RATE)
+			moved[side] = m
 		}
 		// what reads two sides writes both (the graph's rule): a line each,
 		// side by side
@@ -1169,14 +1240,15 @@ process_comb :: proc(c: ^Node_Call) {
 			if release > 0 && t >= lane.gate {
 				fade = f32(max(0, 1 - f64(t - lane.gate) / release))
 			}
-			d := moved ? clamp(f64(delays[i]) * RATE, 1, COMB_LINE - 2) : s.delay
-			pos := f64(s.write) - d
-			if pos < 0 {
-				pos += COMB_LINE
-			}
-			i0 := int(pos)
-			fr := f32(pos - f64(i0))
 			for side in 0 ..< sides {
+				ds := c.node.split ? side : 0
+				d := moved[ds] ? clamp(f64(delays[ds][i]) * RATE, 1, COMB_LINE - 2) : s.delay
+				pos := f64(s.write) - d
+				if pos < 0 {
+					pos += COMB_LINE
+				}
+				i0 := int(pos)
+				fr := f32(pos - f64(i0))
 				line := &s.line[side]
 				delayed := line[i0 & (COMB_LINE - 1)] * (1 - fr) + line[(i0 + 1) & (COMB_LINE - 1)] * fr
 				s.lp[side] += s.k * (delayed - s.lp[side])

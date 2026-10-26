@@ -186,7 +186,8 @@ and places a row in any chain by its name, with its options:
   - A row has no note. Envelopes, oscillators, noise and samples belong to
     instruments, and a row using one is refused (`effect_reads_note`).
 - **Sweeps.** A phaser sums the dry signal with all-pass stages whose
-  frequency an Lfo moves in octaves. Where the stages have turned the phase
+  frequency an Lfo moves in octaves (the library's sweeps its right side 90
+  degrees ahead: an Lfo's `spread`, so even a centred sound comes out wide). Where the stages have turned the phase
   half a cycle, the sum cancels: a notch. Four stages give two notches, six
   give three. A flanger is a short `Comb` (1–5 ms) whose delay an Lfo moves.
   Setting it against the dry signal (`effects.json`'s `against` node) makes

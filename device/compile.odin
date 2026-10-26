@@ -1399,12 +1399,14 @@ program_derive :: proc(progs: ^Programs, program: i32) -> (reshaped: bool) {
 		for &m in progs.mods[g.mods.first:base.span_end(g.mods)] {
 			// the note's velocity, accent and slide hold for it, as a steady node does
 			m.steady = m.node >= 0 ? nodes[m.node].steady : m.source != SOURCE_GATE
+			m.stereo = m.node >= 0 && nodes[m.node].sides
 			m.unipolar = m.node < 0 || node_row(nodes[m.node].kind).unipolar
 			f := field_of_slot(g.kind, int(m.slot))
 			m.per_sample = f != nil && f.per_sample
 			mod_coefficients(&m)
 			g.mod_slots |= u64(1) << u64(m.slot)
-			stereo ||= m.slot == FIELD_PAN
+			// a pan, or a modulator of two sides (an Lfo's spread), makes two
+			stereo ||= m.slot == FIELD_PAN || (m.stereo && m.per_sample)
 			steady &&= m.steady
 		}
 		g.steady = row.steady || steady
@@ -1413,6 +1415,11 @@ program_derive :: proc(progs: ^Programs, program: i32) -> (reshaped: bool) {
 		g.sides = row.stereo || (row.sides != nil && row.sides(&g.values)) || (row.inputs != 0 && stereo)
 		g.stereo = stereo || g.sides || g.values[FIELD_PAN] != 0
 		g.level = g.values[FIELD_GAIN] != 1 || g.values[FIELD_PAN] != 0 || g.mod_slots & (u64(1) << FIELD_AMP | u64(1) << FIELD_PAN) != 0
+		// a side each where a modulator of two sides (an Lfo's spread) moves it
+		g.split = false
+		for m in progs.mods[g.mods.first:base.span_end(g.mods)] {
+			g.split ||= g.stereo && m.stereo && m.per_sample
+		}
 		g.fill = false
 		if row.keeps && row.memory != nil {
 			memory = max(memory, row.memory(&g.values, row.slots))

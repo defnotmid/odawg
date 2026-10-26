@@ -168,6 +168,23 @@ filter_chain_run_sides :: proc "contextless" (f: ^Filter_Chain, c: []Svf, l, r: 
 	f.state = st
 }
 
+// Filters l with cl's coefficients and r with cr's (a sample each), in
+// place: the sides of a chain whose cutoff moves apart on each (a
+// modulator of two sides), both in one pass over the samples.
+filter_chain_run_split :: proc "contextless" (f: ^Filter_Chain, cl, cr: []Svf, l, r: []f32) #no_bounds_check {
+	st := f.state
+	stages := f.stages
+	for i in 0 ..< len(l) {
+		a, b := l[i], r[i]
+		for k in 0 ..< stages {
+			a = svf_step(cl[i], &st[0][k], a)
+			b = svf_step(cr[i], &st[1][k], b)
+		}
+		l[i], r[i] = a, b
+	}
+	f.state = st
+}
+
 // Coefficients for a cutoff that moves every sample (`hz`, one per sample):
 // the shape (its q and gain hold) once, each cutoff's warp.
 filter_chain_coefficients :: proc "contextless" (f: ^Filter_Chain, hz: []f32, out: []Svf) {

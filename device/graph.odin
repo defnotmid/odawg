@@ -281,6 +281,7 @@ Mod :: struct {
 	scaled:     bool, // Add: k is c1 times the field's base
 	steady:     bool, // the source holds for the note: one factor or term a chunk
 	per_sample: bool, // the field is read every sample (else at the note's start)
+	stereo:     bool, // its source writes two sides: where its node splits, it moves the field a side each
 	exponent:   f32,
 	c0, c1:     f32,
 }
@@ -299,6 +300,7 @@ Graph_Node :: struct {
 	level:     bool, // it has a level to apply (a gain, a pan, what moves them)
 	steady:    bool, // its output holds for the note: run one sample a chunk
 	fill:      bool, // steady, and read as an input by a node that isn't: its one sample spread over the chunk
+	split:     bool, // it writes two sides and a modulator of two sides moves it: what that moves is a side each (node_curve's side)
 	buf:       u8, // the lane buffer it writes
 	state:     i32, // bytes into the voice's state
 	mod_slots: u64, // the slots its modulators move
@@ -509,7 +511,9 @@ node_values_layered :: proc(c: ^Node_Call, lane: ^Lane) -> ^[MAX_FIELDS]f32 {
 // order: while every one so far holds for the chunk (a steady source, one
 // whose output is over: m = 0) the field is one value (`v`, out untouched);
 // from the first that moves within it, out holds it per sample (`varies`).
-node_curve :: proc(c: ^Node_Call, lane: ^Lane, slot: int, b: f32, out: []f32) -> (varies: bool, v: f32) {
+// `side` 1: as a modulator of two sides moves it on the right (a node that
+// splits asks for each).
+node_curve :: proc(c: ^Node_Call, lane: ^Lane, slot: int, b: f32, out: []f32, side := 0) -> (varies: bool, v: f32) {
 	v = b
 	if c.node.mod_slots & (u64(1) << u64(slot)) == 0 {
 		return
@@ -543,9 +547,10 @@ node_curve :: proc(c: ^Node_Call, lane: ^Lane, slot: int, b: f32, out: []f32) ->
 		}
 		k := m.scaled ? m.c1 * b : m.c1
 		over := m.node >= 0 && lane.silent & (u64(1) << u64(m.node)) != 0
+		from := m.stereo ? side : 0
 		if over || m.steady {
 			// one value for the chunk: one term or factor
-			x := over ? 0 : value(lane_buf(lane, m.source, 0, 1), 0, m.exponent)
+			x := over ? 0 : value(lane_buf(lane, m.source, from, 1), 0, m.exponent)
 			add, mul: f32 = 0, 1
 			switch m.op {
 			case .Add:
@@ -583,7 +588,7 @@ node_curve :: proc(c: ^Node_Call, lane: ^Lane, slot: int, b: f32, out: []f32) ->
 			}
 			varies = true
 		}
-		src := lane_buf(lane, m.source, 0, n)
+		src := lane_buf(lane, m.source, from, n)
 		if m.op != .Octaves && m.op != .Mul {
 			flush(out, octaves[:n], &pending)
 		}
@@ -1156,13 +1161,30 @@ release_at :: #force_inline proc "contextless" (gate, at: i64, c: int) -> int {
 	return d >= 0 && d < i64(c) ? int(d) : -1
 }
 
-// A node's level, its amp modulators and its pan, over its chunk.
+// A node's level, its amp modulators and its pan, over its chunk (a side
+// each where it splits).
 @(private = "file")
 node_level :: proc(c: ^Node_Call, lane: ^Lane, l, r: []f32) {
 	n := len(l)
 	node := c.node
 	values := node_values(c, lane)
 	gain_db, pan_base := values[FIELD_GAIN], values[FIELD_PAN]
+	if node.split {
+		sides := [2][]f32{l, r}
+		for side in 0 ..< 2 {
+			x := sides[side]
+			gain, pan: [NODE_CHUNK]f32 = ---, ---
+			amp_varies, g := node_curve(c, lane, FIELD_AMP, 1, gain[:n], side)
+			pan_varies, p := node_curve(c, lane, FIELD_PAN, pan_base, pan[:n], side)
+			sign: f32 = side == 0 ? -1 : 1
+			for i in 0 ..< n {
+				a := (amp_varies ? gain[i] : g) * gain_db
+				q := clamp(pan_varies ? pan[i] : p, -1, 1)
+				x[i] *= a * (1 + sign * q)
+			}
+		}
+		return
+	}
 	gain: [NODE_CHUNK]f32 = --- // node_curve's, read where it varies
 	if varies, g := node_curve(c, lane, FIELD_AMP, 1, gain[:n]); varies {
 		g = gain_db
