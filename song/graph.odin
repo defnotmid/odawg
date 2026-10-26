@@ -1,5 +1,6 @@
 package odawg_song
 
+import "core:fmt"
 import "core:slice"
 import "core:strings"
 import base "../base"
@@ -12,10 +13,11 @@ import base "../base"
 // (graph_order), each after everything feeding it, so a return hears every
 // send in one place and a bus sums its inputs once.
 //
-// Composing builds the default routing (graph_build): each track into its
-// part, its sends into their returns, the parts and the returns into the
-// master. Nodes are laid out tracks, parts, returns, buses, songs (the
-// placements'), master, so a part's node is `len(tracks) + part`.
+// Composing builds the default routing (graph_build): each track's voice
+// groups into it (groups.odin), each track into its part, its sends into
+// their returns, the parts and the returns into the master. Nodes are laid
+// out tracks, parts, returns, buses, songs (the placements'), voice groups,
+// master, so a part's node is `len(tracks) + part`.
 
 Node_Kind :: enum u8 {
 	Track,
@@ -24,11 +26,12 @@ Node_Kind :: enum u8 {
 	Bus,
 	Song, // a placement's: what its song plays, at its level, ducked, windowed
 	Master,
+	Voices, // a voice group's: its track's voices of its notes (groups.odin), into its track
 }
 
 Node :: struct {
 	kind: Node_Kind,
-	ref:  i32, // Track: into tracks; Part: into parts; Return: into returns; Bus: into buses; Song: into placements
+	ref:  i32, // Track: into tracks; Part: into parts; Return: into returns; Bus: into buses; Song: into placements; Voices: into groups
 }
 
 // A node's effects, read from what it stands for (never copied: a chain
@@ -40,6 +43,7 @@ NODE_CHAIN := [Node_Kind]proc(s: ^Song, ref: i32) -> Span {
 	.Bus    = proc(s: ^Song, ref: i32) -> Span {return s.buses[ref].chain},
 	.Song   = proc(s: ^Song, ref: i32) -> Span {return {}},
 	.Master = proc(s: ^Song, ref: i32) -> Span {return s.master},
+	.Voices = proc(s: ^Song, ref: i32) -> Span {return {}},
 }
 
 // The rows of a kind a placement owns (a song node is its own; the master
@@ -51,14 +55,19 @@ PLACEMENT_ROWS := [Node_Kind]proc(pl: Placement) -> Span {
 	.Bus    = proc(pl: Placement) -> Span {return pl.buses},
 	.Song   = proc(pl: Placement) -> Span {return {}},
 	.Master = proc(pl: Placement) -> Span {return {}},
+	.Voices = proc(pl: Placement) -> Span {return {}}, // its track's (node_placement)
 }
 
 // The placement node k plays in (into placements; -1: none, a clip's or the
 // master).
 node_placement :: proc(s: ^Song, k: int) -> i32 {
 	nd := s.nodes[k]
-	if nd.kind == .Song {
+	switch nd.kind {
+	case .Song:
 		return nd.ref
+	case .Voices:
+		return node_placement(s, int(s.groups[nd.ref].track)) // a track's node is its index
+	case .Track, .Part, .Return, .Bus, .Master:
 	}
 	for pl, i in s.placements {
 		rows := PLACEMENT_ROWS[nd.kind](pl)
@@ -165,6 +174,8 @@ node_index :: proc(s: ^Song, n: Node) -> i32 {
 		return bus_node(s, int(n.ref))
 	case .Song:
 		return song_node(s, int(n.ref))
+	case .Voices:
+		return song_node(s, len(s.placements)) + n.ref // after the songs' nodes
 	case .Master:
 	}
 	return master_node(s)
@@ -193,6 +204,16 @@ graph_build :: proc(s: ^Song) {
 	for _, i in s.placements {
 		append(&s.nodes, Node{.Song, i32(i)})
 	}
+	// each track's voice groups, each into its track
+	clear(&s.groups)
+	for _, ti in s.tracks {
+		of := track_group_count(s, ti)
+		for g in 0 ..< of {
+			append(&s.edges, Edge{i32(len(s.nodes)), i32(ti), 1, .Audio})
+			append(&s.nodes, Node{.Voices, i32(len(s.groups))})
+			append(&s.groups, Voice_Group{i32(ti), u16(g), u16(of)})
+		}
+	}
 	append(&s.nodes, Node{.Master, 0})
 	master := i32(len(s.nodes) - 1)
 	for t, i in s.tracks {
@@ -202,7 +223,9 @@ graph_build :: proc(s: ^Song) {
 		}
 	}
 	for k in len(s.tracks) ..< int(master) {
-		append(&s.edges, Edge{i32(k), s.nodes[k].kind == .Song ? master : node_out(s, k), 1, .Audio})
+		if s.nodes[k].kind != .Voices {
+			append(&s.edges, Edge{i32(k), s.nodes[k].kind == .Song ? master : node_out(s, k), 1, .Audio})
+		}
 	}
 	for rt in s.routes {
 		from, to := node_index(s, rt.from), node_index(s, rt.to)
@@ -373,6 +396,9 @@ node_name :: proc(s: ^Song, k: i32, allocator := context.temp_allocator) -> stri
 		return strings.concatenate({"bus ", s.buses[nd.ref].name}, allocator)
 	case .Song:
 		return strings.concatenate({"song ", s.placements[nd.ref].name}, allocator)
+	case .Voices:
+		g := s.groups[nd.ref]
+		return fmt.aprintf("voices %d of %d of %s", g.index + 1, g.of, node_name(s, g.track, context.temp_allocator), allocator = allocator)
 	case .Master:
 	}
 	return "master"

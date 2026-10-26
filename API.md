@@ -22,8 +22,13 @@ oksl, odecs and ottis, built the same way:
   the caller lends its one pool, odecs's `common.Work_Pool` (`engine_init(&e, &song,
   pool)`, `Options.pool`, `Bank_Host.pool` for decodes, `tables_build(s, tables, pool)`;
   nil runs everything on the caller's thread); a walk of the stream is one `run` of the
-  pool. An export is that one stream, each chunk handed on as it is made. No caches: generated assets (a `say` line, a downloaded sample set) are
-  stored, music is computed.
+  pool. An export is that one stream, each chunk handed on as it is made. A track sounding
+  many voices at once (a dense kit, a held chord's tails) plays in voice groups, nodes of
+  the routing side by side (`song.groups`, `GROUP_VOICES` voices each at most; a note's
+  group is its place among its track's notes, round), so one heavy track doesn't hold a
+  render to one core; a track whose voices act on one another (mono, layered, an
+  instrument a lane moves) is one group. No caches: generated assets (a `say` line, a
+  downloaded sample set) are stored, music is computed.
 - **Samples download on first use** (`assets/`, like `ottis/assets`): a register table with
   each set's source, pinned SHA-256, licence and credit; never committed.
 

@@ -15,12 +15,14 @@ import song "../song"
 
 // The engine streams a song: any block of samples, in order, from wherever
 // it was put. It walks the song's routing (song.nodes, song.edges) in an
-// order computed once, every node after everything feeding it: a track
-// renders its voices and chain, a part, a return or a bus sums its inputs
-// and runs its chain, the master sums its inputs and masters them. Its
-// state is tables sized once from the song: per track a pool of voice
-// slots (as many as the track ever has sounding at once, one for a mono
-// device) and a cursor into its notes; per node its effect instances, a
+// order computed once, every node after everything feeding it: a voice
+// group renders its track's voices of its notes (song.groups: a track
+// sounding many voices at once has several, side by side), a track sums its
+// groups and runs its strip (its chain, its fader), a part, a return or a
+// bus sums its inputs and runs its chain, the master sums its inputs and
+// masters them. Its state is tables sized once from the song: per group a
+// pool of voice slots (as many as its notes ever sound at once, one for a
+// mono device) and a cursor into its notes; per node its effect instances, a
 // block, its lead and latency; per edge a delay line where paths of
 // different latency meet. Nothing is allocated while it plays, and the
 // samples never depend on the block sizes it is asked for, so a render is
@@ -54,12 +56,16 @@ Engine :: struct {
 	song:      ^song.Song,
 	env:       device.Voice_Env,
 	tracks:    []Track_Run,
-	voices:    []u8, // every track's slots, each its device's state size
+	groups:    []Group_Run, // per song.groups
+	groups_at: int, // the first group's node
+	voices:    []u8, // every group's slots, each its track's device's state size
 	slot_at_byte: []int, // where each slot's state starts in voices
 	slot_note: []i32, // the note a slot plays (-1: free)
 	slot_at:   []i64, // samples of it played
 	slot_choke: []i32, // samples left of a choked note's fade (0: not choked)
 	slot_choke_len: []i32, // the fade's whole length
+	slot_cut_at: []i64, // the song sample a choke cuts it at (max: none; a later note's pad that chokes its)
+	note_end:  []i64, // per song.notes: where its sound ends (its start and tail), set by the group starting it, read by its track's strip (min: not started)
 	fx:        []Fx_Run,
 	fx_bytes:  []u8,
 	// The routing: a run per node (song.nodes), the order they render in,
@@ -282,13 +288,22 @@ Master_Stats :: struct {
 	reduction_db:   f32, // <= 0
 }
 
+// A track's strip: its voice groups summed (its node's inputs), then its
+// chain and fader where it is awake (its node's awake_until, from its
+// notes' tails, as its voices sound).
 Track_Run :: struct {
 	cursor:    i64, // the song sample of its next output (its node's latency, tail and awake_until are its chain's)
-	lane_cell: i64, // the automation cell its controls were last set for (-1: none yet)
-	slots:     base.Span, // into voices
-	next_note: i32, // into song.notes: the next to start
-	stolen:    int, // notes that found no free slot (a finding)
+	next_note: i32, // into song.notes: the next to start (it wakes the strip)
 	placement: i32, // its song's (song.node_placement; -1: a clip's): where it makes room
+}
+
+// A voice group's run (song.groups): the voices of its notes, in its slots.
+Group_Run :: struct {
+	cursor:    i64, // the song sample of its next output: its track's input's
+	lane_cell: i64, // the automation cell its instrument's controls were last set for (-1: none yet)
+	slots:     base.Span, // into voices
+	next_note: i32, // into song.notes: the next of its to start
+	stolen:    int, // notes that found no free slot (a finding)
 }
 
 Fx_Run :: struct {
@@ -311,10 +326,12 @@ engine_init :: proc(e: ^Engine, s: ^song.Song, pool: ^common.Work_Pool = nil, ma
 	}
 	context.allocator = virtual.arena_allocator(&e.arena)
 	e.tracks = make([]Track_Run, len(s.tracks))
+	e.groups = make([]Group_Run, len(s.groups))
+	e.groups_at = int(song.node_index(s, {.Voices, 0}))
 	slots_total, fx_total := 0, 0
-	for t, ti in s.tracks {
-		run := &e.tracks[ti]
-		run.slots = {i32(slots_total), i32(polyphony_from_track(s, t))}
+	for g, gi in s.groups {
+		run := &e.groups[gi]
+		run.slots = {i32(slots_total), i32(min(song.track_polyphony(s, int(g.track), g), MAX_POLYPHONY))}
 		slots_total += int(run.slots.count)
 	}
 	for nd, k in s.nodes {
@@ -327,19 +344,19 @@ engine_init :: proc(e: ^Engine, s: ^song.Song, pool: ^common.Work_Pool = nil, ma
 		max_bufs = max(max_bufs, int(prog.bufs))
 	}
 	bytes_total, graph_total := 0, 0
-	for t, ti in s.tracks {
-		p := s.params[t.instrument]
-		bytes_total += int(e.tracks[ti].slots.count) * device.voice_bytes(&p, &e.env)
-		graph_total = max(graph_total, int(e.tracks[ti].slots.count) * max_bufs * 2 * device.NODE_CHUNK)
+	for g, gi in s.groups {
+		p := s.params[s.tracks[g.track].instrument]
+		bytes_total += int(e.groups[gi].slots.count) * device.voice_bytes(&p, &e.env)
+		graph_total = max(graph_total, int(e.groups[gi].slots.count) * max_bufs * 2 * device.NODE_CHUNK)
 	}
 	e.voices, _ = mem.make_aligned([]u8, bytes_total, 16)
 	e.slot_at_byte = make([]int, slots_total)
 	{
 		at := 0
-		for t, ti in s.tracks {
-			p := s.params[t.instrument]
+		for g, gi in s.groups {
+			p := s.params[s.tracks[g.track].instrument]
 			size := device.voice_bytes(&p, &e.env)
-			for k in e.tracks[ti].slots.first ..< base.span_end(e.tracks[ti].slots) {
+			for k in e.groups[gi].slots.first ..< base.span_end(e.groups[gi].slots) {
 				e.slot_at_byte[k] = at
 				at += size
 			}
@@ -349,6 +366,9 @@ engine_init :: proc(e: ^Engine, s: ^song.Song, pool: ^common.Work_Pool = nil, ma
 	e.slot_at = make([]i64, slots_total)
 	e.slot_choke = make([]i32, slots_total)
 	e.slot_choke_len = make([]i32, slots_total)
+	e.slot_cut_at = make([]i64, slots_total)
+	e.note_end = make([]i64, len(s.notes))
+	slice.fill(e.note_end, min(i64)) // none started (a keyswitch never is)
 	e.fx = make([]Fx_Run, fx_total)
 	// each node's effect instances and their state bytes, 16-aligned each
 	e.nodes = make([]Node_Run, len(s.nodes))
@@ -643,8 +663,8 @@ edits_apply :: proc(e: ^Engine) {
 			copy(progs.mods[x.mods_at:], x.mods)
 			copy(progs.inputs[x.inputs_at:], x.inputs)
 			copy(progs.controls[p.controls.first:], x.controls)
-			for &t in e.tracks {
-				t.lane_cell = -1 // a lane on it sets it again
+			for &g in e.groups {
+				g.lane_cell = -1 // a lane on it sets it again
 			}
 		case .Master:
 			if e.master.songs {
@@ -665,8 +685,8 @@ lanes_init :: proc(e: ^Engine) {
 	l.tracks = make([]base.Span, len(s.tracks))
 	l.edges = make([]base.Span, len(s.edges))
 	l.placements = make([]base.Span, len(s.placements))
-	for &t in e.tracks {
-		t.lane_cell = -1
+	for &g in e.groups {
+		g.lane_cell = -1
 	}
 	if len(s.automation) == 0 {
 		return
@@ -736,12 +756,14 @@ lanes_init :: proc(e: ^Engine) {
 	_ = controls
 }
 
-// Track ti's controls set from its lanes for the cell song sample `at` is
-// in (once a cell), and what follows from them derived.
+// Group gi's track's instrument controls set from its lanes for the cell
+// song sample `at` is in (once a cell), and what follows from them derived
+// (a track a lane moves is one group: its program is its own).
 @(private = "file")
-track_lanes_apply :: proc(e: ^Engine, ti: int, at: i64) {
+track_lanes_apply :: proc(e: ^Engine, gi: int, at: i64) {
 	s := e.song
-	run := &e.tracks[ti]
+	run := &e.groups[gi]
+	ti := int(s.groups[gi].track)
 	cell := song.automation_cell(at)
 	if cell == run.lane_cell {
 		return
@@ -1071,39 +1093,6 @@ flow_range :: proc(data: rawptr, first, end: int) {
 	flow_loop(e, &e.workers[first])
 }
 
-// How many of a track's notes ever sound at once (one for a mono device).
-@(private = "file")
-polyphony_from_track :: proc(s: ^song.Song, t: song.Track) -> int {
-	p := s.params[t.instrument]
-	env := song.voice_env(s)
-	if device.voice_mono(&p, &env) || t.notes.count == 0 {
-		return 1
-	}
-	ends := make([dynamic]f64, context.temp_allocator)
-	most := 0
-	program := i32(p[.Program])
-	layered := program >= 0 && s.programs.programs[program].layer_mode == .All
-	for i in t.notes.first ..< base.span_end(t.notes) {
-		n := note_from_row(s, int(i))
-		#reverse for end, k in ends {
-			if end <= n.time {
-				unordered_remove(&ends, k)
-			}
-		}
-		// a layered note: a voice per layer it may start
-		voices := 1
-		if layered {
-			layers: [device.MAX_LAYERS]i32
-			voices = device.graph_layers(&s.programs, program, n, -1, layers[:])
-		}
-		for _ in 0 ..< voices {
-			append(&ends, n.time + device.note_tail(&p, n, &env))
-		}
-		most = max(most, len(ends))
-	}
-	return clamp(most, 1, MAX_POLYPHONY)
-}
-
 // Puts the song at sample `at`: every track's notes sounding there are
 // started and played up to it (chased), every node's effects reset to that
 // moment. Exact: each node starts as far back as its effects' memory and
@@ -1127,25 +1116,27 @@ engine_seek :: proc(e: ^Engine, at: i64, exact: bool) {
 	for &nd in e.nodes {
 		nd.started = false
 	}
+	// nodes start in the walk's order: a track's groups before it (its strip
+	// reads where the notes they start end)
 	if from == at {
-		for k in 0 ..< len(e.nodes) {
-			node_start(e, w, k)
+		for k in e.order {
+			node_start(e, w, int(k))
 		}
 	} else {
 		// the walk to `at`, each node joining at the block its start falls in
 		for e.cursor < at {
 			n := int(min(at - e.cursor, BLOCK))
-			for k in 0 ..< len(e.nodes) {
+			for k in e.order {
 				if !e.nodes[k].started && e.cursor + i64(n) > at - e.nodes[k].pre {
-					node_start(e, w, k)
+					node_start(e, w, int(k))
 				}
 			}
 			walk(e, n, false, nil)
 		}
 		// what needs no pre-roll joins at `at` itself
-		for k in 0 ..< len(e.nodes) {
+		for k in e.order {
 			if !e.nodes[k].started {
-				node_start(e, w, k)
+				node_start(e, w, int(k))
 			}
 		}
 	}
@@ -1275,10 +1266,6 @@ take :: proc(e: ^Engine, c: int, out: ^Walk_Out) {
 	}
 }
 
-// Node k over a worker's chunk, a block at a time. A node that may not write
-// in it (node_may_write) takes no buffer and runs only what moves on all the
-// same: a track's clock, a delay line's ring, a muted track's unheard play.
-@(private = "file")
 node_chunk :: proc(e: ^Engine, w: ^Worker, k: int) {
 	nd := &e.nodes[k]
 	kind := e.song.nodes[k].kind
@@ -1298,6 +1285,8 @@ node_chunk :: proc(e: ^Engine, w: ^Worker, k: int) {
 			track_skip(e, w, k, n)
 		case kind == .Track:
 			e.tracks[k].cursor += i64(n)
+		case kind == .Voices:
+			e.groups[e.song.nodes[k].ref].cursor += i64(n)
 		case:
 			for j := 0; j * BLOCK < n; j += 1 {
 				node_inputs(e, w, k, j, nil, nil) // its delay lines' rings, silence written
@@ -1315,9 +1304,10 @@ node_chunk :: proc(e: ^Engine, w: ^Worker, k: int) {
 }
 
 // Whether node k may write in the worker's chunk: the master always; a
-// track (not muted) while a voice sounds, its tails are awake, or a note
-// starts in it; a summing node while a source has sound in it, a delay line
-// may read sound, or its chain is awake.
+// track's strip (not muted) while it is awake or a note of its starts in
+// it; a voice group while a voice sounds, its tails are awake, or a note of
+// its starts in it; a summing node while a source has sound in it, a delay
+// line may read sound, or its chain is awake.
 @(private = "file")
 node_may_write :: proc(e: ^Engine, w: ^Worker, k: int) -> bool {
 	s := e.song
@@ -1330,19 +1320,18 @@ node_may_write :: proc(e: ^Engine, w: ^Worker, k: int) -> bool {
 		if e.mix.tracks[k].muted {
 			return false
 		}
-		// as track_block sleeps: awake at its start, a voice sounding, or a
-		// note starting in it
 		run := &e.tracks[k]
 		input := run.cursor + nd.latency
-		if input < nd.awake_until {
+		end := base.span_end(s.tracks[k].notes)
+		return input < nd.awake_until || (run.next_note < end && i64(math.round(s.notes.time[run.next_note] * RATE)) < input + n)
+	case .Voices:
+		gi := int(s.nodes[k].ref)
+		run := &e.groups[gi]
+		input := run.cursor + nd.latency
+		if input < nd.awake_until || group_sounding(e, gi) {
 			return true
 		}
-		for slot in run.slots.first ..< base.span_end(run.slots) {
-			if e.slot_note[slot] >= 0 {
-				return true
-			}
-		}
-		end := base.span_end(s.tracks[k].notes)
+		end := base.span_end(s.tracks[s.groups[gi].track].notes)
 		return run.next_note < end && i64(math.round(s.notes.time[run.next_note] * RATE)) < input + n
 	case .Part, .Return, .Bus, .Song:
 		if nd.chain.count > 0 && w.at + nd.lead + nd.latency < nd.awake_until {
@@ -1377,6 +1366,7 @@ Node_Run_Row :: struct {
 
 NODE_RUNS := [song.Node_Kind]Node_Run_Row {
 	.Track  = {track_node_start, track_node_block},
+	.Voices = {group_node_start, group_node_block},
 	.Part   = {sum_start, sum_block},
 	.Return = {sum_start, sum_block},
 	.Bus    = {sum_start, sum_block},
@@ -1384,20 +1374,33 @@ NODE_RUNS := [song.Node_Kind]Node_Run_Row {
 	.Master = {sum_start, master_node_block},
 }
 
-// A track: its notes chased to `at`, its chain reset there; a block of its
-// voices and chain (muted: played unheard).
+// A track's strip: its notes' tails to `at` (its groups' started notes'
+// ends), its chain reset there; a block of its groups' voices through its
+// strip (muted: played unheard).
 @(private = "file")
 track_node_start :: proc(e: ^Engine, w: ^Worker, k: int, at: i64) {
-	track_seek(e, w, k, at, false)
+	track_seek(e, w, k, at)
 }
 
 @(private = "file")
 track_node_block :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32) -> bool {
 	if e.mix.tracks[k].muted {
-		track_skip(e, w, k, len(l))
+		discard := w.scratch[4 * BLOCK:][:2 * BLOCK]
+		track_block(e, w, k, j, discard[:len(l)], discard[BLOCK:][:len(l)])
 		return false
 	}
-	return track_block(e, w, k, l, r)
+	return track_block(e, w, k, j, l, r)
+}
+
+// A voice group: its notes chased to `at`; a block of its voices.
+@(private = "file")
+group_node_start :: proc(e: ^Engine, w: ^Worker, k: int, at: i64) {
+	group_seek(e, w, int(e.song.nodes[k].ref), at)
+}
+
+@(private = "file")
+group_node_block :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32) -> bool {
+	return group_block(e, w, int(e.song.nodes[k].ref), l, r)
 }
 
 // A node summing its inputs (a part, a return, a bus): its chain reset to
@@ -1684,9 +1687,11 @@ placement_block :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32) {
 	}
 }
 
-// Puts track `ti`'s output at song sample `at` (its node's time): the notes
-// sounding there started and played up to it, its chain reset.
-track_seek :: proc(e: ^Engine, w: ^Worker, ti: int, at: i64, exact: bool) {
+// A track's strip put at `at` (its output's): its chain reset at its
+// input's time, awake as long as the notes its groups chased there sound
+// (their ends, the groups started first).
+@(private = "file")
+track_seek :: proc(e: ^Engine, w: ^Worker, ti: int, at: i64) {
 	s := e.song
 	t := s.tracks[ti]
 	run := &e.tracks[ti]
@@ -1694,17 +1699,62 @@ track_seek :: proc(e: ^Engine, w: ^Worker, ti: int, at: i64, exact: bool) {
 	nd := &e.nodes[ti]
 	input := at + nd.latency
 	nd.awake_until = input // dormant unless a note is still sounding
+	reset_track_fx(e, w, ti, input)
+	first, count := int(t.notes.first), int(t.notes.count)
+	k := first_note_from(s, first, count, input)
+	run.next_note = i32(first + k)
+	for i in first ..< first + k {
+		if e.note_end[i] != min(i64) {
+			nd.awake_until = max(nd.awake_until, e.note_end[i] + nd.tail)
+		}
+	}
+}
+
+// The first of a track's notes (from `first`, `count` of them) starting at
+// or after song sample `at`: its offset.
+@(private = "file")
+first_note_from :: proc(s: ^song.Song, first, count: int, at: i64) -> int {
+	k, _ := slice.binary_search_by(s.notes.time[first:first + count], f64(at) / RATE, proc(x, target: f64) -> slice.Ordering {
+		return x < target - 0.5 / RATE ? .Less : .Greater
+	})
+	return k
+}
+
+// The next of group gi's notes from note i (its track's end: none).
+@(private = "file")
+group_next :: proc(s: ^song.Song, gi: int, i: i32) -> i32 {
+	g := s.groups[gi]
+	t := s.tracks[g.track]
+	end := base.span_end(t.notes)
+	i := i
+	for i < end && !song.note_in_group(t, i, g) {
+		i += 1
+	}
+	return i
+}
+
+// A voice group put at `at` (its track's input's time): every voice of its
+// notes sounding there started and played up to it (chased); where each
+// ends, for its track's strip (the notes it skips: not started).
+@(private = "file")
+group_seek :: proc(e: ^Engine, w: ^Worker, gi: int, at: i64) {
+	s := e.song
+	g := s.groups[gi]
+	ti := int(g.track)
+	t := s.tracks[ti]
+	run := &e.groups[gi]
+	run.cursor = at
+	nd := &e.nodes[e.groups_at + gi]
+	input := at + nd.latency
+	nd.awake_until = input // dormant unless a note is still sounding
 	for k in run.slots.first ..< base.span_end(run.slots) {
 		e.slot_note[k] = -1
 		e.slot_choke[k] = 0
+		e.slot_cut_at[k] = max(i64)
 	}
-	reset_track_fx(e, w, ti, input)
-	// the first note starting at or after the input's time
 	first, count := int(t.notes.first), int(t.notes.count)
-	k, _ := slice.binary_search_by(s.notes.time[first:first + count], f64(input) / RATE, proc(x, target: f64) -> slice.Ordering {
-		return x < target - 0.5 / RATE ? .Less : .Greater
-	})
-	run.next_note = i32(first + k)
+	k := first_note_from(s, first, count, input)
+	run.next_note = group_next(s, gi, i32(first + k))
 	// chase what is still sounding: earlier notes whose tails reach `input`
 	p := s.params[t.instrument]
 	mono := device.voice_mono(&p, &e.env)
@@ -1716,26 +1766,30 @@ track_seek :: proc(e: ^Engine, w: ^Worker, ti: int, at: i64, exact: bool) {
 	// into where it was), then all of them up to `input`
 	jump := device.voice_jump(&p, &e.env)
 	for i := first; i < first + k; i += 1 {
+		if !song.note_in_group(t, i32(i), g) {
+			continue
+		}
+		e.note_end[i] = min(i64)
 		n := note_from_row(s, i)
 		start := i64(math.round(n.time * RATE))
 		over := f64(input - start) >= device.note_tail(&p, n, &e.env) * RATE && input - start > memory
-		if over && !sounding_any(e, ti) {
+		if over && !group_sounding(e, gi) {
 			continue
 		}
-		chase_to(e, w, ti, start, jump)
+		chase_to(e, w, gi, start, jump)
 		if over {
 			// its sound is over by `input`, what it cut is still cut
-			note_cuts(e, ti, i32(i), n)
+			note_cuts(e, gi, i32(i), n)
 			continue
 		}
-		start_note(e, w, ti, i32(i), mono, start)
+		start_note(e, w, gi, i32(i), mono, start)
 	}
-	chase_to(e, w, ti, input, jump)
+	chase_to(e, w, gi, input, jump)
 }
 
 @(private = "file")
-sounding_any :: proc(e: ^Engine, ti: int) -> bool {
-	run := &e.tracks[ti]
+group_sounding :: proc(e: ^Engine, gi: int) -> bool {
+	run := &e.groups[gi]
 	for k in run.slots.first ..< base.span_end(run.slots) {
 		if e.slot_note[k] >= 0 {
 			return true
@@ -1746,39 +1800,32 @@ sounding_any :: proc(e: ^Engine, ti: int) -> bool {
 
 // What a note does to the voices sounding when it starts, without
 // sounding itself (a seek passing a note that is over by where it lands):
-// its pad's chokes, its layers' off_by cuts and polyphony.
+// its layers' off_by cuts and polyphony (a pad's chokes are each voice's
+// own: choke_at).
 @(private = "file")
-note_cuts :: proc(e: ^Engine, ti: int, ni: i32, n: device.Note) {
-	run := &e.tracks[ti]
-	t := e.song.tracks[ti]
+note_cuts :: proc(e: ^Engine, gi: int, ni: i32, n: device.Note) {
+	run := &e.groups[gi]
+	t := e.song.tracks[e.song.groups[gi].track]
 	p := e.song.params[t.instrument]
 	program := i32(p[.Program])
-	if program < 0 || n.kind == .Keyswitch {
+	if program < 0 || n.kind == .Keyswitch || e.programs.programs[program].layer_mode != .All {
 		return
 	}
-	if e.programs.programs[program].layer_mode == .All {
-		layers: [device.MAX_LAYERS]i32
-		rand := f32(base.hash_unit(e.song.notes.seed[ni] ~ 0x5ead))
-		for l in layers[:device.graph_layers(&e.programs, program, n, rand, layers[:])] {
-			layer_cuts(e, run, ni, l, n)
-		}
-		return
-	}
-	if chokes := device.graph_chokes(&e.programs, program, n); len(chokes) > 0 {
-		for k in run.slots.first ..< base.span_end(run.slots) {
-			if e.slot_note[k] >= 0 && e.slot_choke[k] == 0 && slice.contains(chokes, e.song.notes.pad[e.slot_note[k]]) {
-				slot_cut(e, int(k), device.CHOKE_SAMPLES)
-			}
-		}
+	layers: [device.MAX_LAYERS]i32
+	rand := f32(base.hash_unit(e.song.notes.seed[ni] ~ 0x5ead))
+	for l in layers[:device.graph_layers(&e.programs, program, n, rand, layers[:])] {
+		layer_cuts(e, run, ni, l, n)
 	}
 }
 
-// Every voice of the track sounding played up to song sample `at` (a
-// seek's chase; a voice that jumps is put there).
+// Every voice of group gi sounding played up to song sample `at` (a seek's
+// chase; a voice that jumps is put there), each cut where its choke falls
+// on the way.
 @(private = "file")
-chase_to :: proc(e: ^Engine, w: ^Worker, ti: int, at: i64, jump: bool) {
+chase_to :: proc(e: ^Engine, w: ^Worker, gi: int, at: i64, jump: bool) {
 	s := e.song
-	run := &e.tracks[ti]
+	run := &e.groups[gi]
+	ti := int(s.groups[gi].track)
 	discard := w.scratch[4 * BLOCK:][:2 * BLOCK]
 	stepped := track_has_controls(e, ti)
 	defer run.lane_cell = -1 // set again where it plays on
@@ -1787,7 +1834,8 @@ chase_to :: proc(e: ^Engine, w: ^Worker, ti: int, at: i64, jump: bool) {
 		if e.slot_note[slot] < 0 {
 			continue
 		}
-		target := at - i64(math.round(s.notes.time[e.slot_note[slot]] * RATE))
+		started := i64(math.round(s.notes.time[e.slot_note[slot]] * RATE))
+		target := at - started
 		if jump {
 			if e.slot_at[slot] == 0 {
 				play_slot(e, w, ti, slot, discard[:0], discard[BLOCK:][:0]) // its state set from the note
@@ -1795,19 +1843,26 @@ chase_to :: proc(e: ^Engine, w: ^Worker, ti: int, at: i64, jump: bool) {
 			e.slot_at[slot] = max(e.slot_at[slot], target)
 			continue
 		}
-		started := i64(math.round(s.notes.time[e.slot_note[slot]] * RATE))
 		for e.slot_note[slot] >= 0 && e.slot_at[slot] < target {
-			m := int(min(target - e.slot_at[slot], BLOCK))
+			t := started + e.slot_at[slot]
+			if e.slot_cut_at[slot] <= t {
+				slot_cut(e, slot, device.CHOKE_SAMPLES)
+				e.slot_cut_at[slot] = max(i64)
+			}
+			m := int(min(target - e.slot_at[slot], BLOCK, e.slot_cut_at[slot] - t))
 			if stepped {
-				t := started + e.slot_at[slot]
 				run.lane_cell = -1
-				track_lanes_apply(e, ti, t)
+				track_lanes_apply(e, gi, t)
 				m = cell_piece(t, m, true)
 			}
 			slice.zero(discard[:2 * BLOCK])
 			if !play_slot(e, w, ti, slot, discard[:m], discard[BLOCK:][:m]) {
 				break
 			}
+		}
+		if e.slot_note[slot] >= 0 && e.slot_cut_at[slot] <= at {
+			slot_cut(e, slot, device.CHOKE_SAMPLES)
+			e.slot_cut_at[slot] = max(i64)
 		}
 	}
 }
@@ -1867,14 +1922,14 @@ stem_count :: proc(s: ^song.Song) -> int {
 	return len(s.parts) + len(s.returns) + len(s.buses)
 }
 
-// Moves a muted track on by `n` samples without hearing it (its state
-// moves as if it played).
+// A muted track's strip over a chunk of n samples: played unheard (its
+// chain and its awake hours as if heard).
+@(private = "file")
 track_skip :: proc(e: ^Engine, w: ^Worker, ti: int, n: int) {
 	discard := w.scratch[4 * BLOCK:][:2 * BLOCK]
-	for done := 0; done < n; {
-		m := min(n - done, BLOCK)
-		track_block(e, w, ti, discard[:m], discard[BLOCK:][:m])
-		done += m
+	for j := 0; j * BLOCK < n; j += 1 {
+		m := min(n - j * BLOCK, BLOCK)
+		track_block(e, w, ti, j, discard[:m], discard[BLOCK:][:m])
 	}
 }
 
@@ -1884,12 +1939,14 @@ slot_state :: #force_inline proc(e: ^Engine, slot: int) -> ^device.Voice_State {
 	return (^device.Voice_State)(&e.voices[e.slot_at_byte[slot]])
 }
 
-// A slot for note `ni`: the mono device's one (its state kept: the voice
-// tells a slide from a new attack), else a free one (zeroed), else the
-// oldest (counted as stolen).
+// A slot of group gi for note `ni`: the mono device's one (its state kept:
+// the voice tells a slide from a new attack), else a free one (zeroed),
+// else the oldest (counted as stolen). Where its sound ends is kept for its
+// track's strip, and where a later note's pad chokes it, for its voice.
 @(private = "file")
-start_note :: proc(e: ^Engine, w: ^Worker, ti: int, ni: i32, mono: bool, start: i64) -> []int {
-	run := &e.tracks[ti]
+start_note :: proc(e: ^Engine, w: ^Worker, gi: int, ni: i32, mono: bool, start: i64) -> []int {
+	run := &e.groups[gi]
+	ti := int(e.song.groups[gi].track)
 	t := e.song.tracks[ti]
 	p := e.song.params[t.instrument]
 	n := note_from_row(e.song, int(ni))
@@ -1897,8 +1954,9 @@ start_note :: proc(e: ^Engine, w: ^Worker, ti: int, ni: i32, mono: bool, start: 
 		return nil // it switches the regions later notes play; it doesn't sound
 	}
 	tail := i64(math.ceil(device.note_tail(&p, n, &e.env) * RATE))
-	nd := &e.nodes[ti]
+	nd := &e.nodes[e.groups_at + gi]
 	nd.awake_until = max(nd.awake_until, start + tail + nd.tail)
+	e.note_end[ni] = start + tail
 	// a layered program's note: a voice per layer it starts (its regions)
 	program := i32(p[.Program])
 	layers: [device.MAX_LAYERS]i32
@@ -1914,15 +1972,6 @@ start_note :: proc(e: ^Engine, w: ^Worker, ti: int, ni: i32, mono: bool, start: 
 		slot := slot_free(e, run, mono)
 		if layered {
 			layer_cuts(e, run, ni, layer, n)
-		} else {
-			// a pad that chokes others on the track cuts them (5 ms)
-			if chokes := device.graph_chokes(&e.programs, program, n); len(chokes) > 0 {
-				for k in run.slots.first ..< base.span_end(run.slots) {
-					if int(k) != slot && e.slot_note[k] >= 0 && e.slot_choke[k] == 0 && slice.contains(chokes, e.song.notes.pad[e.slot_note[k]]) {
-						slot_cut(e, int(k), device.CHOKE_SAMPLES)
-					}
-				}
-			}
 		}
 		// a mono voice still sounding keeps what it holds into the next note (a
 		// slide, a slew's charge); one that has fallen silent, or any other,
@@ -1934,18 +1983,45 @@ start_note :: proc(e: ^Engine, w: ^Worker, ti: int, ni: i32, mono: bool, start: 
 		e.slot_note[slot] = ni
 		e.slot_at[slot] = 0
 		e.slot_choke[slot] = 0
+		e.slot_cut_at[slot] = max(i64)
 		if _, ok := device.graph_start(slot_state(e, slot), &p, n, &e.env, fresh, layer); !ok {
 			e.slot_note[slot] = -1
+		} else if !layered {
+			e.slot_cut_at[slot] = choke_at(e, ti, program, ni, start, device.graph_total(slot_state(e, slot)))
 		}
 		slots[li] = slot
 	}
 	return slots
 }
 
+// The song sample a later note of track ti cuts note ni's voice at (its pad
+// one that note's pad chokes, starting while the voice still sounds: its
+// `total` samples from `start`); max: none. The note table decides it, so a
+// voice knows it whichever group plays the note that chokes it.
+@(private = "file")
+choke_at :: proc(e: ^Engine, ti: int, program: i32, ni: i32, start: i64, total: i64) -> i64 {
+	s := e.song
+	pad := s.notes.pad[ni]
+	if pad == 0 {
+		return max(i64)
+	}
+	for j := ni + 1; j < base.span_end(s.tracks[ti].notes); j += 1 {
+		at := i64(math.round(s.notes.time[j] * RATE))
+		if at - start >= total {
+			break
+		}
+		n := note_from_row(s, int(j))
+		if n.kind != .Keyswitch && slice.contains(device.graph_chokes(&e.programs, program, n), pad) {
+			return at
+		}
+	}
+	return max(i64)
+}
+
 // A slot for a new voice: a free one, else the one playing longest (a
 // stolen note: a finding); a mono track's one.
 @(private = "file")
-slot_free :: proc(e: ^Engine, run: ^Track_Run, mono: bool) -> int {
+slot_free :: proc(e: ^Engine, run: ^Group_Run, mono: bool) -> int {
 	first := int(run.slots.first)
 	if mono {
 		return first
@@ -1978,7 +2054,7 @@ slot_cut :: proc(e: ^Engine, k: int, samples: i32) {
 // past its group's polyphony, or note_polyphony on its key, the oldest of
 // them stops.
 @(private = "file")
-layer_cuts :: proc(e: ^Engine, run: ^Track_Run, ni: i32, layer: i32, n: device.Note) {
+layer_cuts :: proc(e: ^Engine, run: ^Group_Run, ni: i32, layer: i32, n: device.Note) {
 	progs := &e.programs
 	l := progs.regions[progs.layers[layer].row]
 	group_count, key_count := 0, 0
@@ -2112,13 +2188,14 @@ play_graph :: proc(e: ^Engine, w: ^Worker, ti, slot: int, level: f32, l, r: []f3
 	return true
 }
 
-// The voices of a Voice track over one stretch: those not choked, all
-// playing one program, in one call of device.graph_run (one process per
-// node per chunk for all of them); the choked alone, fading.
+// The voices of a group over one stretch: those not choked, all playing
+// one program, in one call of device.graph_run (one process per node per
+// chunk for all of them); the choked alone, fading.
 @(private = "file")
-play_graphs :: proc(e: ^Engine, w: ^Worker, ti: int, l, r: []f32) {
+play_graphs :: proc(e: ^Engine, w: ^Worker, gi: int, l, r: []f32) {
 	s := e.song
-	run := &e.tracks[ti]
+	run := &e.groups[gi]
+	ti := int(s.groups[gi].track)
 	// the sounding voices in the order they are summed: by program, then by
 	// note; never by slot (which slots are free depends on where blocks fell,
 	// and float sums are only the same in the same order)
@@ -2183,19 +2260,20 @@ play_graphs :: proc(e: ^Engine, w: ^Worker, ti: int, l, r: []f32) {
 }
 
 
-// One block of a track, in segments: awake, its voices (split where notes
-// start, so every note begins on its own sample) then its strip
-// (finish_segment) and the sends;
-// dormant, nothing (the block stays zero) until the next note wakes it with
-// its effects reset. The input runs `latency` samples ahead of the output, so
-// lookahead effects line up. False when the whole block was dormant.
+// One block of a voice group, in segments: awake, its voices (split where
+// its notes start and where a voice's choke falls, so each lands on its own
+// sample); dormant, nothing (the block stays zero) until its next note
+// wakes it. It plays at its track's input time. False when the whole
+// block was dormant.
 @(private = "file")
-track_block :: proc(e: ^Engine, w: ^Worker, ti: int, l, r: []f32) -> (wrote: bool) {
+group_block :: proc(e: ^Engine, w: ^Worker, gi: int, l, r: []f32) -> (wrote: bool) {
 	s := e.song
+	g := s.groups[gi]
+	ti := int(g.track)
 	t := s.tracks[ti]
-	run := &e.tracks[ti]
+	run := &e.groups[gi]
 	n := len(l)
-	nd := &e.nodes[ti]
+	nd := &e.nodes[e.groups_at + gi]
 	input := run.cursor + nd.latency
 	// its block is written only where it plays (and the gaps between, once
 	// it has): a dormant block is left untouched
@@ -2210,22 +2288,108 @@ track_block :: proc(e: ^Engine, w: ^Worker, ti: int, l, r: []f32) -> (wrote: boo
 	p := s.params[t.instrument]
 	mono := device.voice_mono(&p, &e.env)
 	end := base.span_end(t.notes)
-	next_start :: proc(s: ^song.Song, run: ^Track_Run, end: i32) -> i64 {
+	next_start :: proc(s: ^song.Song, run: ^Group_Run, end: i32) -> i64 {
 		return run.next_note < end ? i64(math.round(s.notes.time[run.next_note] * RATE)) : max(i64)
 	}
-	sounding :: proc(e: ^Engine, run: ^Track_Run) -> bool {
+	// the earliest choke still to fall on a sounding voice
+	next_cut :: proc(e: ^Engine, run: ^Group_Run) -> i64 {
+		at := max(i64)
 		for k in run.slots.first ..< base.span_end(run.slots) {
-			if e.slot_note[k] >= 0 {
-				return true
+			if e.slot_note[k] >= 0 && e.slot_choke[k] == 0 {
+				at = min(at, e.slot_cut_at[k])
 			}
 		}
-		return false
+		return at
+	}
+	cuts :: proc(e: ^Engine, run: ^Group_Run, at: i64) {
+		for k in run.slots.first ..< base.span_end(run.slots) {
+			if e.slot_note[k] >= 0 && e.slot_choke[k] == 0 && e.slot_cut_at[k] <= at {
+				slot_cut(e, int(k), device.CHOKE_SAMPLES)
+				e.slot_cut_at[k] = max(i64)
+			}
+		}
 	}
 	stepped := track_has_controls(e, ti)
 	pos := 0
 	for pos < n {
 		at := input + i64(pos)
-		if at >= nd.awake_until && !sounding(e, run) {
+		if at >= nd.awake_until && !group_sounding(e, gi) {
+			// dormant to its next note; it wakes there
+			wake := next_start(s, run, end)
+			if wake >= input + i64(n) {
+				break
+			}
+			pos = int(max(wake - input, i64(pos)))
+		}
+		// awake: voices to where it may sleep again (notes extend that)
+		from := pos
+		for pos < n {
+			if stepped {
+				track_lanes_apply(e, gi, input + i64(pos))
+			}
+			cuts(e, run, input + i64(pos))
+			limit := group_sounding(e, gi) ? i64(n) : clamp(nd.awake_until - input, i64(pos), i64(n))
+			next := clamp(min(next_start(s, run, end), next_cut(e, run)) - input, i64(pos), limit)
+			next = i64(pos + cell_piece(input + i64(pos), int(next) - pos, stepped))
+			if int(next) > pos {
+				clear_to(&clean, int(next), l, r)
+				play_graphs(e, w, gi, l[pos:next], r[pos:next])
+				pos = int(next)
+			}
+			if run.next_note < end && next_start(s, run, end) == input + i64(pos) && pos < n {
+				cuts(e, run, input + i64(pos))
+				start_note(e, w, gi, run.next_note, mono, input + i64(pos))
+				run.next_note = group_next(s, gi, run.next_note + 1)
+				continue
+			}
+			if i64(pos) >= limit {
+				break
+			}
+		}
+		if pos > from {
+			wrote = true
+		}
+	}
+	if wrote {
+		clear_to(&clean, n, l, r)
+	}
+	run.cursor += i64(n)
+	return
+}
+
+// One block (the j-th of the chunk) of a track's strip, in segments where
+// it is awake (from its notes' starts to their sounds' ends and its chain's
+// tail): its groups' voices summed (its node's inputs), then its strip;
+// asleep, silence, and it wakes (its effects reset) where its next note
+// starts. The input runs `latency` samples ahead of the output, so
+// lookahead effects line up. False when the whole block was dormant.
+@(private = "file")
+track_block :: proc(e: ^Engine, w: ^Worker, ti: int, j: int, l, r: []f32) -> (wrote: bool) {
+	s := e.song
+	t := s.tracks[ti]
+	run := &e.tracks[ti]
+	n := len(l)
+	nd := &e.nodes[ti]
+	input := run.cursor + nd.latency
+	heard := node_inputs(e, w, ti, j, l, r)
+	end := base.span_end(t.notes)
+	next_start :: proc(s: ^song.Song, run: ^Track_Run, end: i32) -> i64 {
+		return run.next_note < end ? i64(math.round(s.notes.time[run.next_note] * RATE)) : max(i64)
+	}
+	// silent outside its awake stretches: from `clean` on, once it has
+	// written; its groups' sum where it is awake
+	clean := 0
+	quiet :: proc(clean: ^int, to: int, l, r: []f32) {
+		if to > clean^ {
+			slice.zero(l[clean^:to])
+			slice.zero(r[clean^:to])
+		}
+		clean^ = max(clean^, to)
+	}
+	pos := 0
+	for pos < n {
+		at := input + i64(pos)
+		if at >= nd.awake_until {
 			// dormant to the next note; it wakes there, its effects fresh
 			wake := next_start(s, run, end)
 			if wake >= input + i64(n) {
@@ -2234,22 +2398,15 @@ track_block :: proc(e: ^Engine, w: ^Worker, ti: int, l, r: []f32) -> (wrote: boo
 			pos = int(max(wake - input, i64(pos)))
 			reset_track_fx(e, w, ti, input + i64(pos))
 		}
-		// awake: voices to where it may sleep again (notes extend that)
+		// awake: to where it may sleep again (its notes' ends extend that)
 		from := pos
 		for pos < n {
-			if stepped {
-				track_lanes_apply(e, ti, input + i64(pos))
-			}
-			limit := sounding(e, run) ? i64(n) : clamp(nd.awake_until - input, i64(pos), i64(n))
-			next := clamp(next_start(s, run, end) - input, i64(pos), limit)
-			next = i64(pos + cell_piece(input + i64(pos), int(next) - pos, stepped))
-			if int(next) > pos {
-				clear_to(&clean, int(next), l, r)
-				play_graphs(e, w, ti, l[pos:next], r[pos:next])
-				pos = int(next)
-			}
+			limit := clamp(nd.awake_until - input, i64(pos), i64(n))
+			pos = int(clamp(next_start(s, run, end) - input, i64(pos), limit))
 			if run.next_note < end && next_start(s, run, end) == input + i64(pos) && pos < n {
-				start_note(e, w, ti, run.next_note, mono, input + i64(pos))
+				if e.note_end[run.next_note] != min(i64) {
+					nd.awake_until = max(nd.awake_until, e.note_end[run.next_note] + nd.tail)
+				}
 				run.next_note += 1
 				continue
 			}
@@ -2258,16 +2415,23 @@ track_block :: proc(e: ^Engine, w: ^Worker, ti: int, l, r: []f32) -> (wrote: boo
 			}
 		}
 		if pos > from {
+			if !heard {
+				slice.zero(l)
+				slice.zero(r)
+				heard = true
+			}
+			quiet(&clean, from, l, r)
 			kl, kr := w.key_l, w.key_r
 			if kl != nil {
 				kl, kr = kl[from:pos], kr[from:pos]
 			}
 			finish_segment(e, w, ti, input + i64(from), l[from:pos], r[from:pos], kl, kr)
+			clean = pos
 			wrote = true
 		}
 	}
 	if wrote {
-		clear_to(&clean, n, l, r)
+		quiet(&clean, n, l, r)
 	}
 	run.cursor += i64(n)
 	return

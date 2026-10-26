@@ -280,6 +280,7 @@ Song :: struct {
 	room_from: string,
 	placements: [dynamic]Placement, // the songs it plays (its own: one)
 	placement_tempo: [dynamic]Tempo_Map, // per placement: its song's tempo map (what a voice's beats are on)
+	groups:     [dynamic]Voice_Group, // each track's voice groups, a node each (graph_build; groups.odin)
 	fixed_lengths: [dynamic]Fixed_Length, // Tone lengths a device read once, at its placing's tempo (tempo_fixed reads them)
 	// A mix's: the spec a host's chains (a clip's `effects`) name effect rows
 	// in, as a song's chains name its own: its `effects` tables and the

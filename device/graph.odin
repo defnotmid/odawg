@@ -926,6 +926,9 @@ graph_start :: proc(s: ^Voice_State, p: ^Params, n: Note, env: ^Voice_Env, fresh
 
 graph_playing :: proc(s: ^Voice_State) -> i32 {return (^Graph_Header)(s).program}
 
+// Samples a voice's note sounds (its tail's estimate, from its start).
+graph_total :: proc(s: ^Voice_State) -> i64 {return (^Graph_Header)(s).total}
+
 // An effect row's voice starting (its state zeroed): no note, its gate open
 // for good, every node heard while it plays.
 graph_start_effect :: proc(s: ^Voice_State, program: i32) {
