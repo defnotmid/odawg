@@ -768,6 +768,7 @@ Checks that stand in for listening:
 | `repetition` | a bar looping too long with no variation |
 | `off_key`, `note_range` | notes |
 | `silent_part` | a part that makes no sound |
+| `buried_part` | a part more than 15 LU under the mix in every section it plays; names the `gain_db` raise to 12 LU under where it's loudest |
 | `no_events` | `pulse`/`hits` read a part with nothing in that range (a style without it) |
 | `start_unreachable`, `duration_unreachable` | a timing constraint that can't be met; lists each section's minimum |
 

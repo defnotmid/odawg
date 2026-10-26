@@ -21,13 +21,67 @@ init_true_peak_kernel :: proc "contextless" () {
 	}
 }
 
+// A stream's K-weighted mean square per finished 100 ms step and nothing
+// else (a Meter's steps): what a stretch's loudness is read from
+// (loudness_of_span), at the cost of the two filters.
+Steps :: struct {
+	step:      int,
+	shelf, hp: K_Biquad,
+	k:         [2][4]f64, // per channel: the shelf's and the high-pass's states
+	acc:       f64, // this step's sum so far
+	in_step:   int,
+	energy:    [dynamic]f64, // each finished step's mean square
+}
+
+steps_init :: proc(s: ^Steps, rate: int, allocator := context.allocator) {
+	s^ = {step = rate / 10}
+	s.energy = make([dynamic]f64, allocator)
+	s.shelf, s.hp = k_coefficients(rate)
+}
+
+steps_destroy :: proc(s: ^Steps) {
+	delete(s.energy)
+	s^ = {}
+}
+
+// Takes the next samples of the stream.
+steps_push :: proc(s: ^Steps, l, r: []f32) {
+	n := min(len(l), len(r))
+	for i in 0 ..< n {
+		steps_take(s, k_weighted_square(&s.k[0], &s.shelf, &s.hp, l[i]) + k_weighted_square(&s.k[1], &s.shelf, &s.hp, r[i]))
+	}
+}
+
+// A sample through the K-weighting (high shelf, then RLB high-pass, direct
+// form II transposed), squared.
+@(private = "file")
+k_weighted_square :: #force_inline proc "contextless" (st: ^[4]f64, shelf, hp: ^K_Biquad, v: f32) -> f64 {
+	fv := f64(v)
+	y := shelf.b0 * fv + st[0]
+	st[0] = shelf.b1 * fv - shelf.a1 * y + st[1]
+	st[1] = shelf.b2 * fv - shelf.a2 * y
+	z := hp.b0 * y + st[2]
+	st[2] = hp.b1 * y - hp.a1 * z + st[3]
+	st[3] = hp.b2 * y - hp.a2 * z
+	w := f64(f32(z))
+	return w * w
+}
+
+// A sample's (both sides') K-weighted square into the step; a finished
+// step's mean kept.
+@(private = "file")
+steps_take :: #force_inline proc(s: ^Steps, e: f64) {
+	s.acc += e
+	s.in_step += 1
+	if s.in_step == s.step {
+		append(&s.energy, s.acc / f64(s.step))
+		s.acc, s.in_step = 0, 0
+	}
+}
+
 Meter :: struct {
-	rate, step:  int,
-	shelf, hp:   K_Biquad,
-	k:           [2][4]f64, // per channel: the shelf's and the high-pass's states
-	acc:         f64, // this step's sum so far
-	in_step:     int,
-	energy:      [dynamic]f64, // each finished step's mean square
+	rate:        int,
+	using steps: Steps,
 	sample_peak: f32,
 	true_peak:   f32,
 	history:     [2][4 * TRUE_PEAK_TAPS]f32, // mirrored 16-sample ring buffer per channel
@@ -35,13 +89,12 @@ Meter :: struct {
 }
 
 meter_init :: proc(m: ^Meter, rate: int, allocator := context.allocator) {
-	m^ = {rate = rate, step = rate / 10}
-	m.energy = make([dynamic]f64, allocator)
-	m.shelf, m.hp = k_coefficients(rate)
+	m^ = {rate = rate}
+	steps_init(&m.steps, rate, allocator)
 }
 
 meter_destroy :: proc(m: ^Meter) {
-	delete(m.energy)
+	steps_destroy(&m.steps)
 	m^ = {}
 }
 
@@ -59,17 +112,7 @@ meter_push :: proc(m: ^Meter, l, r: []f32) {
 			v := x[c]
 			m.sample_peak = max(m.sample_peak, abs(v))
 			m.true_peak = max(m.true_peak, abs(v))
-			// K-weighting: high shelf, then RLB high-pass (direct form II transposed)
-			st := &m.k[c]
-			fv := f64(v)
-			y := m.shelf.b0 * fv + st[0]
-			st[0] = m.shelf.b1 * fv - m.shelf.a1 * y + st[1]
-			st[1] = m.shelf.b2 * fv - m.shelf.a2 * y
-			z := m.hp.b0 * y + st[2]
-			st[2] = m.hp.b1 * y - m.hp.a1 * z + st[3]
-			st[3] = m.hp.b2 * y - m.hp.a2 * z
-			w := f64(f32(z))
-			e += w * w
+			e += k_weighted_square(&m.k[c], &m.shelf, &m.hp, v)
 			// true peak: the sample TAPS back is between its 8 before and 8 after
 			h := &m.history[c]
 			h[pos] = v
@@ -86,12 +129,7 @@ meter_push :: proc(m: ^Meter, l, r: []f32) {
 				}
 			}
 		}
-		m.acc += e
-		m.in_step += 1
-		if m.in_step == m.step {
-			append(&m.energy, m.acc / f64(m.step))
-			m.acc, m.in_step = 0, 0
-		}
+		steps_take(&m.steps, e)
 		m.pushed += 1
 	}
 }

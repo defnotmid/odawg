@@ -530,8 +530,16 @@ run_inspect :: proc(a: ^Args) -> bool {
 		opts.from, opts.to = tempo.seconds_from_beat(&s.tempo, b0), tempo.seconds_from_beat(&s.tempo, b1)
 	}
 	context.allocator = virtual.arena_allocator(&l.arena)
-	out := render.output_from_song(s, opts)
-	check.findings_from_render(s, &out, &l.findings)
+	// measured as it streams, the parts' stems with it (none kept whole)
+	opts.stems = true
+	m: check.Measuring
+	check.measuring_init(&m, s, from = opts.from)
+	defer check.measuring_destroy(&m)
+	render.export_song(s, opts, {data = &m, take = proc(data: rawptr, at: i64, l, r: []f32, stems: [][2][]f32) {
+			check.measuring_push((^check.Measuring)(data), l, r, stems)
+		}})
+	measures := check.measures_from(&m)
+	check.findings_from_measures(s, &measures, &l.findings)
 	print_findings(l.findings[:])
 	return !base.has_errors(l.findings[:])
 }

@@ -111,6 +111,19 @@ true_peak_from_samples :: proc(l, r: []f32) -> f64 {
 	return 20 * math.log10(max(f64(peak), 1e-9))
 }
 
+// The integrated loudness (BS.1770's gates) of steps [first, last) of a
+// stream's K-weighted energy (100 ms each, a Steps' or a Meter's): its
+// 400 ms blocks every 100 ms inside the span. -inf where no block of it is
+// above -70 LUFS (silence, or a span under 400 ms).
+loudness_of_span :: proc(energy: []f64, first, last: int) -> f64 {
+	first, last := max(first, 0), min(last, len(energy))
+	blocks := make([]Loudness_Block, max(last - first - 3, 0), context.temp_allocator)
+	for &b, k in blocks {
+		b = block_loudness(energy, first + k, 4)
+	}
+	return gated_loudness(blocks)
+}
+
 // A block's mean square and its loudness.
 @(private = "file")
 Loudness_Block :: struct {

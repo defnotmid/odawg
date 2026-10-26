@@ -41,7 +41,7 @@ Most cheap-sounding synths are missing the same few things:
 | --- | --- | --- | --- | --- |
 | pad | 5–7 detuned saws, wide; a sine an octave down | 24 dB low-pass, low base, opened slowly by its own `Env`, a slow `Lfo` drift | attack 0.3–2 s, release 1–3 s | `pad` |
 | pluck | 2–3 saws or a square | resonant 24 dB low-pass snapped shut by a `Decay` (0.1–0.25 s), velocity opening it | no sustain, decay 0.5–1 s | `pluck` |
-| lead | 3–5 saws, a sub square; `mono` with `portamento` | 12 dB low-pass, an `Env` "bite" settling to a sustain | short release; vibrato by an `Lfo` with `delay` and `fade` | `lead` |
+| lead | 5 detuned saws, a pulse sub an octave down whose width an `Lfo` drifts, a quick pitch scoop (`Decay` on frequency); `mono` with `portamento` | `Ladder` (24 dB) with an `Env` "bite" settling to a sustain, then `Drive` with `oversample` | a decaying amp settling to 0.72, short release; vibrato by an `Lfo` with `delay` and `fade` | `lead` |
 | bass | a saw and a sine under it, mono | `Ladder`, a short `Decay` plucking it open by velocity, key-tracked from C2 | short attack and release | `bass` |
 | reese | two saws detuned against each other, a sine sub | 24 dB low-pass moved by a slow `Lfo`, then `Drive` | sustained | `reese` |
 | stab | 3 saws | resonant low-pass flicked open by a very short `Decay` | fast decay to a little sustain | `stab` |
@@ -151,7 +151,9 @@ trumpet and cellos from VS Chamber Orchestra 2.
 7. **Level it by measurement.** An SFZ plays at its author's levels, which
    differ a lot: one note at the same velocity spans 17.6 dB across
    `sfz_chamber`'s five files. Set each part's `gain_db` from
-   `odawg analyze`'s loudness per section (below).
+   `odawg analyze`'s loudness per section (below); `inspect` reports a part
+   more than 15 LU under the mix in every section it plays (`buried_part`)
+   with the raise that puts it 12 LU under.
 
 ## Mixing as part of the sound
 
@@ -172,7 +174,9 @@ trumpet and cellos from VS Chamber Orchestra 2.
   max momentary (its loudest 400 ms) for one note at velocity 0.8, played
   alone (C4; the basses C2). Swapping one voice for another keeps the
   part's level. A voice of your own set to the same reference drops in the
-  same way. A chord of four notes comes out about 6 dB louder.
+  same way. A chord of four notes comes out about 6 dB louder, and a voice
+  played well above or below C4 lands off the reference (`lead`, played
+  at E5–A6, about 0.5 to 1 LU over it), so check a part where it plays.
 - **Levels, energy arc and spectrograms.** Run `odawg analyze SPEC --master streaming`
   to check every section's loudness, stereo width, crest factor and the
   `crowding` table:
@@ -180,7 +184,8 @@ trumpet and cellos from VS Chamber Orchestra 2.
     `intro` −19 LUFS → `verse` −16 LUFS → `build` −15 LUFS → `drop` −12 LUFS).
   - Inside a drop, drums and bass anchor the mix, the lead sits 3–5 LU above
     the comping (`keys`, `pad`, `arp`), and no active part sits more than
-    15 LU below the mix.
+    15 LU below the mix (`inspect`'s `buried_part` names a part that does
+    in every section it plays, and the raise it needs).
   - Keep low-end sub energy (`20–120 Hz`) out of low-energy intros and
     breakdowns so the drop hits with physical contrast.
 

@@ -288,9 +288,15 @@ What went wrong on the way, and what changed:
 - **Levels.** One note at velocity 0.8 spans 17.6 dB across the five SFZ files (the cellos
   -21.8 LUFS max momentary, the flute -39.4). A part's register and velocities move it
   further: the violin needed 10 dB more than its C4 calibration where it played. Every
-  part's `gain_db` was set from `odawg analyze`'s loudness per section. Next: `odawg pin`
-  measures a reference level for each SFZ a song plays, at the notes it plays, so a part
-  starts at synths.json's reference.
+  part's `gain_db` was set from `odawg analyze`'s loudness per section. Levelling SFZ
+  files automatically was considered and left out. A level kept with the pins would be
+  per library, shared by songs; measured at the notes one song plays, re-pinning another
+  would move its mix. A fixed reference key would fetch samples the song never plays. And
+  either would leave the register's error: after a C4 calibration, parts still needed
+  1 to 10 dB. Instead `inspect` reports `buried_part`: a part more than 15 LU under the
+  mix in every section it plays, with the `gain_db` raise that puts it 12 LU under where
+  it's loudest. `inspect` now measures the parts' stems as it streams, so `silent_part`
+  reports from the CLI too.
 
 ---
 
@@ -307,6 +313,7 @@ What went wrong on the way, and what changed:
 - An SFZ (or any layered row) can be a layer; a machine as a layer is an error (W6).
 - `odawg pin` exits non-zero when a file couldn't be fetched (W6).
 - `odawg fetch SPEC` fetches what the song plays, its sources' files too (W6).
+- `buried_part`: a part far under the mix wherever it plays, with the raise to make (W6).
 
 **In onimite:**
 

@@ -280,7 +280,7 @@ bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Ne
 			continue
 		}
 		if bf.sha256 == "" && !pinning(host) {
-			miss(&missing, w.set, fmt.tprintf("%s is not in its source's pins; odawg pin SPEC fetches and pins what the song plays", bf.url))
+			miss(&missing, w.set, fmt.tprintf("%s is not in its source's pins; pinning the song fetches and pins what it plays", bf.url))
 			w.file, ok = -1, false
 			continue
 		}

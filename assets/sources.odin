@@ -154,7 +154,7 @@ source_read :: proc(d: ^Declaring, src: ^spec.Source_Spec, pins: string) -> ^Sou
 	text, read := host_text(d.host, pins)
 	if !read {
 		if !pinning(d.host) {
-			base.report(d.findings, "missing_file", .Error, pins, "source %s: its pins %s can't be read (odawg pin writes them)", src.name, pins)
+			base.report(d.findings, "missing_file", .Error, pins, "source %s: its pins %s can't be read (pinning the song writes them)", src.name, pins)
 			return x
 		}
 		text = ""
@@ -221,7 +221,7 @@ song_file_text :: proc(bank: ^device.Bank, d: ^Declaring, f: Song_File, name: st
 		return host_text(d.host, f.path)
 	}
 	if f.sha256 == "" && !pinning(d.host) {
-		base.report(d.findings, "not_pinned", .Error, name, "%s is not in its source's pins (odawg pin SPEC fetches and pins what the song plays)", name)
+		base.report(d.findings, "not_pinned", .Error, name, "%s is not in its source's pins (pinning the song fetches and pins what it plays)", name)
 		return "", false
 	}
 	got, size, err := ensure_pinned(f.path, f.url, f.sha256, f.size)

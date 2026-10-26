@@ -508,7 +508,7 @@ draft_base :: proc(c: ^Ctx, d: ^Draft, name, path: string, owner: ^Spec, depth: 
 	if is_file_name(name) {
 		v, file, found := file_value(owner, name)
 		if !found {
-			report(c, "missing_file", .Error, path, "%s: instrument file %s was not read (the host reads what instrument_files lists)", path, file)
+			report(c, "missing_file", .Error, path, "%s: instrument file %s couldn't be read (a path beside the song, or in a source it declares)", path, file)
 			return false
 		}
 		if o, is_table := v.(json.Object); is_table && len(o) == 0 {
@@ -1339,7 +1339,7 @@ sfz_desc :: proc(c: ^Ctx, d: ^Draft, written: string) -> ^device.Program_Desc {
 	key := asset_key(d.sfz_owner, d.sfz_name)
 	s := spec_sfz(d.sfz_owner, key)
 	if s == nil {
-		report(c, "missing_file", .Error, written, "%s: SFZ file %s was not read (the assets layer reads it declaring its samples)", written, key)
+		report(c, "missing_file", .Error, written, "%s: SFZ file %s couldn't be read or fetched (a path beside the song, or SOURCE/PATH in a source it declares; a source's finding above says why)", written, key)
 		return nil
 	}
 	for m in s.missing {
