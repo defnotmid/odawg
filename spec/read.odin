@@ -60,6 +60,7 @@ Field_Kind :: enum u8 {
 	Sets, // the spec: its sample sets by name
 	Sources, // the spec: the sources its files are fetched from, by name
 	Note, // f64 MIDI: "C3", "F#2" or a number
+	Bars, // Span into bars: a step string, or a list of them (a bar each)
 }
 
 Field_Row :: struct {
@@ -105,6 +106,7 @@ FIELD_READERS := [Field_Kind]Field_Reader {
 	.Sets      = read_sets_field,
 	.Sources   = read_sources_field,
 	.Note      = read_note_field,
+	.Bars      = read_bars_field,
 }
 
 SPEC_FIELDS := []Field_Row {
@@ -207,7 +209,7 @@ ARPEGGIO_FIELDS := []Field_Row {
 
 CHORDS_FIELDS := []Field_Row {
 	{"voicing", .String, offset_of(Play_Spec, chords) + offset_of(Chords_Spec, voicing)},
-	{"rhythm", .String, offset_of(Play_Spec, chords) + offset_of(Chords_Spec, rhythm)},
+	{"rhythm", .Bars, offset_of(Play_Spec, chords) + offset_of(Chords_Spec, rhythm)},
 }
 
 EVENT_FIELDS := []Field_Row {
@@ -580,23 +582,8 @@ read_steps_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
 		return
 	}
 	lane :: proc(r: ^Reader, pad: string, v: json.Value, path: string) {
-		l := Lane_Spec{pad = strings.clone(pad), bars = {i32(len(r.spec.bars)), 0}}
-		#partial switch x in v {
-		case json.String:
-			append(&r.spec.bars, strings.clone(x))
-			l.bars.count = 1
-		case json.Array:
-			for y, i in x {
-				s, ok := y.(json.String)
-				if !ok {
-					bad(r, base.path_index(path, i + 1), "a step string (\"x...x...\")")
-					continue
-				}
-				append(&r.spec.bars, strings.clone(s))
-				l.bars.count += 1
-			}
-		case:
-			bad(r, path, "a step string or a list of them")
+		l := Lane_Spec{pad = strings.clone(pad)}
+		if !bars_from_value(r, v, path, &l.bars) {
 			return
 		}
 		append(&r.spec.lanes, l)
@@ -611,6 +598,36 @@ read_steps_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
 		lane(r, "", v, path)
 	}
 	p.rows.count = i32(len(r.spec.lanes)) - p.rows.first
+}
+
+// A step string, or a list of them (a bar each), into bars: their span.
+@(private = "file")
+bars_from_value :: proc(r: ^Reader, v: json.Value, path: string, out: ^Span) -> bool {
+	out^ = {i32(len(r.spec.bars)), 0}
+	#partial switch x in v {
+	case json.String:
+		append(&r.spec.bars, strings.clone(x))
+		out.count = 1
+	case json.Array:
+		for y, i in x {
+			s, ok := y.(json.String)
+			if !ok {
+				bad(r, base.path_index(path, i + 1), "a step string (\"x...x...\")")
+				continue
+			}
+			append(&r.spec.bars, strings.clone(s))
+			out.count += 1
+		}
+	case:
+		bad(r, path, "a step string or a list of them")
+		return false
+	}
+	return true
+}
+
+@(private = "file")
+read_bars_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
+	bars_from_value(r, v, path, (^Span)(dst))
 }
 
 // vary = { {}, { transpose = 2 }, { thin = 0.3, fill = true } }: a repeat each.

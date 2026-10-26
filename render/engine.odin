@@ -2262,6 +2262,13 @@ finish_segment :: proc(e: ^Engine, w: ^Worker, ti: int, at: i64, l, r: []f32, ke
 		for start := 0; start < n; start += BLOCK {
 			m := min(BLOCK, n - start)
 			g := lane_gains(e, w, gain_lane, tm.gain, at + i64(start), m)
+			if gain_lane >= 0 {
+				// a part's gain_db lane rides on its level (its gain_db, a live
+				// edit's glide): the trim, and the automation over it
+				for i in 0 ..< m {
+					g[i] = f32(level_at(tm.gain, at + i64(start + i)) * f64(g[i]))
+				}
+			}
 			for i in 0 ..< m {
 				pan := level_at(tm.pan, at + i64(start + i))
 				if pan_lane >= 0 {

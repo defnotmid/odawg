@@ -204,8 +204,8 @@ up and dropped. Choose each of these on purpose:
 - **Meter and groove.** 3/4 and 6/8 exist (`time_signature`). `swing` and
   `swing_subdivision` set the feel. Accents (`X`) and ghost notes (`o`)
   make a pattern groove, and `humanize` loosens it. A list of bar strings in
-  `steps` varies a pattern bar by bar: put a fill in the last bar of a
-  phrase.
+  `steps` (or in a chord `rhythm`) varies a pattern bar by bar: put a fill
+  in the last bar of a phrase, push the comping on the fourth.
 - **Form.** Let sections be long enough for an idea to develop. Change
   something at each one: a part drops out, the bass pattern changes, the
   drums go half-time.

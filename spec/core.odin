@@ -397,7 +397,7 @@ Arpeggio_Spec :: struct {
 // held until the next change.
 Chords_Spec :: struct {
 	voicing: string,
-	rhythm:  string,
+	rhythm:  Span, // into bars: a step string a bar, cycled from the range's start (none: a chord per change)
 }
 
 // A drum pad's (or a pitched part's single) lane of steps.

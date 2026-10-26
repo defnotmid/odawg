@@ -179,3 +179,35 @@ test_automation_findings :: proc(t: ^testing.T) {
 		virtual.arena_destroy(&arena)
 	}
 }
+
+// A part's gain_db lane rides on its gain_db (a trim, the automation over
+// it): a part at -9 dB with a lane at 0 is the part at -9 without one, and
+// with a lane at -6 the part at -15 (to float rounding: the gains multiply).
+@(test)
+test_gain_lane_rides_on_part :: proc(t: ^testing.T) {
+	song_text :: proc(gain, lane: string) -> string {
+		return strings.concatenate({`{ bpm: 120, seed: 4, key: "C major", sections: [ { name: "a", duration: "2m", chords: "C F" } ],
+			parts: { pad: { instrument: "Synth", gain_db: `, gain, `, play: [ { name: "a", chords: { voicing: "open" }, octave: 4 } ] } }`,
+			lane != "" ? strings.concatenate({`, automation: { "parts/pad/gain_db": [ [ "a", `, lane, ` ] ] }`}, context.temp_allocator) : "", ` }`}, context.temp_allocator)
+	}
+	Pair :: struct {
+		with_lane, without: [2]string, // gain, lane
+	}
+	for p in ([]Pair{{{"-9", "0"}, {"-9", ""}}, {{"-9", "-6"}, {"-15", ""}}}) {
+		a1, a2: virtual.Arena
+		defer virtual.arena_destroy(&a1)
+		defer virtual.arena_destroy(&a2)
+		s1 := compose_text(t, song_text(p.with_lane[0], p.with_lane[1]), &a1)
+		s2 := compose_text(t, song_text(p.without[0], p.without[1]), &a2)
+		o1 := output_from_song(s1, {})
+		defer output_destroy(&o1)
+		o2 := output_from_song(s2, {})
+		defer output_destroy(&o2)
+		worst, peak: f32
+		for i in 0 ..< min(o1.frames, o2.frames) {
+			worst = max(worst, abs(o1.left[i] - o2.left[i]), abs(o1.right[i] - o2.right[i]))
+			peak = max(peak, abs(o2.left[i]))
+		}
+		testing.expectf(t, peak > 0.01 && worst <= peak * 1e-6, "gain_db %s with a lane at %s vs gain_db %s alone: differs by %g (peak %g)", p.with_lane[0], p.with_lane[1], p.without[0], worst, peak)
+	}
+}

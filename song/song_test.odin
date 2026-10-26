@@ -537,3 +537,40 @@ test_event_pad_unknown :: proc(t: ^testing.T) {
 		p: { instrument: "Synth", play: [ { name: "a", events: [ { time: 0, note: "D", duration: 1 } ] } ] } } }`, &arena)
 	testing.expect(t, has(s, "unknown_pad"))
 }
+
+// A chord rhythm can be a list of bar strings, cycled from its range's
+// start as steps' are: bar 1 "X...", bar 2 "..x.", bar 3 "X..." again. A
+// single string still plays every bar.
+@(test)
+test_chord_rhythm_bars :: proc(t: ^testing.T) {
+	Case :: struct {
+		rhythm: string,
+		want:   []f64, // the beats chords start on (bars of 4 beats)
+	}
+	cases := []Case {
+		{`[ "X...", "..x." ]`, {0, 6, 8, 14}},
+		{`"x.x."`, {0, 2, 4, 6, 8, 10, 12, 14}},
+	}
+	for c in cases {
+		arena: virtual.Arena
+		defer virtual.arena_destroy(&arena)
+		s := compose(t, strings.concatenate({`{ bpm: 120, sections: [ { name: "a", duration: "4m", chords: "C F G C" } ],
+			parts: { keys: { instrument: "Synth", play: [ { name: "a", chords: { rhythm: `, c.rhythm, ` }, octave: 4 } ] } } }`}, context.temp_allocator), &arena)
+		starts := make([dynamic]f64, context.temp_allocator)
+		for i in 0 ..< len(s.notes) {
+			beat := math.round(s.notes.time[i] * 2 * 100) / 100 // 120 bpm: 2 beats a second
+			found := false
+			for x in starts {
+				found ||= x == beat
+			}
+			if !found {
+				append(&starts, beat)
+			}
+		}
+		same := len(starts) == len(c.want)
+		for b, i in c.want {
+			same &&= i < len(starts) && starts[i] == b
+		}
+		testing.expectf(t, same, "rhythm %s: chords on beats %v, want %v", c.rhythm, starts[:], c.want)
+	}
+}

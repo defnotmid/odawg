@@ -1056,7 +1056,8 @@ expand_chords :: proc(x: ^Expand) {
 		clear(previous)
 		append(previous, ..notes[:])
 	}
-	if x.play.chords.rhythm == "" {
+	bars := x.from_spec.bars[x.play.chords.rhythm.first:base.span_end(x.play.chords.rhythm)]
+	if len(bars) == 0 {
 		// a chord per change, held until the next
 		for b := x.from; b < x.to - 1e-9; {
 			c := chord_from_beat(x.song, b)
@@ -1073,16 +1074,19 @@ expand_chords :: proc(x: ^Expand) {
 		}
 		return
 	}
+	// a step string a bar, the list cycled from the range's start, as steps' are
 	cells := make([dynamic]u8, context.temp_allocator)
-	for c in transmute([]u8)x.play.chords.rhythm {
-		if c != ' ' && c != '|' {
-			append(&cells, c)
+	bar := 0
+	for start := x.from; start < x.to - 1e-9; start, bar = start + f64(bpb_at(x.song, start)), bar + 1 {
+		clear(&cells)
+		for c in transmute([]u8)bars[bar % len(bars)] {
+			if c != ' ' && c != '|' {
+				append(&cells, c)
+			}
 		}
-	}
-	if len(cells) == 0 {
-		return
-	}
-	for start := x.from; start < x.to - 1e-9; start += f64(bpb_at(x.song, start)) {
+		if len(cells) == 0 {
+			continue
+		}
 		step := f64(bpb_at(x.song, start)) / f64(len(cells))
 		for c, i in cells {
 			if c != 'x' && c != 'X' {

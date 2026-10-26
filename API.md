@@ -197,7 +197,8 @@ A play entry is `{ range, ... }` with one of:
 - `degrees` and `subdivision`: chord degrees that follow the progression.
 - `events`: Tone.Part events.
 - `arpeggio = { pattern, interval, octaves }`.
-- `chords = { voicing, rhythm }`.
+- `chords = { voicing, rhythm }`: `rhythm` a step string (`"X..x..x."`, one bar) or a list
+  of them, a bar each, cycled from the range's start as `steps` are.
 
 Entries can also take `velocity`, `octave` and `humanize`.
 
@@ -491,7 +492,10 @@ automation = {
 ```
 
 - What a path names:
-  - `parts/<part>/gain_db` and `parts/<part>/pan`: the part's fader and pan.
+  - `parts/<part>/gain_db`: dB on top of the part's `gain_db` (0 is the part's level): the
+    part's `gain_db` is its trim and the lane rides on it, as a DAW's trim and automation
+    do, so raising `gain_db` raises an automated part too. `parts/<part>/pan`: its pan.
+    A send's and the master's lanes are their values, as written.
   - `parts/<part>/sends/<return or bus>`: a send's level.
   - `parts/<part>/effects/<effect>/<param>`: an effect in the part's chain, by name
     (`Filter`), by name and count (`Filter#2`) or by place (`2`).
@@ -679,7 +683,8 @@ render.engine_sync(&e, row)   // the engine playing it, from any thread
   an instrument value its field reads per sample; one read when a note starts waits for the
   next note.
 - A lane on the same value still wins: automation is what a song says, and an edit is
-  where it stands between lanes.
+  where it stands between lanes. A `gain_db` lane rides on the part's level, so an edit to
+  the part's gain moves the lane with it.
 
 ### The project document (`.odawg`, JSON, stable ids)
 
