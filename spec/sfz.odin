@@ -28,7 +28,7 @@ Sfz_Status :: enum u8 {
 	Warn, // not played: a warning names it (the sound differs from SFZ's)
 	Plays, // it sounds as SFZ says
 	Compile, // read once, at compile (a CC at its value)
-	Info, // doesn't change the sound (a label, a default for a knob)
+	Info, // doesn't change the sound (a label, a default for a knob, what a CC moving during a note does)
 }
 
 Sfz_Opcode_Row :: struct {

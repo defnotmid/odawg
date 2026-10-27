@@ -160,9 +160,10 @@ trumpet and cellos from VS Chamber Orchestra 2.
    `odawg fetch SPEC` fetches them all ahead of time (`--verify` hashes
    what is already on disk again).
 6. **Read the findings:** `unsupported_opcode` names what odawg doesn't play
-   (VS Chamber Orchestra 2's `ampeg_dynamic` only matters when a CC moves an
-   envelope during a note); `odawg sfz-check FILE` lists every opcode a file
-   uses and how odawg plays it.
+   where the sound differs from SFZ's; `odawg sfz-check FILE` lists every
+   opcode a file uses and how odawg plays it. An instrument's CCs are set
+   when it compiles and never move during a note, so what a CC moving would
+   change (`ampeg_dynamic` and the other `*_dynamic` opcodes) isn't a finding.
 7. **Level it by measurement.** An SFZ plays at its author's levels, which
    differ a lot: one note at the same velocity spans 17.6 dB across
    `sfz_chamber`'s five files. Set each part's `gain_db` from the

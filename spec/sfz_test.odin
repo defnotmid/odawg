@@ -120,3 +120,20 @@ unsupported_opcode Warning t.sfz: bitred isn't played (1 use, first at t.sfz:7);
 unsupported_opcode Warning t.sfz: bitred (by a CC) isn't played (1 use, first at t.sfz:7); the sound differs from SFZ's there
 unknown_opcode Warning t.sfz: foo_bar is not an SFZ opcode (1 use, first at t.sfz:7)
 `
+
+// The *_dynamic opcodes compute an envelope (or an EQ) again when a CC
+// moves during a note, and an instrument's CCs are set at compile, never
+// moved while it plays: odawg plays what SFZ plays with them, so they're no
+// finding, even where a CC sets the envelope's times (read at its value).
+@(test)
+test_sfz_dynamic :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	_ = virtual.arena_init_growing(&arena)
+	defer virtual.arena_destroy(&arena)
+	context.allocator = virtual.arena_allocator(&arena)
+	got := sfz_compiled(`<control> set_cc1=100
+<group> ampeg_dynamic=1 fileg_dynamic=1 pitcheg_dynamic=1 eg1_dynamic=1 eq1_dynamic=1
+<region> sample=a.wav ampeg_attack=0.01 ampeg_attack_oncc1=0.5 ampeg_release=0.3 ampeg_releasecc1=0.2
+`)
+	testing.expectf(t, !strings.contains(got, "unsupported_opcode") && !strings.contains(got, "unknown_opcode"), "no finding:\n%s", got)
+}

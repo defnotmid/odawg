@@ -2,7 +2,9 @@
 # line: its name (N, X, Y: a number), version, category, what it is an alias of,
 # and how odawg reads it: plays (it sounds as SFZ says), compile (read once at
 # compile: a CC at its value), info (doesn't change the sound), warn (not played:
-# a warning naming it).
+# a warning naming it). The *_dynamic opcodes are info: they compute an envelope
+# (or an EQ) again when a CC moves, and an instrument's CCs are set at compile,
+# never moved while a note plays.
 #define	SFZ v2	Instrument Settings		warn
 #include	ARIA	Instrument Settings		warn
 *_mod	ARIA	Instrument Settings		warn
@@ -32,7 +34,7 @@ ampeg_decayccN		Modulation/Envelope Generators/modulation		warn
 ampeg_delay	SFZ v1	Modulation/Envelope Generators		plays
 ampeg_delay_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
 ampeg_delayccN		Modulation/Envelope Generators/modulation		warn
-ampeg_dynamic	ARIA	Modulation/Envelope Generators		warn
+ampeg_dynamic	ARIA	Modulation/Envelope Generators		info
 ampeg_hold	SFZ v1	Modulation/Envelope Generators		plays
 ampeg_hold_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
 ampeg_holdccN		Modulation/Envelope Generators/modulation		warn
@@ -203,7 +205,7 @@ egN_depth_lfoX	SFZ v2	Modulation/Envelope Generators		warn
 egN_depthadd_lfoX	SFZ v2	Modulation/Envelope Generators		warn
 egN_driveshape	SFZ v2	Modulation/Envelope Generators		warn
 egN_driveshape_onccX		Modulation/Envelope Generators/modulation		warn
-egN_dynamic	ARIA	Modulation/Envelope Generators		warn
+egN_dynamic	ARIA	Modulation/Envelope Generators		info
 egN_eqXbw	SFZ v2	Modulation/Envelope Generators		warn
 egN_eqXbw_onccY		Modulation/Envelope Generators/modulation		warn
 egN_eqXfreq	SFZ v2	Modulation/Envelope Generators		warn
@@ -249,7 +251,7 @@ egN_width_onccX		Modulation/Envelope Generators/modulation		warn
 end	SFZ v1	Sound Source/Sample Playback		plays
 eqN_bw	SFZ v1	Performance Parameters/EQ		plays
 eqN_bwccX		Performance Parameters/EQ/modulation		warn
-eqN_dynamic	ARIA	Performance Parameters/EQ		warn
+eqN_dynamic	ARIA	Performance Parameters/EQ		info
 eqN_freq	SFZ v1	Performance Parameters/EQ		plays
 eqN_freqccX		Performance Parameters/EQ/modulation		warn
 eqN_gain	SFZ v1	Performance Parameters/EQ		plays
@@ -301,7 +303,7 @@ fileg_delay_onccN	ARIA	Modulation/Envelope Generators/modulation		warn
 fileg_depth	SFZ v1	Modulation/Envelope Generators		plays
 fileg_depth_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
 fileg_depth_onccN	ARIA	Modulation/Envelope Generators/modulation		warn
-fileg_dynamic	ARIA	Modulation/Envelope Generators		warn
+fileg_dynamic	ARIA	Modulation/Envelope Generators		info
 fileg_hold	SFZ v1	Modulation/Envelope Generators		plays
 fileg_hold_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
 fileg_hold_onccN	ARIA	Modulation/Envelope Generators/modulation		warn
@@ -603,7 +605,7 @@ pitcheg_delay_onccN	ARIA	Modulation/Envelope Generators/modulation		warn
 pitcheg_depth	SFZ v1	Modulation/Envelope Generators		plays
 pitcheg_depth_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
 pitcheg_depth_onccN	ARIA	Modulation/Envelope Generators/modulation		warn
-pitcheg_dynamic	ARIA	Modulation/Envelope Generators		warn
+pitcheg_dynamic	ARIA	Modulation/Envelope Generators		info
 pitcheg_hold	SFZ v1	Modulation/Envelope Generators		plays
 pitcheg_hold_curveccN	ARIA	Modulation/Envelope Generators/modulation		warn
 pitcheg_hold_onccN	ARIA	Modulation/Envelope Generators/modulation		warn
