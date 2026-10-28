@@ -1434,57 +1434,91 @@ SEGMENTS_LEVELS :: SEGMENTS_TIMES + SEGMENT_POINTS
 SEGMENTS_SUSTAIN :: SEGMENTS_LEVELS + SEGMENT_POINTS
 SEGMENTS_POINTS :: SEGMENTS_SUSTAIN + 1
 
-// Its level `t` seconds after its start, held at `sustain` until `gate`.
+// Its points, read once a call: the time each is reached (seconds from the
+// note's start), and where a walk along them has got to (the times it is
+// asked about only rise).
 @(private = "file")
-segments_at :: proc(v: ^[MAX_FIELDS]f32, t, gate: f64) -> f32 {
-	points := clamp(int(v[SEGMENTS_POINTS]), 1, SEGMENT_POINTS)
-	sustain := int(v[SEGMENTS_SUSTAIN])
-	// the time each point is reached
-	at: [SEGMENT_POINTS]f64
-	for k in 1 ..< points {
-		at[k] = at[k - 1] + max(f64(v[SEGMENTS_TIMES + k]), 0)
-	}
-	level :: proc(v: ^[MAX_FIELDS]f32, at: [SEGMENT_POINTS]f64, points: int, t: f64) -> f32 {
-		if t <= 0 {
-			return v[SEGMENTS_LEVELS]
-		}
-		for k in 1 ..< points {
-			if t < at[k] {
-				span := at[k] - at[k - 1]
-				x := span > 0 ? f32((t - at[k - 1]) / span) : 1
-				return v[SEGMENTS_LEVELS + k - 1] + (v[SEGMENTS_LEVELS + k] - v[SEGMENTS_LEVELS + k - 1]) * x
-			}
-		}
-		return v[SEGMENTS_LEVELS + points - 1]
-	}
-	if sustain < 0 || sustain >= points {
-		return level(v, at, points, t)
-	}
-	if t < gate {
-		return level(v, at, points, min(t, at[sustain]))
-	}
-	// released: from where it was at the gate, on through the points after the sustain
-	from := level(v, at, points, min(gate, at[sustain]))
-	r := t - gate
-	if sustain + 1 >= points {
-		return from
-	}
-	first := max(f64(v[SEGMENTS_TIMES + sustain + 1]), 0)
-	if r < first {
-		x := first > 0 ? f32(r / first) : 1
-		return from + (v[SEGMENTS_LEVELS + sustain + 1] - from) * x
-	}
-	return level(v, at, points, at[sustain + 1] + (r - first))
+Segments_Walk :: struct {
+	v:      ^[MAX_FIELDS]f32,
+	at:     [SEGMENT_POINTS]f64,
+	points: int,
+	k:      int, // the first point not yet reached
 }
 
+@(private = "file")
+segments_walk :: proc(v: ^[MAX_FIELDS]f32) -> (w: Segments_Walk) {
+	w.v, w.k = v, 1
+	w.points = clamp(int(v[SEGMENTS_POINTS]), 1, SEGMENT_POINTS)
+	for k in 1 ..< w.points {
+		w.at[k] = w.at[k - 1] + max(f64(v[SEGMENTS_TIMES + k]), 0)
+	}
+	return
+}
+
+// Its level `t` seconds after its start, straight between the points.
+@(private = "file")
+segments_level :: proc(w: ^Segments_Walk, t: f64) -> f32 {
+	v := w.v
+	if t <= 0 {
+		return v[SEGMENTS_LEVELS]
+	}
+	for w.k < w.points && t >= w.at[w.k] {
+		w.k += 1
+	}
+	k := w.k
+	if k == w.points {
+		return v[SEGMENTS_LEVELS + k - 1]
+	}
+	span := w.at[k] - w.at[k - 1]
+	x := span > 0 ? f32((t - w.at[k - 1]) / span) : 1
+	return v[SEGMENTS_LEVELS + k - 1] + (v[SEGMENTS_LEVELS + k] - v[SEGMENTS_LEVELS + k - 1]) * x
+}
+
+// A lane's block in runs: held (to the gate, at the sustain point once it
+// is reached; with none, the whole note), then released: from where it was
+// at the gate straight to the point after the sustain, then on through the
+// rest.
 @(private = "file")
 process_segments :: proc(c: ^Node_Call) {
 	for &lane in c.lanes {
 		v := node_values(c, &lane)
 		l, _ := node_out(c, &lane)
+		w := segments_walk(v)
+		sustain := int(v[SEGMENTS_SUSTAIN])
+		if sustain < 0 || sustain >= w.points {
+			for i in 0 ..< len(l) {
+				l[i] = segments_level(&w, f64(lane.at + i64(i)) / RATE)
+			}
+			continue
+		}
+		held := int(clamp(lane.gate - lane.at, 0, i64(len(l))))
+		for i in 0 ..< held {
+			l[i] = segments_level(&w, min(f64(lane.at + i64(i)) / RATE, w.at[sustain]))
+		}
+		if held == len(l) {
+			continue
+		}
 		gate := f64(lane.gate) / RATE
-		for i in 0 ..< len(l) {
-			l[i] = segments_at(v, f64(lane.at + i64(i)) / RATE, gate)
+		from := segments_level(&w, min(gate, w.at[sustain]))
+		if sustain + 1 >= w.points {
+			for i in held ..< len(l) {
+				l[i] = from
+			}
+			continue
+		}
+		first := max(f64(v[SEGMENTS_TIMES + sustain + 1]), 0)
+		to := v[SEGMENTS_LEVELS + sustain + 1]
+		i := held
+		for ; i < len(l); i += 1 {
+			r := f64(lane.at + i64(i)) / RATE - gate
+			if r >= first {
+				break
+			}
+			l[i] = from + (to - from) * f32(r / first)
+		}
+		for ; i < len(l); i += 1 {
+			r := f64(lane.at + i64(i)) / RATE - gate
+			l[i] = segments_level(&w, w.at[sustain + 1] + (r - first))
 		}
 	}
 }
