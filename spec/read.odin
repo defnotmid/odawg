@@ -303,10 +303,11 @@ spec_init :: proc(s: ^Spec, allocator := context.allocator) {
 		duration = UNSET, energy = UNSET, start = 0, gain_db = -10,
 	}
 	s.sections.allocator, s.parts.allocator, s.plays.allocator = allocator, allocator, allocator
-	s.lanes.allocator, s.bars.allocator, s.tokens.allocator = allocator, allocator, allocator
+	s.lanes.allocator, s.bars.allocator, s.tokens.allocator, s.varies.allocator = allocator, allocator, allocator, allocator
 	s.events.allocator, s.ranges.allocator, s.devices.allocator = allocator, allocator, allocator
 	s.values.allocator, s.chain.allocator, s.sends.allocator = allocator, allocator, allocator
 	s.returns.allocator, s.markers.allocator, s.room.allocator = allocator, allocator, allocator
+	s.automation.allocator, s.automation_points.allocator = allocator, allocator
 	s.strings.allocator, s.styles.allocator, s.buses.allocator = allocator, allocator, allocator
 	s.sets.allocator, s.set_zones.allocator, s.sources.allocator = allocator, allocator, allocator
 	s.instruments.allocator, s.instrument_includes.allocator, s.instrument_files.allocator = allocator, allocator, allocator

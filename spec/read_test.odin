@@ -1,6 +1,8 @@
 package odawg_spec
 
+import "base:runtime"
 import "core:mem/virtual"
+import "core:reflect"
 import "core:testing"
 import base "../base"
 import device "../device"
@@ -138,4 +140,23 @@ test_row_order :: proc(t: ^testing.T) {
 map_value :: proc(text: string) -> json_value {
 	v, _ := json_parse(text)
 	return v
+}
+
+// spec_init hands every table of a Spec the allocator it is given (one it
+// missed would grow on whatever context.allocator is when it first grows).
+@(test)
+test_spec_init_allocator :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	_ = virtual.arena_init_growing(&arena)
+	defer virtual.arena_destroy(&arena)
+	a := virtual.arena_allocator(&arena)
+	s: Spec
+	spec_init(&s, a)
+	for f in reflect.struct_fields_zipped(Spec) {
+		if _, table := runtime.type_info_base(f.type).variant.(runtime.Type_Info_Dynamic_Array); !table {
+			continue
+		}
+		raw := (^runtime.Raw_Dynamic_Array)(uintptr(&s) + f.offset)
+		testing.expectf(t, raw.allocator.procedure == a.procedure && raw.allocator.data == a.data, "spec_init leaves %s on another allocator", f.name)
+	}
 }

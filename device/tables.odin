@@ -171,12 +171,13 @@ CHOKE_SAMPLES :: RATE * 5 / 1000
 // ---- devices -----------------------------------------------------------------------
 
 // A playing note's state: a fixed slot (nothing is allocated while playing).
-// A kind keeps its own state struct in it (#assert size_of(X) <= size_of(Voice_State)).
+// A kind keeps its own state struct in it (#assert size_of(X) <= VOICE_STATE_SIZE).
 VOICE_STATE_SIZE :: 32 * 1024 // the most a voice keeps: a program's state is checked against it (voice_too_big)
 
-Voice_State :: struct #align (16) {
-	bytes: [VOICE_STATE_SIZE]u8,
-}
+// Where a voice's bytes start, 16-aligned: as many as its slot holds
+// (voice_bytes), only ever reached by pointer, so it has no size of its own
+// for a copy or a zeroing to run past its slot with.
+Voice_State :: struct #align (16) {}
 
 // What a voice may read beyond its note: the sample bank, the song's
 // instruments.

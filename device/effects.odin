@@ -5,6 +5,7 @@ import dsp "../dsp"
 import tempo "../tempo"
 import "core:math"
 import "core:mem"
+import "core:slice"
 
 // Tone's effects as streams: the procs DEVICE_TABLE's effect rows name.
 // An instance's state is bytes the engine allocates once from size_<kind>
@@ -106,7 +107,7 @@ fx_ring_len :: proc(state: []u8, $T: typeid, arrays: int) -> int {
 // Ring `index` after the struct T.
 @(private)
 fx_ring :: proc(state: []u8, $T: typeid, ring_len, index: int) -> []f32 {
-	return ([^]f32)(raw_data(state[size_of(T):]))[index * ring_len:][:ring_len]
+	return slice.reinterpret([]f32, state[size_of(T):])[index * ring_len:][:ring_len]
 }
 
 // Runs an effect's body over a block in chunks: both channels cut to one

@@ -227,8 +227,9 @@ append_clip :: proc(m: ^Song, c: Clip) -> i32 {
 	append(&m.params, p)
 	t := Track{part = part, style = -1, instrument = i32(len(m.devices) - 1), gain_db = c.gain_db, pan = c.pan, pan_law = .Balance, notes = {i32(len(m.notes)), 1}}
 	if c.effects != nil {
-		fx := new(spec.Spec)
-		spec.spec_init(fx)
+		// read for this call only (the song keeps copies of what it plays)
+		fx := new(spec.Spec, context.temp_allocator)
+		spec.spec_init(fx, context.temp_allocator)
 		fx.outer = m.host_rows // the rows it names: the host's
 		chain := spec.effects_from_value(fx, c.effects, base.path_join(c.name, "effects"), &m.findings)
 		t.chain = chain_into_song(m, fx, chain, CLIP_BEAT_SECONDS)

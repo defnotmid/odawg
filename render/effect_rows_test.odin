@@ -347,7 +347,14 @@ test_effect_row_host_clip :: proc(t: ^testing.T) {
 		song.mix_init(m)
 		m.bank = bank
 		m.host_rows = rows
-		song.append_clip(m, {name = "bed", set = set, start = 0, stop = 3, effects = effects})
+		{
+			// what append_clip reads the chain with is its own: gone after it
+			scratch: virtual.Arena
+			_ = virtual.arena_init_growing(&scratch)
+			context.temp_allocator = virtual.arena_allocator(&scratch)
+			song.append_clip(m, {name = "bed", set = set, start = 0, stop = 3, effects = effects})
+			virtual.arena_destroy(&scratch)
+		}
 		song.mix_end(m)
 		return m, output_from_song(m, {})
 	}
