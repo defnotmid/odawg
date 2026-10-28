@@ -672,27 +672,28 @@ graph_program :: proc(p: ^Params, env: ^Voice_Env) -> i32 {
 graph_resolve :: proc(progs: ^Programs, index: i32, n: Note) -> (play: i32, gain, key, pitch: f32, ok: bool) {
 	prog := &progs.programs[index]
 	play, gain = index, 1
+	np := f32(n.pitch) // its pitch as the program's keys are kept
 	for pr in progs.layers[prog.layers.first:base.span_end(prog.layers)] {
 		if prog.layer_mode != .One {
 			break
 		}
 		pad := progs.pads[pr.row]
-		if (n.pad != 0 && pad.pad == n.pad) || (n.pad == 0 && n.pitch > 0 && pad.key == math.round(n.pitch)) {
+		if (n.pad != 0 && pad.pad == n.pad) || (n.pad == 0 && np > 0 && pad.key == math.round(np)) {
 			gain = pr.gain
 			if pr.program >= 0 {
 				play = pr.program
 				note := progs.programs[play].note
-				pitch = n.pitch > 0 && n.pad != 0 ? n.pitch : (note > 0 ? note : 60)
+				pitch = np > 0 && n.pad != 0 ? np : (note > 0 ? note : 60)
 				return play, gain, pitch, pitch, true
 			}
-			pitch = n.pitch > 0 ? n.pitch : pad.key
+			pitch = np > 0 ? np : pad.key
 			return play, gain, pad.key, pitch, true
 		}
 	}
 	if prog.nodes.count == 0 || n.pad != 0 {
 		return
 	}
-	pitch = n.pitch > 0 ? n.pitch : (prog.note > 0 ? prog.note : 60)
+	pitch = np > 0 ? np : (prog.note > 0 ? prog.note : 60)
 	return play, gain, pitch, pitch, true
 }
 
@@ -735,7 +736,7 @@ tail_graph :: proc(p: ^Params, n: Note, env: ^Voice_Env) -> base.Seconds {
 		layers: [MAX_LAYERS]i32
 		longest: base.Seconds
 		for l in layers[:graph_layers(env.programs, index, n, -1, layers[:])] {
-			longest = max(longest, tail_of(env, env.programs.layers[l].program, n, n.pitch, n.pitch, l))
+			longest = max(longest, tail_of(env, env.programs.layers[l].program, n, f32(n.pitch), f32(n.pitch), l))
 		}
 		return longest
 	}
@@ -775,8 +776,8 @@ tail_of :: proc(env: ^Voice_Env, play: i32, n: Note, key, pitch: f32, layer: i32
 // is multiplied by (amp: a 0..1 node with a tail, at full depth).
 @(private = "file")
 graph_heard :: proc(env: ^Voice_Env, prog: ^Program, n: Note, key, pitch: f32, heard: ^[MAX_NODES]base.Seconds, layer: i32 = -1) {
-	lanes := [1]Lane{{note = n, key = key, hz = base.midi_to_hz(f64(pitch)), gate = gate_sample(n), params = layer_params(env.programs, layer)}}
-	lanes[0].note.pitch = pitch
+	lanes := [1]Lane{{note = n, key = key, hz = f64(base.midi_to_hz(base.Pitch(pitch))), gate = gate_sample(n), params = layer_params(env.programs, layer)}}
+	lanes[0].note.pitch = base.Pitch(pitch)
 	c := Node_Call{progs = env.programs, env = env, lanes = lanes[:]}
 	progs := env.programs
 	nodes := progs.nodes[prog.nodes.first:base.span_end(prog.nodes)]
@@ -890,7 +891,7 @@ graph_start :: proc(s: ^Voice_State, p: ^Params, n: Note, env: ^Voice_Env, fresh
 	if layer >= 0 {
 		// one of a layered note's regions: its program at the note's pitch
 		l := env.programs.layers[layer]
-		play, gain, key, pitch, ok = l.program, l.gain * (n.level > 0 ? n.level : 1), n.pitch, n.pitch, l.program >= 0
+		play, gain, key, pitch, ok = l.program, l.gain * (n.level > 0 ? n.level : 1), f32(n.pitch), f32(n.pitch), l.program >= 0
 		if n.kind == .Release {
 			// a note's end: its gate already closed, quieter the longer it was held
 			gain *= f32(base.db_to_gain(base.Db(-f64(env.programs.regions[l.row].rt_decay) * f64(n.duration))))
@@ -915,7 +916,7 @@ graph_start :: proc(s: ^Voice_State, p: ^Params, n: Note, env: ^Voice_Env, fresh
 	graph_ends(env, prog, n, key, pitch, &h.ends, layer)
 	h.gate, h.pos = gate_sample(n), 0
 	h.starting, h.fresh = !h.slide, fresh
-	target := math.log2(base.midi_to_hz(f64(pitch)))
+	target := math.log2(f64(base.midi_to_hz(base.Pitch(pitch))))
 	if !h.slide || prog.portamento <= 0 {
 		h.from_hz = target
 	}
@@ -940,7 +941,7 @@ graph_start_effect :: proc(s: ^Voice_State, program: i32) {
 	for &e in h.ends {
 		e = max(i32)
 	}
-	h.from_hz, h.glide_k = math.log2(base.midi_to_hz(60)), 1
+	h.from_hz, h.glide_k = math.log2(f64(base.midi_to_hz(60))), 1
 }
 
 // A voice playing a program: its state (its header first), its note, its
@@ -1005,8 +1006,8 @@ graph_run :: proc(progs: ^Programs, env: ^Voice_Env, play: i32, voices: []Graph_
 				b1 := song_beat(v.tempo, v.seconds + base.seconds_from_samples(at + i64(n)))
 				lane.beat, lane.beat_step = b0 - v.beat0, (b1 - b0) / f64(n)
 			}
-			lane.note.pitch = h.pitch
-			lane.hz = base.midi_to_hz(f64(h.pitch))
+			lane.note.pitch = base.Pitch(h.pitch)
+			lane.hz = f64(base.midi_to_hz(base.Pitch(h.pitch)))
 			if prog.mono && prog.portamento > 0 && count == 0 {
 				target := math.log2(lane.hz)
 				g := glide[:n]
@@ -1286,7 +1287,7 @@ graph_layers :: proc(progs: ^Programs, index: i32, n: Note, rand: f32, out: []i3
 	if prog.layer_mode != .All || n.kind == .Keyswitch {
 		return 0
 	}
-	key := int(math.round(n.pitch))
+	key := int(math.round(f32(n.pitch)))
 	velocity := velocity_midi(n.velocity)
 	count := 0
 	for layer, i in progs.layers[prog.layers.first:base.span_end(prog.layers)] {

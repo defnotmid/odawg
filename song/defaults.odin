@@ -107,7 +107,7 @@ sign_tempo :: proc(s: ^Song) -> bool {
 sign_four_on_the_floor :: proc(s: ^Song) -> bool {
 	kick := base.name_id("kick")
 	drums := make([]bool, len(s.parts), context.temp_allocator)
-	lowest := make([]f32, len(s.parts), context.temp_allocator)
+	lowest := make([]base.Pitch, len(s.parts), context.temp_allocator)
 	slice.fill(lowest, math.F32_MAX)
 	for t in s.tracks {
 		for i in t.notes.first ..< base.span_end(t.notes) {

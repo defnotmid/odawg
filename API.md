@@ -102,9 +102,11 @@ Added in odawg:
   `base.db_to_gain`. A time is seconds in the song (`base.Seconds`: a note, a section, a
   clip's start and fades, a duck's attack, an export's range, the queries' answers) and
   frames at the rate in the engine (i64), converted by `base.samples_from_seconds` and
-  `base.seconds_from_samples`, nowhere else. The units are distinct Odin types (`base.Db`,
-  `base.Gain`, `base.Seconds`), so one can't be passed for another unconverted (a level for
-  a gain, seconds for beats), and nothing converts per sample. A literal still converts
+  `base.seconds_from_samples`, nowhere else. A pitch is a MIDI number (`base.Pitch`, an f32:
+  60 is C4) in theory, the note table and a voice's note, until a voice turns it into Hz
+  (`base.midi_to_hz`, giving `base.Hz`). The units are distinct Odin types (`base.Db`,
+  `base.Gain`, `base.Seconds`, `base.Pitch`, `base.Hz`), so one can't be passed for another
+  unconverted (a level for a gain, seconds for beats), and nothing converts per sample. A literal still converts
   silently: `append_song(..., 0, ...)` is a gain of 0, silence. Where odawg writes a level
   out in dB (a report, `timeline --json`) it writes silence as -120: JSON has no -inf.
 - **The first entry is the name**: `song { "score", ... }`, `{ "drop", duration = "8m" }`,

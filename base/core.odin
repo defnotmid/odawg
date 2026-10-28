@@ -15,9 +15,6 @@ RATE :: 48000
 
 TAU :: 2 * math.PI
 
-// Hz for a MIDI note number (fractional numbers are between semitones).
-midi_to_hz :: proc "contextless" (n: f64) -> f64 {return 440 * math.pow(2, (n - 69) / 12)}
-
 // A 64-bit mix (splitmix64's finalizer): every random choice comes from
 // hashing what it is about, so nothing depends on the order things render in.
 hash64 :: proc "contextless" (x: u64) -> u64 {

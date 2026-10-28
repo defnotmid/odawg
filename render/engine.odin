@@ -2056,7 +2056,7 @@ layer_cuts :: proc(e: ^Engine, run: ^Group_Run, ni: i32, layer: i32, n: device.N
 	l := progs.regions[progs.layers[layer].row]
 	group_count, key_count := 0, 0
 	oldest_group, oldest_key := -1, -1
-	key := math.round(n.pitch)
+	key := math.round(f32(n.pitch))
 	for k in run.slots.first ..< base.span_end(run.slots) {
 		if e.slot_note[k] < 0 || e.slot_note[k] == ni || e.slot_choke[k] != 0 {
 			continue
@@ -2084,7 +2084,7 @@ layer_cuts :: proc(e: ^Engine, run: ^Group_Run, ni: i32, layer: i32, n: device.N
 		if oldest_group < 0 || e.slot_at[k] > e.slot_at[oldest_group] {
 			oldest_group = int(k)
 		}
-		if math.round(e.song.notes.pitch[e.slot_note[k]]) == key {
+		if math.round(f32(e.song.notes.pitch[e.slot_note[k]])) == key {
 			key_count += 1
 			if oldest_key < 0 || e.slot_at[k] > e.slot_at[oldest_key] {
 				oldest_key = int(k)

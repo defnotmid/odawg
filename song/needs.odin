@@ -21,7 +21,7 @@ sample_needs :: proc(s: ^Song, out: ^[dynamic]device.Sample_Need) {
 			// pitch; else the program (a pad's) the note plays, at its key
 			plays, layers: [device.MAX_LAYERS]i32
 			count := 0
-			key := n.pitch
+			key := f32(n.pitch) // as the program's keys are kept
 			if program >= 0 && s.programs.programs[program].layer_mode == .All {
 				for l in layers[:device.graph_layers(&s.programs, program, n, -1, layers[:])] {
 					plays[count] = s.programs.layers[l].program
@@ -106,8 +106,8 @@ add_need :: proc(out: ^[dynamic]device.Sample_Need, set: i32, key: f32, velocity
 notes_reach :: proc(s: ^Song) {
 	Reach :: struct {
 		outside, unanswered: int,
-		lo, hi:              f32, // the pitches outside, or unanswered
-		ulo, uhi:            f32,
+		lo, hi:              base.Pitch, // the pitches outside, or unanswered
+		ulo, uhi:            base.Pitch,
 	}
 	reach := make([]Reach, len(s.parts), context.temp_allocator)
 	for &r in reach {

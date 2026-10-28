@@ -215,7 +215,7 @@ chord_from_beat :: proc(song: ^Song, beat: f64) -> theory.Chord {
 
 // An in-key note: a degree of the chord at a position, in an octave (a blip
 // that sits in the harmony).
-pitch_from_degree_at :: proc(song: ^Song, degree: int, at: string, octave: int) -> (midi: f32, ok: bool) {
+pitch_from_degree_at :: proc(song: ^Song, degree: int, at: string, octave: int) -> (midi: base.Pitch, ok: bool) {
 	b := beat_from_position(song, at) or_return
 	return theory.pitch_from_degree(song.key, chord_from_beat(song, b), degree, octave), true
 }
@@ -235,7 +235,7 @@ Note_Filter :: struct {
 Matcher :: struct {
 	part:     i32, // -1 any
 	pad:      u32, // 0 any
-	pitch:    f32, // -1 any
+	pitch:    base.Pitch, // -1 any
 	from, to: base.Seconds,
 	made:     bool, // the notes compose made too
 }
@@ -334,7 +334,7 @@ pulse_from_seconds :: proc(song: ^Song, t: base.Seconds, f: Note_Filter, decay: 
 }
 
 // A note's pad name (when pad != 0) or its pitch as a note string.
-note_name :: proc(s: ^Song, pad: u32, pitch: f32) -> string {
+note_name :: proc(s: ^Song, pad: u32, pitch: base.Pitch) -> string {
 	if pad != 0 {
 		return pad_name(s, pad)
 	}

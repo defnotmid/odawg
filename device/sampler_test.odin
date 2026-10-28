@@ -43,7 +43,7 @@ play :: proc(b: ^Bank, set: int, n: Note, total: int, block := 0, seed: u64 = 1,
 	r = make([]f32, total, context.temp_allocator)
 	state: Sampler_State
 	env := Voice_Env{bank = b}
-	sampler_start(&state, i32(set), params[.Attack], params[.Release], key > 0 ? key : n.pitch, n, seed, &env)
+	sampler_start(&state, i32(set), params[.Attack], params[.Release], key > 0 ? key : f32(n.pitch), n, seed, &env)
 	step := block > 0 ? block : total
 	alive := true
 	for at := 0; at < total && alive; at += step {
@@ -129,7 +129,7 @@ test_sampler_pitch :: proc(t: ^testing.T) {
 	s := add_sine(&b, 440, 1)
 	set := add_set(&b, "test/sine", {{sample = s, lo_key = 0, hi_key = 127, root = 69, hi_velocity = 127, gain = 1}})
 	for key in ([]f32{69, 76, 62, 81, 45}) {
-		l, _, _ := play(&b, set, {pitch = key, velocity = 1, duration = 0.5}, RATE / 2)
+		l, _, _ := play(&b, set, {pitch = base.Pitch(key), velocity = 1, duration = 0.5}, RATE / 2)
 		want := 440 * math.pow(2, f64(key - 69) / 12)
 		got := frequency(l[RATE / 20:RATE * 2 / 5])
 		testing.expectf(t, abs(got / want - 1) < 1e-4, "key %v: %v Hz, want %v", key, got, want)
@@ -168,7 +168,7 @@ test_sampler_block_split :: proc(t: ^testing.T) {
 	p[.Release] = 0.05
 	for n in ([]Note{{pitch = 63.3, velocity = 0.7, duration = 0.2}, {pitch = 70, velocity = 0.9, duration = 0.5}, {pitch = 48, velocity = 0.4, duration = 0.05}}) {
 		env := Voice_Env{bank = &b}
-		total := int(tail_sampler(0, p[.Release], n.pitch, n, &env) * RATE) + 100
+		total := int(tail_sampler(0, p[.Release], f32(n.pitch), n, &env) * RATE) + 100
 		wl, wr, _ := play(&b, 0, n, total, 0, 9, p)
 		for block in ([]int{1, 37, 64, 1000, 4097}) {
 			l, r, _ := play(&b, 0, n, total, block, 9, p)

@@ -407,7 +407,7 @@ test_no_meaning_in_names :: proc(t: ^testing.T) {
 	testing.expect(t, a.gain == b.gain && a.room == b.room && a.gain == PART_GAIN && a.room == PART_ROOM)
 	testing.expect_value(t, s.placements[0].gain, s.gain) // the song's level is its placement's
 	testing.expect_value(t, s.notes.pitch[a.notes.first], s.notes.pitch[b.notes.first])
-	testing.expect_value(t, s.notes.pitch[a.notes.first], f32(69)) // A4: octave 4
+	testing.expect_value(t, s.notes.pitch[a.notes.first], base.Pitch(69)) // A4: octave 4
 	found := false
 	for f in s.findings {
 		found ||= f.code == "no_instrument" && f.path == "parts/lead" && f.severity == .Warning
@@ -589,7 +589,7 @@ test_voicing_holds_register :: proc(t: ^testing.T) {
 		lo0, hi0, lo, hi := f32(200), f32(-200), f32(200), f32(-200)
 		first_bar := s.notes.time[0] + 1.9 // the first chord: its notes within a bar
 		for i in 0 ..< len(s.notes) {
-			p := s.notes.pitch[i]
+			p := f32(s.notes.pitch[i])
 			if s.notes.time[i] < first_bar {
 				lo0, hi0 = min(lo0, p), max(hi0, p)
 			}

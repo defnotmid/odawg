@@ -115,7 +115,7 @@ Sidechain :: struct {
 	mode:    Sidechain_Mode,
 	part:    i32, // Hits: the source part
 	pad:     u32, // Hits: the pad (0: any)
-	pitch:   f32, // Hits: -1 any note of the part
+	pitch:   base.Pitch, // Hits: -1 any note of the part
 	floor:   base.Gain, // the gain at the bottom of the dip (0: silence)
 	attack:  base.Seconds,
 	hold:    base.Seconds,
@@ -187,7 +187,7 @@ Region :: struct {
 Note_Row :: struct {
 	time, duration: base.Seconds,
 	beat:           f64,
-	pitch:          f32,
+	pitch:          base.Pitch,
 	velocity:       f32,
 	pad:            u32, // base.name_id of its name (0: a pitched note)
 	accent:         f32, // 0..1: an accented step (X), a note's !

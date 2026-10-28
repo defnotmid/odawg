@@ -3,6 +3,7 @@ package odawg_theory
 
 import "core:strconv"
 import "core:strings"
+import base "../base"
 
 // Notes, chords and keys as Tone and lead sheets write them: "C4" is MIDI 60
 // (scientific pitch), "F#3", "Bb2"; chords "Am7", "Fmaj7", "C/G", "Dsus4",
@@ -33,18 +34,18 @@ pitch_class_from_string :: proc(s: string) -> (pc: int, n: int, ok: bool) {
 }
 
 // A MIDI note from "C4" (60), "F#3", "Bb-1", or a number string ("57").
-pitch_from_string :: proc(s: string) -> (midi: f32, ok: bool) {
+pitch_from_string :: proc(s: string) -> (midi: base.Pitch, ok: bool) {
 	t := strings.trim_space(s)
 	if v, is_number := strconv.parse_f64(t); is_number {
-		return f32(v), true
+		return base.Pitch(v), true
 	}
 	pc, n := pitch_class_from_string(t) or_return
 	octave := strconv.parse_int(t[n:]) or_return
-	return f32((octave + 1) * 12 + pc), true
+	return base.Pitch((octave + 1) * 12 + pc), true
 }
 
 // The name of a MIDI note ("A2"), sharps for black keys.
-string_from_pitch :: proc(midi: f32, allocator := context.temp_allocator) -> string {
+string_from_pitch :: proc(midi: base.Pitch, allocator := context.temp_allocator) -> string {
 	NAMES := [12]string{"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}
 	m := int(midi + 0.5)
 	return strings.concatenate({NAMES[(m % 12 + 12) % 12], strconv.write_int(make([]u8, 8, context.temp_allocator), i64(m / 12 - 1), 10)}, allocator)
@@ -133,31 +134,31 @@ chord_from_string :: proc(s: string) -> (c: Chord, ok: bool) {
 
 // The chord's tones as MIDI notes in close position from the root in
 // `octave` (C4 = octave 4), its slash bass below them.
-pitches_from_chord :: proc(c: Chord, octave: int, out: ^[dynamic]f32) {
-	base := (octave + 1) * 12 + c.root
+pitches_from_chord :: proc(c: Chord, octave: int, out: ^[dynamic]base.Pitch) {
+	root := (octave + 1) * 12 + c.root
 	if c.bass >= 0 {
 		b := (octave + 1) * 12 + c.bass
-		for b >= base {
+		for b >= root {
 			b -= 12
 		}
-		append(out, f32(b))
+		append(out, base.Pitch(b))
 	}
 	for i in 0 ..< c.count {
-		append(out, f32(base + int(c.intervals[i])))
+		append(out, base.Pitch(root + int(c.intervals[i])))
 	}
 }
 
 // Moves `notes` (a chord's tones) to the inversion nearest `previous`, so a
 // progression's voices move by small steps (voice leading).
-voice_lead :: proc(notes: []f32, previous: []f32) {
+voice_lead :: proc(notes: []base.Pitch, previous: []base.Pitch) {
 	if len(previous) == 0 || len(notes) == 0 {
 		return
 	}
-	center: f32
+	center: base.Pitch
 	for p in previous {
 		center += p
 	}
-	center /= f32(len(previous))
+	center /= base.Pitch(len(previous))
 	for &n in notes {
 		for n - center > 6 {
 			n -= 12
@@ -227,11 +228,11 @@ key_from_string :: proc(s: string) -> (k: Key, ok: bool) {
 // counted up the key's scale from `root_pc` in `octave`. When root_pc is not
 // in the scale (a borrowed chord), the chord's own tones answer 3, 5 and 7
 // and the major or minor scale on its root the rest.
-pitch_from_degree :: proc(k: Key, c: Chord, degree: int, octave: int) -> f32 {
+pitch_from_degree :: proc(k: Key, c: Chord, degree: int, octave: int) -> base.Pitch {
 	d := degree - 1
 	octaves := d >= 0 ? d / 7 : (d - 6) / 7
 	step := d - octaves * 7
-	base := (octave + 1 + octaves) * 12 + c.root
+	bottom := (octave + 1 + octaves) * 12 + c.root
 	// the chord's own third, fifth and seventh first: they define it
 	if step == 2 || step == 4 || step == 6 {
 		WANT := [7]i8{0, 0, 3, 0, 7, 0, 10}
@@ -239,7 +240,7 @@ pitch_from_degree :: proc(k: Key, c: Chord, degree: int, octave: int) -> f32 {
 		for i in 0 ..< c.count {
 			iv := c.intervals[i] % 12
 			if abs(int(iv) - int(want)) <= 1 && iv != 0 {
-				return f32(base + int(iv))
+				return base.Pitch(bottom + int(iv))
 			}
 		}
 	}
@@ -252,18 +253,18 @@ pitch_from_degree :: proc(k: Key, c: Chord, degree: int, octave: int) -> f32 {
 	if idx < 0 {
 		minor := c.count >= 2 && c.intervals[1] == 3
 		scale := minor ? [7]i8{0, 2, 3, 5, 7, 8, 10} : [7]i8{0, 2, 4, 5, 7, 9, 11}
-		return f32(base + int(scale[step]))
+		return base.Pitch(bottom + int(scale[step]))
 	}
 	j := idx + step
 	up := int(k.scale[j % 7]) + (j / 7) * 12 - int(k.scale[idx])
-	return f32(base + up)
+	return base.Pitch(bottom + up)
 }
 
 // Where a pitch sits in key k: its step up the scale counted from the
 // tonic below MIDI 0 (7 an octave), and how far above that step's tone it is
 // (a note outside the key keeps its offset).
-key_position :: proc(k: Key, pitch: f32) -> (step: int, offset: f32) {
-	rel := pitch - f32(k.tonic)
+key_position :: proc(k: Key, pitch: base.Pitch) -> (step: int, offset: f32) {
+	rel := f32(pitch) - f32(k.tonic)
 	octave := int(rel / 12)
 	if f32(octave * 12) > rel {
 		octave -= 1
@@ -279,14 +280,14 @@ key_position :: proc(k: Key, pitch: f32) -> (step: int, offset: f32) {
 }
 
 // The pitch at a step of key k (key_position's), `offset` above it.
-pitch_from_key_position :: proc(k: Key, step: int, offset: f32) -> f32 {
+pitch_from_key_position :: proc(k: Key, step: int, offset: f32) -> base.Pitch {
 	octave := step >= 0 ? step / 7 : (step - 6) / 7
 	d := step - octave * 7
-	return f32(k.tonic + octave * 12 + int(k.scale[d])) + offset
+	return base.Pitch(f32(k.tonic + octave * 12 + int(k.scale[d])) + offset)
 }
 
 // A pitch moved `steps` up key k's scale (down when negative).
-key_step :: proc(k: Key, pitch: f32, steps: int) -> f32 {
+key_step :: proc(k: Key, pitch: base.Pitch, steps: int) -> base.Pitch {
 	step, offset := key_position(k, pitch)
 	return pitch_from_key_position(k, step + steps, offset)
 }

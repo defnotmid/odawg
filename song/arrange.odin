@@ -646,7 +646,7 @@ bpb_at :: proc(song: ^Song, beat: f64) -> int {
 
 // Adds a note at `beat` lasting `beats`, swung and humanized.
 @(private = "file")
-emit :: proc(x: ^Expand, beat, beats: f64, pitch: f32, velocity: f64, pad: u32, accent: f32 = 0) {
+emit :: proc(x: ^Expand, beat, beats: f64, pitch: base.Pitch, velocity: f64, pad: u32, accent: f32 = 0) {
 	if beat < x.lo - 1e-9 || beat >= x.to - 1e-9 {
 		return
 	}
@@ -672,7 +672,7 @@ emit :: proc(x: ^Expand, beat, beats: f64, pitch: f32, velocity: f64, pad: u32, 
 
 // A note token ("A2") or a chord degree ("5") at a beat.
 @(private = "file")
-token_pitch :: proc(x: ^Expand, token: string, beat: f64, degrees: bool) -> (f32, bool) {
+token_pitch :: proc(x: ^Expand, token: string, beat: f64, degrees: bool) -> (base.Pitch, bool) {
 	if degrees {
 		d, ok := strconv.parse_int(token)
 		if !ok || d == 0 {
@@ -755,7 +755,7 @@ expand_steps :: proc(x: ^Expand) {
 					bad_play(x, "%s/steps: %q: x hit, X accent, o ghost, - hold, . rest", x.play.path, bars[bar % len(bars)])
 					return
 				}
-				pitch: f32
+				pitch: base.Pitch
 				if pad == 0 {
 					tok := x.play.note == "" ? "1" : x.play.note
 					p, ok := token_pitch(x, tok, b, !strings.contains_any(tok, "ABCDEFGabcdefg"))
@@ -783,7 +783,7 @@ SLIDE_OVERLAP :: 1.0 / 32
 Cell :: struct {
 	at, length: f64,
 	kind:       enum u8 {Note, Rest, Hold},
-	pitch:      f32,
+	pitch:      base.Pitch,
 	accent:     f32,
 	slide:      bool,
 	velocity:   f64,
@@ -911,7 +911,7 @@ vary_cells :: proc(x: ^Expand, v: spec.Vary_Spec, k: int, cells: []Cell) {
 		if v.transpose != 0 {
 			cells[i].pitch = theory.key_step(key, cells[i].pitch, int(math.round(v.transpose)))
 		}
-		cells[i].pitch += f32(12 * math.round(v.octave))
+		cells[i].pitch += base.Pitch(12 * math.round(v.octave))
 	}
 	if v.thin > 0 {
 		// seeded by the play and the repeat: another part's change moves nothing
@@ -1051,8 +1051,8 @@ expand_arpeggio :: proc(x: ^Expand) {
 		bad_play(x, "%s/arpeggio/interval: %q is not a Tone length", x.play.path, a.interval)
 		return
 	}
-	tones := make([dynamic]f32, context.temp_allocator)
-	chord := make([dynamic]f32, context.temp_allocator)
+	tones := make([dynamic]base.Pitch, context.temp_allocator)
+	chord := make([dynamic]base.Pitch, context.temp_allocator)
 	i := 0
 	for b := x.from; b < x.to - 1e-9; b += l.value {
 		clear(&tones)
@@ -1062,7 +1062,7 @@ expand_arpeggio :: proc(x: ^Expand) {
 		theory.pitches_from_chord(c, x.octave, &chord)
 		for o in 0 ..< max(1, int(a.octaves)) {
 			for n in chord {
-				append(&tones, n + f32(12 * o))
+				append(&tones, n + base.Pitch(12 * o))
 			}
 		}
 		n := len(tones)
@@ -1095,9 +1095,9 @@ expand_arpeggio :: proc(x: ^Expand) {
 
 @(private = "file")
 expand_chords :: proc(x: ^Expand) {
-	previous := make([dynamic]f32, context.temp_allocator)
-	notes := make([dynamic]f32, context.temp_allocator)
-	voiced :: proc(x: ^Expand, b: f64, previous, notes: ^[dynamic]f32) {
+	previous := make([dynamic]base.Pitch, context.temp_allocator)
+	notes := make([dynamic]base.Pitch, context.temp_allocator)
+	voiced :: proc(x: ^Expand, b: f64, previous, notes: ^[dynamic]base.Pitch) {
 		clear(notes)
 		theory.pitches_from_chord(chord_from_beat(x.song, b), x.octave, notes)
 		theory.voice_lead(notes[:], previous[:])
@@ -1231,7 +1231,7 @@ Transition_Call :: struct {
 	prev, next: Section,
 	at:         base.Seconds, // the section's start
 	ti:         int,
-	root:       f32,
+	root:       base.Pitch,
 	pad:        u32,
 	source:     string,
 	velocity:   f32,
@@ -1259,7 +1259,7 @@ TRANSITIONS := [Transition]Transition_Row {
 }
 
 @(private = "file")
-transition_note :: proc(song: ^Song, t0, duration: base.Seconds, pitch, velocity: f32, pad: u32 = 0) -> Note_Row {
+transition_note :: proc(song: ^Song, t0, duration: base.Seconds, pitch: base.Pitch, velocity: f32, pad: u32 = 0) -> Note_Row {
 	return {time = t0, duration = duration, beat = tempo.beat_from_seconds(&song.tempo, t0), pitch = pitch, velocity = velocity, pad = pad}
 }
 
@@ -1337,7 +1337,7 @@ layered_notes :: proc(song: ^Song, work: ^Work) {
 		held := make([dynamic]base.Seconds, context.temp_allocator) // the ends of the notes sounding
 		releases := make([dynamic]Note_Row, context.temp_allocator)
 		for &n in notes {
-			key := int(math.round(n.pitch))
+			key := int(math.round(f32(n.pitch)))
 			if prog.sw_lo != 0 && key + 1 >= int(prog.sw_lo) && key + 1 <= int(prog.sw_hi) {
 				n.kind = .Keyswitch
 				last = u8(key + 1)

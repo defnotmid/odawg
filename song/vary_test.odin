@@ -28,7 +28,7 @@ pitches_of :: proc(s: ^Song, part: string) -> []f32 {
 			continue
 		}
 		for i in t.notes.first ..< t.notes.first + t.notes.count {
-			append(&out, s.notes.pitch[i])
+			append(&out, f32(s.notes.pitch[i]))
 		}
 	}
 	return out[:]

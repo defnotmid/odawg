@@ -204,7 +204,7 @@ sampler_start :: proc(st: ^Sampler_State, set: i32, attack, release: f32, key: f
 		return
 	}
 	bank := env.bank
-	pitch := n.pitch > 0 ? n.pitch : key
+	pitch := n.pitch > 0 ? f32(n.pitch) : key
 	velocity := velocity_midi(n.velocity)
 	zi := zone_for(bank, int(set), int(math.round(key)), velocity, seed)
 	if zi < 0 {
@@ -317,7 +317,7 @@ tail_sampler :: proc(set_index: i32, release: f32, key: f32, n: Note, env: ^Voic
 		return base.Seconds(guess)
 	}
 	bank := env.bank
-	pitch := n.pitch > 0 ? n.pitch : key
+	pitch := n.pitch > 0 ? f32(n.pitch) : key
 	k, velocity := int(math.round(key)), velocity_midi(n.velocity)
 	best_key, best_vel, _ := zone_nearest(bank, set, k, velocity)
 	span := bank.sets[set].zones

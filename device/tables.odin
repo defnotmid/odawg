@@ -124,7 +124,7 @@ PARAM_TABLE := [Param]Param_Row {
 Note :: struct {
 	time:     base.Seconds, // its start (the voice renders from its own sample 0)
 	duration: base.Seconds, // how long the gate is held; the release follows
-	pitch:    f32, // MIDI, 60 = C4; drums: 0 means the pad's own tuning
+	pitch:    base.Pitch, // drums: 0 means the pad's own tuning
 	velocity: f32, // 0..1
 	pad:      u32, // the pad it plays (name_id of its name; 0: none)
 	accent:   f32, // 0..1
