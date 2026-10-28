@@ -516,7 +516,7 @@ sfz_region_desc :: proc(c: ^Sfz_Compile, r: int, set: i32, zone: int, sample: st
 		set_field(f, "rolloff", f64(rolloff))
 		set_field(f, "frequency", max(param(c, r, cutoff_name, 20000), 1))
 		res := param(c, r, k == 0 ? "resonance" : "resonance2", 0)
-		set_field(f, "q", 0.7071 * base.db_to_gain(res))
+		set_field(f, "q", 0.7071 * f64(base.db_to_gain(base.Db(res))))
 		set_field(f, "gain", param(c, r, strings.concatenate({prefix, "_gain"}, context.temp_allocator), 0))
 		inputs(f, last)
 		last = name
@@ -579,7 +579,7 @@ sfz_region_desc :: proc(c: ^Sfz_Compile, r: int, set: i32, zone: int, sample: st
 	inputs(out, last)
 	volume := param(c, r, "volume", 0) + param(c, r, "group_volume", 0) + param(c, r, "master_volume", 0) + param(c, r, "global_volume", 0)
 	amplitude := param(c, r, "amplitude", 100) / 100 * param(c, r, "global_amplitude", 100) / 100 * param(c, r, "master_amplitude", 100) / 100 * param(c, r, "group_amplitude", 100) / 100
-	gain := base.db_to_gain(volume) * max(amplitude, 0)
+	gain := f64(base.db_to_gain(base.Db(volume))) * max(amplitude, 0)
 	// crossfades over CCs, at their values
 	gain *= cc_crossfade(c, r)
 	set_field(out, "gain_db", gain) // linear in a desc

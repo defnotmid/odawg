@@ -19,8 +19,8 @@ import theory "../theory"
 // What a part is when nothing says: the same for every part, whatever its
 // name. A part with no instrument doesn't play (a finding says so).
 PART_OCTAVE :: 4 // where its chords and degrees sit
-PART_GAIN_DB :: 0 // its level in the mix
-PART_ROOM_DB :: 0 // what it dips by where the song makes room
+PART_GAIN :: base.Gain(1) // its level in the mix
+PART_ROOM :: base.Gain(1) // what it dips to where the song makes room
 
 // The spec each style the song's sections name reads parts from (Work.styles,
 // by style): the song's own of that name, or a style file the host read;
@@ -462,7 +462,7 @@ track_for :: proc(song: ^Song, s: ^spec.Spec, work: ^Work, pi: i32, name: string
 			}
 		}
 	}
-	t := Track{part = pi, style = style, gain_db = PART_GAIN_DB, room = PART_ROOM_DB, instrument = -1}
+	t := Track{part = pi, style = style, gain = PART_GAIN, room = PART_ROOM, instrument = -1}
 	under := style_spec(work, style)
 	layers := [2]^spec.Spec{under, s}
 	instrument: struct {
@@ -477,11 +477,11 @@ track_for :: proc(song: ^Song, s: ^spec.Spec, work: ^Work, pi: i32, name: string
 		if p.instrument >= 0 {
 			instrument = {from, p.instrument}
 		}
-		if !math.is_nan(p.gain_db) {
-			t.gain_db = p.gain_db
+		if !math.is_nan(f64(p.gain_db)) {
+			t.gain = base.db_to_gain(p.gain_db)
 		}
-		if !math.is_nan(p.room_db) {
-			t.room = p.room_db
+		if !math.is_nan(f64(p.room_db)) {
+			t.room = base.db_to_gain(p.room_db)
 		}
 		if !math.is_nan(p.pan) {
 			t.pan = p.pan
@@ -529,7 +529,7 @@ sends_into_song :: proc(song: ^Song, from: ^spec.Spec, sends: Span, before: Span
 		if ri < 0 {
 			// a send to a bus: a route from the part (its tracks summed)
 			if bus, ok := node_ref_from_name(song, s.to); ok && bus.kind == .Bus {
-				rt := Route{{.Part, part}, bus, .Audio, f32(base.db_to_gain(s.gain_db)), false}
+				rt := Route{{.Part, part}, bus, .Audio, base.db_to_gain(s.gain_db), false}
 				if !slice.contains(song.routes[:], rt) {
 					append(&song.routes, rt)
 				}
@@ -538,7 +538,7 @@ sends_into_song :: proc(song: ^Song, from: ^spec.Spec, sends: Span, before: Span
 			base.report(&song.findings, "bad_value", .Error, base.path_join(path, "sends"), "%s/sends: there is no return or bus %q", path, s.to)
 			continue
 		}
-		g := f32(base.db_to_gain(s.gain_db))
+		g := base.db_to_gain(s.gain_db)
 		replaced := false
 		for &x in rows {
 			if x.ret == i32(ri) {
@@ -557,7 +557,7 @@ sends_into_song :: proc(song: ^Song, from: ^spec.Spec, sends: Span, before: Span
 // "drums/kick": the part and the pad or note.
 @(private = "file")
 sidechain_from_spec :: proc(song: ^Song, sc: spec.Sidechain_Spec, path: string) -> Sidechain {
-	out := Sidechain{mode = .Hits, part = -1, pitch = -1, depth = sc.depth, release = sc.release}
+	out := Sidechain{mode = .Hits, part = -1, pitch = -1, floor = base.db_to_gain(sc.depth_db), release = sc.release}
 	part, note := sc.source, ""
 	if slash := strings.index_byte(sc.source, '/'); slash >= 0 {
 		part, note = sc.source[:slash], sc.source[slash + 1:]

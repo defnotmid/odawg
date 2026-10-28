@@ -88,7 +88,7 @@
       "octave": 1,
       "gain_db": -12.4,
       "room_db": 0,
-      "sidechain": { "name": "drums/kick", "depth": 0.6, "release": 0.1 },
+      "sidechain": { "name": "drums/kick", "depth_db": -8, "release": 0.1 },
       "play": [
         { "name": "verse", "degrees": "1 - - - - - - -", "subdivision": "8n", "velocity": 0.8 },
         { "name": "pre", "degrees": "1 - 1 - 1 - 1 -", "subdivision": "8n", "velocity": 0.8 },
@@ -102,7 +102,7 @@
       "octave": 2,
       "gain_db": -7,
       "room_db": 0,
-      "sidechain": { "name": "drums/kick", "depth": 0.5, "release": 0.1 },
+      "sidechain": { "name": "drums/kick", "depth_db": -6, "release": 0.1 },
       "play": [
         { "name": "chorus", "degrees": "1 - - 1 - - 1 -", "subdivision": "8n", "velocity": 0.7 },
         { "name": "chorus2", "degrees": "1 - - 1 - - 1 -", "subdivision": "8n", "velocity": 0.7 }

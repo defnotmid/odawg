@@ -150,7 +150,7 @@ test_live_edits :: proc(t: ^testing.T) {
 		}
 	}
 	testing.expect(t, found)
-	testing.expect_value(t, e.master.own_gain, -3)
+	testing.expect_value(t, e.master.own_gain, base.db_to_gain(-3))
 	for v in l {
 		testing.expect(t, !math.is_nan(v))
 	}

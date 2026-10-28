@@ -893,7 +893,7 @@ graph_start :: proc(s: ^Voice_State, p: ^Params, n: Note, env: ^Voice_Env, fresh
 		play, gain, key, pitch, ok = l.program, l.gain * (n.level > 0 ? n.level : 1), n.pitch, n.pitch, l.program >= 0
 		if n.kind == .Release {
 			// a note's end: its gate already closed, quieter the longer it was held
-			gain *= f32(base.db_to_gain(-f64(env.programs.regions[l.row].rt_decay) * n.duration))
+			gain *= f32(base.db_to_gain(base.Db(-f64(env.programs.regions[l.row].rt_decay) * n.duration)))
 			n.duration = 0
 		}
 		if play >= 0 && env.programs.programs[play].one_shot {

@@ -144,13 +144,13 @@ test_master :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	defer virtual.arena_destroy(&arena)
 	s := compose(t, &arena)
-	devices, chain, master, gain := len(s.devices), len(s.chain), s.master, s.master_gain_db
+	devices, chain, master, gain := len(s.devices), len(s.chain), s.master, s.master_gain
 	tp3 := test_pool(4)
 	defer test_pool_free(tp3)
 	l := master_export(s, {pool = &tp3.work_pool}, .Streaming, {})
 	testing.expectf(t, math.abs(l.integrated + 14) < 0.5, "%f LUFS", l.integrated)
 	testing.expectf(t, l.true_peak <= -0.9, "%f dBTP", l.true_peak)
-	testing.expect(t, len(s.devices) == devices && len(s.chain) == chain && s.master == master && s.master_gain_db == gain, "mastering changed the song")
+	testing.expect(t, len(s.devices) == devices && len(s.chain) == chain && s.master == master && s.master_gain == gain, "mastering changed the song")
 	tp4 := test_pool(4)
 	defer test_pool_free(tp4)
 	again := master_export(s, {pool = &tp4.work_pool}, .Streaming, {})

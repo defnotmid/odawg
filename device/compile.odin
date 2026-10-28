@@ -121,7 +121,7 @@ Table_Desc :: struct {
 Pad_Desc :: struct {
 	name:    string,
 	key:     f32, // NaN: its General MIDI name's, else the lowest key no other pad has
-	gain_db: f32,
+	gain:    base.Gain,
 	chokes:  []string, // the pads it cuts
 	program: ^Program_Desc,
 	path:    string,
@@ -554,7 +554,7 @@ compile_machine :: proc(progs: ^Programs, desc: ^Program_Desc, prog: Program, fi
 			append(&progs.chokes, base.name_id(name))
 			row.chokes.count += 1
 		}
-		append(&progs.layers, Layer_Row{program = programs[i], gain = f32(base.db_to_gain(f64(p.gain_db))), row = i32(len(progs.pads))})
+		append(&progs.layers, Layer_Row{program = programs[i], gain = f32(p.gain), row = i32(len(progs.pads))})
 		append(&progs.pads, row)
 		m.layers.count += 1
 	}
@@ -1049,12 +1049,12 @@ control_read :: proc(progs: ^Programs, c: ^Control_Row) -> f32 {
 	x: f32
 	switch t.op {
 	case .Set:
-		x = gain ? f32(base.gain_to_db(f64(v))) : v
+		x = gain ? f32(base.gain_to_db(base.Gain(v))) : v
 	case .Mul:
 		x = t.base != 0 ? v / t.base : 1
 	case .Add:
 		if gain {
-			x = t.base > 0 && v > 0 ? f32(base.gain_to_db(f64(v / t.base))) : 0
+			x = t.base > 0 && v > 0 ? f32(base.gain_to_db(base.Gain(v / t.base))) : 0
 		} else {
 			x = v - t.base
 		}
@@ -1085,11 +1085,11 @@ control_apply :: proc(progs: ^Programs, c: ^Control_Row, value: f32) {
 		v: f32
 		switch t.op {
 		case .Set:
-			v = gain ? f32(base.db_to_gain(f64(x))) : x
+			v = gain ? f32(base.db_to_gain(base.Db(x))) : x
 		case .Mul:
 			v = t.base * x
 		case .Add:
-			v = gain ? t.base * f32(base.db_to_gain(f64(x))) : t.base + x
+			v = gain ? t.base * f32(base.db_to_gain(base.Db(x))) : t.base + x
 		case .Octaves:
 			v = t.base * f32(math.pow(2, f64(x)))
 		}
@@ -1307,7 +1307,7 @@ node_field_set :: proc(progs: ^Programs, program: i32, node: u32, field: string,
 			}
 			if f, slot, known := node_field_from_name(n.kind, field); known && f.list == 0 {
 				append(olds, Old{&n, slot, n.values[slot]})
-				n.values[slot] = f.unit == .Gain ? f32(base.db_to_gain(f64(value))) : value
+				n.values[slot] = f.unit == .Gain ? f32(base.db_to_gain(base.Db(value))) : value
 			}
 		}
 		for pr in progs.layers[p.layers.first:base.span_end(p.layers)] {

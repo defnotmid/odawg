@@ -211,3 +211,85 @@ test_gain_lane_rides_on_part :: proc(t: ^testing.T) {
 		testing.expectf(t, peak > 0.01 && worst <= peak * 1e-6, "gain_db %s with a lane at %s vs gain_db %s alone: differs by %g (peak %g)", p.with_lane[0], p.with_lane[1], p.without[0], worst, peak)
 	}
 }
+
+// A block of a lane is its values sample by sample, wherever the block
+// starts: straight and stepped segments exactly, a geometric one (a
+// level's) within float rounding, and the same samples from any start.
+@(test)
+test_automation_values :: proc(t: ^testing.T) {
+	s: song.Song
+	defer delete(s.automation_points)
+	append(&s.automation_points, song.Automation_Point{1000, 100, .Linear}, song.Automation_Point{2000, 200, .Linear}, song.Automation_Point{3000, 800, .Exp}, song.Automation_Point{4000, 0, .Step})
+	a := song.Automation{points = {0, 4}}
+	whole := make([]f32, 5000)
+	defer delete(whole)
+	song.automation_values(&s, a, 0, whole)
+	for v, i in whole {
+		want := song.automation_value(&s, a, i64(i))
+		testing.expectf(t, abs(v - want) <= abs(want) * 1e-6, "sample %d: %v, its value %v", i, v, want)
+	}
+	for start in ([]int{1, 63, 977, 2001, 2500, 2999}) {
+		part := make([]f32, 1700, context.temp_allocator)
+		song.automation_values(&s, a, i64(start), part)
+		testing.expectf(t, slice.equal(part, whole[start:][:1700]), "from sample %d the lane differs", start)
+	}
+}
+
+// A level's lane is written in dB and moves evenly in dB: kept as gains,
+// halfway from 0 to -40 dB it is at -20 dB.
+@(test)
+test_level_lane_db :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	s := compose_text(t, `{ bpm: 120, key: "C major", sections: [ { name: "a", duration: "4m" } ],
+		parts: { pad: { instrument: "Synth", play: [ { name: "a", notes: "C4" } ] } },
+		automation: { "parts/pad/gain_db": [ [ 1, 0 ], [ 5, -40 ] ] } }`, &arena)
+	context.allocator = virtual.arena_allocator(&arena)
+	a := s.automation[0]
+	g := make([]f32, 1)
+	for x in ([][2]f64{{1, 0}, {2, -10}, {3, -20}, {4, -30}, {5, -40}}) {
+		song.automation_values(s, a, i64(x[0] * RATE), g)
+		testing.expectf(t, abs(f64(base.gain_to_db(base.Gain(g[0]))) - x[1]) < 1e-3, "at %gs the lane is %g dB, not %g", x[0], f64(base.gain_to_db(base.Gain(g[0]))), x[1])
+	}
+}
+
+// A sidechain dips its part to `depth_db` at each hit: written -Infinity
+// (JSON5), to silence; not written, to -14 dB.
+@(test)
+test_sidechain_depth_db :: proc(t: ^testing.T) {
+	text :: proc(sidechain: string) -> string {
+		return strings.concatenate({`{ bpm: 120, key: "C major", gain_db: 0, sections: [ { name: "a", duration: "2m" } ],
+			parts: { drums: { instrument: "MembraneSynth", gain_db: -120, play: [ { name: "a", notes: "C2 - - -" } ] },
+				pad: { instrument: { nodes: { out: { class: "Osc", wave: "sine", gain_db: -12 } } }, sidechain: `, sidechain, `,
+					play: [ { name: "a", events: [ { time: 0, note: "A4", duration: 3.9 } ] } ] } } }`}, context.temp_allocator)
+	}
+	arenas: [2]virtual.Arena
+	defer for &x in arenas {
+		virtual.arena_destroy(&x)
+	}
+	full := compose_text(t, text(`{ name: "drums/C2", depth_db: -Infinity, release: 0.05 }`), &arenas[0])
+	plain := compose_text(t, text(`"drums/C2"`), &arenas[1])
+	context.allocator = virtual.arena_allocator(&arenas[0])
+	testing.expect_value(t, full.sidechains[0].floor, 0)
+	testing.expect_value(t, plain.sidechains[0].floor, base.db_to_gain(-14))
+	out := output_from_song(full, {stems = true})
+	pad := out.stems[song.part_index(full, "pad")][0]
+	hits := 0
+	for k in 0 ..< len(full.notes) {
+		if full.parts[full.tracks[full.notes.track[k]].part] != "drums" || full.notes.time[k] < 0.5 {
+			continue
+		}
+		// the hit's 64-sample cell is silent: its gain is the floor, 0
+		cell := int(math.floor(full.notes.time[k] * RATE / 64)) * 64
+		quiet, loud: f32
+		for i in cell ..< cell + 64 {
+			quiet = max(quiet, abs(pad[i]))
+		}
+		for i in cell - 4000 ..< cell - 3000 {
+			loud = max(loud, abs(pad[i]))
+		}
+		testing.expectf(t, quiet == 0 && loud > 0.01, "at a hit the fully ducked part reaches %g (%g before it)", quiet, loud)
+		hits += 1
+	}
+	testing.expect(t, hits > 0)
+}

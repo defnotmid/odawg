@@ -303,7 +303,7 @@ test_song_placed_sounds_alone :: proc(t: ^testing.T) {
 		at, opens := place[0], place[1]
 		m: song.Song
 		song.mix_init(&m)
-		song.append_song(&m, s, at, "s", 0, {opens, at + length + 1, 0, 0, .Linear})
+		song.append_song(&m, s, at, "s", 1, {opens, at + length + 1, 0, 0, .Linear})
 		song.mix_end(&m)
 		placed := output_from_song(&m, {from = at, to = at + length})
 		testing.expect_value(t, placed.frames, alone.frames)
@@ -331,9 +331,9 @@ test_song_placed_sounds_alone :: proc(t: ^testing.T) {
 		song.mix_init(&m)
 		if as_clip {
 			m.bank = &bank
-			song.append_clip(&m, {name = "s", set = device.bank_borrow(&bank, "s", frames), start = start, stop = stop, offset = offset, gain_db = -3, fade_in = 0.2, fade_out = 0.3})
+			song.append_clip(&m, {name = "s", set = device.bank_borrow(&bank, "s", frames), start = start, stop = stop, offset = offset, gain = base.db_to_gain(-3), fade_in = 0.2, fade_out = 0.3})
 		} else {
-			song.append_song(&m, s, start - offset, "s", -3, {start, stop, 0.2, 0.3, .Linear})
+			song.append_song(&m, s, start - offset, "s", base.db_to_gain(-3), {start, stop, 0.2, 0.3, .Linear})
 		}
 		song.mix_end(&m)
 		(as_clip ? &clip : &placed)^ = output_from_song(&m, {to = length})
@@ -350,11 +350,11 @@ test_song_placed_sounds_alone :: proc(t: ^testing.T) {
 		m, c: song.Song
 		bank: device.Bank
 		song.mix_init(&m)
-		song.append_song(&m, s, start - offset, "s", -3, {start, stop, 0.2, 0.3, .Linear})
+		song.append_song(&m, s, start - offset, "s", base.db_to_gain(-3), {start, stop, 0.2, 0.3, .Linear})
 		song.mix_end(&m)
 		song.mix_init(&c)
 		c.bank = &bank
-		song.append_clip(&c, {name = "s", set = device.bank_borrow(&bank, "s", frames), start = start, stop = stop, offset = offset, gain_db = -3, fade_in = 0.2, fade_out = 0.3})
+		song.append_clip(&c, {name = "s", set = device.bank_borrow(&bank, "s", frames), start = start, stop = stop, offset = offset, gain = base.db_to_gain(-3), fade_in = 0.2, fade_out = 0.3})
 		song.mix_end(&c)
 		a := output_from_song(&m, {to = length, mastering = master})
 		b := output_from_song(&c, {to = length, mastering = master})
@@ -375,7 +375,7 @@ test_song_placed_sounds_alone :: proc(t: ^testing.T) {
 	for threads in ([]int{0, 3}) {
 		m: song.Song
 		song.mix_init(&m)
-		song.append_song(&m, s, start - offset, "s", -3, {start, stop, 0.2, 0.3, .Linear})
+		song.append_song(&m, s, start - offset, "s", base.db_to_gain(-3), {start, stop, 0.2, 0.3, .Linear})
 		song.mix_end(&m)
 		got := make([]f32, 2 * placed.frames)
 		tp := test_pool(threads)

@@ -313,10 +313,16 @@ Timeline_Section :: struct {
 	transition:    string,
 }
 
+// A gain as the reports write a level: dB, silence at render.FLOOR_DB (JSON
+// has no -inf).
+level_db :: proc(g: base.Gain) -> f64 {
+	return max(f64(base.gain_to_db(g)), render.FLOOR_DB)
+}
+
 Timeline_Track :: struct {
 	part, variant, instrument: string,
 	notes:                     int,
-	gain_db:                   f64,
+	gain_db:                   f64, // written as analyze writes a level: silence at render.FLOOR_DB
 }
 
 Timeline :: struct {
@@ -355,7 +361,7 @@ timeline_from_song :: proc(l: ^Loaded) -> Timeline {
 	}
 	tracks := make([dynamic]Timeline_Track)
 	for tr, ti in s.tracks {
-		append(&tracks, Timeline_Track{s.parts[tr.part], song.style_name(s, tr.style), s.labels[tr.instrument], song.track_note_count(s, ti), tr.gain_db})
+		append(&tracks, Timeline_Track{s.parts[tr.part], song.style_name(s, tr.style), s.labels[tr.instrument], song.track_note_count(s, ti), level_db(tr.gain)})
 	}
 	lanes := make([dynamic]Timeline_Lane)
 	for a in s.automation {
@@ -364,7 +370,14 @@ timeline_from_song :: proc(l: ^Loaded) -> Timeline {
 		}
 		points := make([dynamic]Timeline_Point)
 		for pt in s.automation_points[a.points.first:base.span_end(a.points)] {
-			append(&points, Timeline_Point{f64(pt.at) / base.RATE, pt.value, song.AUTOMATION_CURVE_NAMES[pt.curve]})
+			p := Timeline_Point{f64(pt.at) / base.RATE, pt.value, song.AUTOMATION_CURVE_NAMES[pt.curve]}
+			if song.AUTOMATION_LEVELS[a.kind] {
+				// a level's lane, kept as gains: in dB as written (to 1e-4 dB), even
+				// in dB unless it steps
+				p.value = f32(math.round(level_db(base.Gain(pt.value)) * 1e4) / 1e4)
+				p.curve = pt.curve == .Step ? p.curve : song.AUTOMATION_CURVE_NAMES[.Linear]
+			}
+			append(&points, p)
 		}
 		append(&lanes, Timeline_Lane{a.path, points[:]})
 	}
@@ -462,7 +475,7 @@ run_show :: proc(a: ^Args) -> bool {
 				if int(tr.part) != pi {
 					continue
 				}
-				fmt.printfln("track %s/%s  %s  %d notes  %+.1f dB  pan %.2f", p, song.style_name(s, tr.style), s.labels[tr.instrument], song.track_note_count(s, ti), tr.gain_db, tr.pan)
+				fmt.printfln("track %s/%s  %s  %d notes  %+.1f dB  pan %.2f", p, song.style_name(s, tr.style), s.labels[tr.instrument], song.track_note_count(s, ti), level_db(tr.gain), tr.pan)
 				// its instrument's controls (a Param_Set command sets one by its path)
 				if program := i32(s.params[tr.instrument][.Program]); program >= 0 {
 					c := s.programs.programs[program].controls

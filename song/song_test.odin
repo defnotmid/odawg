@@ -259,7 +259,7 @@ test_transition_part :: proc(t: ^testing.T) {
 		if int(tr.part) != sweep {
 			continue
 		}
-		testing.expect_value(t, tr.gain_db, -20)
+		testing.expect_value(t, tr.gain, base.db_to_gain(-20))
 		testing.expect_value(t, tr.chain.count, 1)
 		testing.expect_value(t, tr.sends.count, 1)
 		for i in tr.notes.first ..< base.span_end(tr.notes) {
@@ -404,8 +404,8 @@ test_no_meaning_in_names :: proc(t: ^testing.T) {
 	}
 	testing.expect(t, tb >= 0 && tz >= 0)
 	a, b := s.tracks[tb], s.tracks[tz]
-	testing.expect(t, a.gain_db == b.gain_db && a.room == b.room && a.gain_db == PART_GAIN_DB && a.room == PART_ROOM_DB)
-	testing.expect_value(t, s.placements[0].gain_db, s.gain_db) // the song's level is its placement's
+	testing.expect(t, a.gain == b.gain && a.room == b.room && a.gain == PART_GAIN && a.room == PART_ROOM)
+	testing.expect_value(t, s.placements[0].gain, s.gain) // the song's level is its placement's
 	testing.expect_value(t, s.notes.pitch[a.notes.first], s.notes.pitch[b.notes.first])
 	testing.expect_value(t, s.notes.pitch[a.notes.first], f32(69)) // A4: octave 4
 	found := false
@@ -517,7 +517,7 @@ test_part_over_style :: proc(t: ^testing.T) {
 		if int(tr.part) != bass {
 			continue
 		}
-		testing.expect_value(t, tr.gain_db, 3) // its own level
+		testing.expect_value(t, tr.gain, base.db_to_gain(3)) // its own level
 		testing.expect(t, tr.instrument >= 0 && s.labels[tr.instrument] == "bass") // the style's instrument
 		for i in tr.notes.first ..< base.span_end(tr.notes) {
 			testing.expectf(t, s.notes.pitch[i] == 45, "A in the style's octave 2 (45), not %v", s.notes.pitch[i])

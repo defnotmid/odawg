@@ -8,15 +8,6 @@ import base "../base"
 // the curve wants, its smoothing in time (carried across blocks), then the
 // gain applied.
 
-// The louder key channel's level in dB, per sample (stereo-linked).
-@(private = "file")
-fx_level_db :: proc(key_l, key_r: []f32, out: []f32) {
-	for &v, i in out {
-		k := max(abs(key_l[i]), abs(key_r[i]))
-		v = k > 1e-10 ? f32(20 * math.log10(f64(k))) : -200
-	}
-}
-
 // ---- Compressor --------------------------------------------------------------------
 
 @(private)
@@ -39,11 +30,18 @@ effect_compressor :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []
 		ratio := max(f64(p[.Ratio]), 1)
 		knee := max(f64(p[.Knee]), 0)
 		work := scratch.a[:len(l)]
-
-		fx_level_db(key_l, key_r, work)
-		// The static curve: how many dB each sample wants taken off.
-		for &v in work {
-			x := f64(v)
+		// The static curve: how many dB each sample wants taken off, from the
+		// louder key channel's level (stereo-linked). Nothing under the knee:
+		// a key that far under it (in linear terms, the threshold converted
+		// once) is 0 with no log taken.
+		quiet := t - knee / 2 > -190 ? f32(base.db_to_gain(base.Db(t - knee / 2))) * 0.9999 : 0
+		for &v, i in work {
+			k := max(abs(key_l[i]), abs(key_r[i]))
+			if k < quiet {
+				v = 0
+				continue
+			}
+			x := f64(k > 1e-10 ? f32(20 * math.log10(f64(k))) : -200)
 			y := x
 			over := x - t
 			if 2 * over > knee {
@@ -62,7 +60,7 @@ effect_compressor :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []
 			want := f64(v)
 			held = fx_flush(max(want, rel * held + (1 - rel) * want))
 			reduction = fx_flush(att * reduction + (1 - att) * held)
-			v = f32(base.db_to_gain(-reduction))
+			v = reduction == 0 ? 1 : f32(base.db_to_gain(base.Db(-reduction)))
 		}
 		c.held, c.reduction = held, reduction
 		for g, i in work {
@@ -90,7 +88,7 @@ effect_gate :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32, s
 		work := scratch.a[:len(l)]
 		// The follower, then whether the gate wants to be open.
 		fall := f32(fx_time_coef(0.02))
-		open_level := f32(base.db_to_gain(f64(p[.Threshold])))
+		open_level := f32(base.db_to_gain(base.Db(p[.Threshold])))
 		env := g.env
 		for &v, i in work {
 			k := max(abs(key_l[i]), abs(key_r[i]))
@@ -196,7 +194,7 @@ effect_limiter :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32
 		CAP :: W + 1
 		f := fx_header(state, Fx_Limiter)
 		n := len(l)
-		ceiling := f32(base.db_to_gain(f64(p[.Threshold])))
+		ceiling := f32(base.db_to_gain(base.Db(p[.Threshold])))
 		gain := scratch.d[:n]
 
 		for i in 0 ..< n {

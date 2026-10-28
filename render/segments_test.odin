@@ -49,7 +49,7 @@ test_segments_shape :: proc(t: ^testing.T) {
 		return r < 0.2 ? from * (1 - r / 0.2) : 0
 	}
 	whole := output_from_song(s, {})
-	g := base.db_to_gain(s.tracks[0].gain_db)
+	g := f64(s.tracks[0].gain)
 	worst: f64
 	for k in 0 ..< len(s.notes) {
 		start, gate := s.notes.time[k], s.notes.duration[k]

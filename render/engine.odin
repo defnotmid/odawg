@@ -162,7 +162,7 @@ Edit_Kind :: enum u8 {
 Edit :: struct {
 	kind:     Edit_Kind,
 	ref:      i32,
-	value:    f64,
+	value:    f64, // a level (a gain: a track's, an edge's, a placement's, the master's)
 	pan:      f64,
 	muted:    bool,
 	params:   device.Params,
@@ -402,7 +402,7 @@ engine_init :: proc(e: ^Engine, s: ^song.Song, pool: ^common.Work_Pool = nil, ma
 	for &g, p in e.stem_gain {
 		g = 1
 		if pl := song.node_placement(s, len(s.tracks) + p); pl >= 0 {
-			g = f32(base.db_to_gain(s.placements[pl].gain_db))
+			g = f32(s.placements[pl].gain)
 		}
 	}
 	// the order, each node's inputs (the edges are sorted by where they go)
@@ -505,7 +505,7 @@ mix_init :: proc(e: ^Engine) {
 	m.params = slice.clone(s.params[:])
 	m.tracks = make([]Track_Mix, len(s.tracks))
 	for t, ti in s.tracks {
-		g := base.db_to_gain(t.gain_db)
+		g := f64(t.gain)
 		m.tracks[ti] = {gain = {g, g, 0}, pan = {t.pan, t.pan, 0}, muted = t.muted}
 	}
 	m.edges = make([]Level, len(s.edges))
@@ -514,7 +514,7 @@ mix_init :: proc(e: ^Engine) {
 	}
 	m.placements = make([]Level, len(s.placements))
 	for pl, i in s.placements {
-		g := base.db_to_gain(pl.gain_db)
+		g := f64(pl.gain)
 		m.placements[i] = {g, g, 0}
 	}
 	m.pad_gains = slice.clone_to_dynamic(s.pad_gains[:])
@@ -554,7 +554,7 @@ engine_sync :: proc(e: ^Engine, row: song.Command_Row) {
 	case .Part_Gain_Set, .Part_Gain_Step, .Part_Pan_Set, .Part_Mute_Set:
 		for ti in tracks_of(s, row.path) {
 			t := s.tracks[ti]
-			push(e, {kind = .Track, ref = i32(ti), value = t.gain_db, pan = t.pan, muted = t.muted})
+			push(e, {kind = .Track, ref = i32(ti), value = f64(t.gain), pan = t.pan, muted = t.muted})
 		}
 	case .Pad_Gain_Set, .Pad_Gain_Step:
 		push(e, {kind = .Pad_Gains, pads = slice.clone(s.pad_gains[:], carry)})
@@ -578,7 +578,7 @@ engine_sync :: proc(e: ^Engine, row: song.Command_Row) {
 			push(e, program_edit(s, pi, carry))
 		}
 	case .Master_Gain_Set, .Master_Gain_Step:
-		push(e, {kind = .Master, value = s.master_gain_db})
+		push(e, {kind = .Master, value = f64(s.master_gain)})
 	case .Send_Set:
 		for x, i in s.edges {
 			if e.mix.edges[i].to != f64(x.gain) {
@@ -643,13 +643,13 @@ edits_apply :: proc(e: ^Engine) {
 		case .Track:
 			at := e.cursor + e.ahead + e.nodes[x.ref].lead
 			tm := &m.tracks[x.ref]
-			glide(&tm.gain, base.db_to_gain(x.value), at)
+			glide(&tm.gain, x.value, at)
 			glide(&tm.pan, x.pan, at)
 			tm.muted = x.muted
 		case .Edge:
 			glide(&m.edges[x.ref], x.value, e.cursor + e.ahead + e.nodes[e.song.edges[x.ref].to].lead)
 		case .Placement:
-			glide(&m.placements[x.ref], base.db_to_gain(x.value), e.cursor + e.ahead)
+			glide(&m.placements[x.ref], x.value, e.cursor + e.ahead)
 		case .Params:
 			m.params[x.ref] = x.params
 		case .Pad_Gains:
@@ -668,7 +668,7 @@ edits_apply :: proc(e: ^Engine) {
 			}
 		case .Master:
 			if e.master.songs {
-				e.master.gain_to = x.value
+				e.master.gain_to = base.Gain(x.value)
 			}
 		}
 	}
@@ -808,8 +808,8 @@ cell_piece :: #force_inline proc(at: i64, n: int, stepped: bool) -> int {
 	return int(min(i64(n), song.automation_cell(at) + song.AUTOMATION_CELL - at))
 }
 
-// A moving level (a lane in dB, or the engine's `level` when lane < 0)
-// over n samples from song sample `at`, linear, in w.gains.
+// A moving level (a level's lane, or the engine's `level` when lane < 0)
+// over n samples from song sample `at`, in w.gains.
 @(private = "file")
 lane_gains :: proc(e: ^Engine, w: ^Worker, lane: i32, level: Level, at: i64, n: int) -> []f32 {
 	g := w.gains[:n]
@@ -819,10 +819,7 @@ lane_gains :: proc(e: ^Engine, w: ^Worker, lane: i32, level: Level, at: i64, n: 
 		}
 		return g
 	}
-	a := e.song.automation[lane]
-	for i in 0 ..< n {
-		g[i] = f32(base.db_to_gain(f64(song.automation_value(e.song, a, at + i64(i)))))
-	}
+	song.automation_values(e.song, e.song.automation[lane], at, g)
 	return g
 }
 
@@ -1591,7 +1588,7 @@ node_inputs :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32) -> (hea
 		gains: []f32
 		edge_at := block_at(w, j) + e.nodes[k].lead + e.nodes[k].latency
 		level := e.mix.edges[i]
-		x.gain = f32(level.to)
+		gain := f32(level.to)
 		if lanes := lane_rows(e, e.lanes.edges[i]); len(lanes) > 0 {
 			gains = lane_gains(e, w, lanes[0], {}, edge_at, n)
 		} else if level_moving(level, edge_at, n) {
@@ -1623,7 +1620,7 @@ node_inputs :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32) -> (hea
 				first(&heard, l, r)
 				for i in 0 ..< n {
 					t := run.pos + i64(i) - run.delay
-					g := gains != nil ? gains[i] : x.gain
+					g := gains != nil ? gains[i] : gain
 					l[i] += rl[t & mask] * g
 					r[i] += rr[t & mask] * g
 				}
@@ -1643,10 +1640,10 @@ node_inputs :: proc(e: ^Engine, w: ^Worker, k: int, j: int, l, r: []f32) -> (hea
 			continue
 		}
 		for i in 0 ..< n {
-			l[i] += sl[i] * x.gain
+			l[i] += sl[i] * gain
 		}
 		for i in 0 ..< n {
-			r[i] += sr[i] * x.gain
+			r[i] += sr[i] * gain
 		}
 	}
 	return
@@ -2134,8 +2131,8 @@ voice_tempo :: proc(e: ^Engine, ti: int, play: i32, v: ^device.Graph_Voice) {
 pad_level :: proc(e: ^Engine, ti: int, pad: u32) -> f32 {
 	if pad != 0 {
 		for g in e.mix.pad_gains {
-			if g.track == i32(ti) && g.pad == pad && g.db != 0 {
-				return f32(base.db_to_gain(f64(g.db)))
+			if g.track == i32(ti) && g.pad == pad {
+				return f32(g.gain)
 			}
 		}
 	}
@@ -2502,7 +2499,7 @@ finish_segment :: proc(e: ^Engine, w: ^Worker, ti: int, at: i64, l, r: []f32, ke
 			row.duck(s, sc, at, l, r)
 		}
 	}
-	if t.room != 0 {
+	if t.room != 1 {
 		make_room(s, t.room, e.tracks[ti].placement, at, l, r)
 	}
 }
@@ -2589,7 +2586,7 @@ SIDECHAIN_TABLE := [song.Sidechain_Mode]Sidechain_Row {
 
 // Dips the block under the voice tracks' spans (onimite's duck_envelope,
 // fframes' duck_under_voice): spans closer than `merge` merge; the gain
-// falls to `depth` dB over `attack` before a span and comes back over
+// falls to `floor` over `attack` before a span and comes back over
 // `release` after `hold`, per sample on the song's clock.
 @(private = "file")
 duck_spans :: proc(s: ^song.Song, sc: song.Sidechain, at: i64, l, r: []f32) {
@@ -2601,7 +2598,7 @@ duck_spans :: proc(s: ^song.Song, sc: song.Sidechain, at: i64, l, r: []f32) {
 	hold := i64(math.round(sc.hold * RATE))
 	release := i64(math.round(sc.release * RATE))
 	gap := i64(math.round(sc.merge * RATE))
-	depth := f32(base.db_to_gain(sc.depth))
+	floor := f32(sc.floor)
 	weight := make([]f32, n, context.temp_allocator)
 	region :: proc(a, b, at, n, attack, hold, release: i64, weight: []f32) {
 		lo := max(a - attack, at)
@@ -2631,13 +2628,13 @@ duck_spans :: proc(s: ^song.Song, sc: song.Sidechain, at: i64, l, r: []f32) {
 	}
 	region(a, b, at, n, attack, hold, release, weight)
 	for i in 0 ..< len(l) {
-		g := 1 + (depth - 1) * weight[i]
+		g := 1 + (floor - 1) * weight[i]
 		l[i] *= g
 		r[i] *= g
 	}
 }
 
-// Dips the block by `depth` at each of the source's hits, recovering with
+// Dips the block to `floor` at each of the source's hits, recovering with
 // time constant `release` (synth.lua's sidechain: a gain per 64-sample block
 // of the song's own grid, up to 0.5 s after each hit). `at`: the song sample
 // of l[0].
@@ -2673,7 +2670,7 @@ duck :: proc(s: ^song.Song, sc: song.Sidechain, at: i64, l, r: []f32) {
 		j0 := i64(math.floor(nt * RATE / B))
 		for k in max(j0, k0) ..= min(k1, j0 + i64(0.5 * RATE / B)) {
 			dt := max(f64(k * B) / RATE - nt, 0)
-			g[k - k0] = min(g[k - k0], f32(1 - sc.depth * math.exp(-dt / sc.release)))
+			g[k - k0] = min(g[k - k0], f32(1 - (1 - f64(sc.floor)) * math.exp(-dt / sc.release)))
 		}
 	}
 	for i in 0 ..< len(l) {
@@ -2684,12 +2681,12 @@ duck :: proc(s: ^song.Song, sc: song.Sidechain, at: i64, l, r: []f32) {
 	}
 }
 
-// Dips the block by `db` inside its placement's room spans, with 150 ms
+// Dips the block to `room` inside its placement's room spans, with 150 ms
 // ramps.
 @(private = "file")
-make_room :: proc(s: ^song.Song, db: f64, placement: i32, at: i64, l, r: []f32) {
+make_room :: proc(s: ^song.Song, room: base.Gain, placement: i32, at: i64, l, r: []f32) {
 	RAMP :: 0.15
-	low := f32(base.db_to_gain(db))
+	low := f32(room)
 	for span in s.room {
 		if span.placement != placement {
 			continue

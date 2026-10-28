@@ -205,7 +205,7 @@ test_effect_row_memory :: proc(t: ^testing.T) {
 		for i in past + int(math.ceil(m.state * RATE)) ..< n {
 			worst = max(worst, abs(al[i] - bl[i]), abs(ar[i] - br[i]))
 		}
-		testing.expectf(t, base.gain_to_db(f64(worst)) < base.gain_to_db(0.7) - 40, "%s still remembers its past %.3f s on: %.1f dB", name, m.state, base.gain_to_db(f64(worst)))
+		testing.expectf(t, base.gain_to_db(base.Gain(worst)) < base.gain_to_db(0.7) - 40, "%s still remembers its past %.3f s on: %.1f dB", name, m.state, base.gain_to_db(base.Gain(worst)))
 	}
 }
 

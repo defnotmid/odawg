@@ -16,18 +16,18 @@ import spec "../spec"
 // what plays.
 
 mix_init :: proc(m: ^Song) {
-	m^ = {}
+	m^ = {master_gain = 1}
 	m.findings = make(base.Findings)
 }
 
 // Appends a composed song starting at `at` seconds on the mix's clock, its
 // parts named `prefix/part` ("score/drums"): its rows copied with every
 // index moved past what is there and every time to where it starts, and its
-// placement, where the rest of its playing is said once: `gain_db` on its
+// placement, where the rest of its playing is said once: `gain` on its
 // level, `window` (on the mix's clock) letting it through with fades as a
 // placed clip is, `duck` (a spans sidechain) dipping all it plays under the
 // voice. Returns its placement (a host's room spans for it name it).
-append_song :: proc(m: ^Song, s: ^Song, at: f64, prefix: string, gain_db: f64 = 0, window: Window = {}, duck: Sidechain = {}) -> i32 {
+append_song :: proc(m: ^Song, s: ^Song, at: f64, prefix: string, gain: base.Gain = 1, window: Window = {}, duck: Sidechain = {}) -> i32 {
 	if m.bank == nil {
 		m.bank = s.bank
 	}
@@ -81,7 +81,7 @@ append_song :: proc(m: ^Song, s: ^Song, at: f64, prefix: string, gain_db: f64 = 
 		append(&m.tracks, x)
 	}
 	for g in s.pad_gains {
-		append(&m.pad_gains, Pad_Gain{g.track + track0, g.pad, g.db})
+		append(&m.pad_gains, Pad_Gain{g.track + track0, g.pad, g.gain})
 	}
 	for i in 0 ..< len(s.notes) {
 		n := s.notes[i]
@@ -126,7 +126,7 @@ append_song :: proc(m: ^Song, s: ^Song, at: f64, prefix: string, gain_db: f64 = 
 		x := pl
 		x.name = prefix
 		x.at += at
-		x.gain_db += gain_db
+		x.gain *= gain
 		if window.stop > window.start {
 			x.window = window
 		}
@@ -186,7 +186,7 @@ Clip :: struct {
 	start:    f64,
 	stop:     f64,
 	offset:   f64,
-	gain_db:  f64,
+	gain:     Maybe(base.Gain), // nil: 1
 	pan:      f64,
 	fade_in:  f64,
 	fade_out: f64,
@@ -196,7 +196,8 @@ Clip :: struct {
 	voice:    bool, // speech: ducks the ducked
 	ducked:   bool,
 	duck:     struct {
-		depth_db, attack, hold, release, merge: f64,
+		floor:                         Maybe(base.Gain), // nil: duck_under_voice's
+		attack, hold, release, merge: f64,
 	},
 	// its effects, as a part's `effects` is written ({ { "Reverb", wet =
 	// 0.2 }, "tremolo", ... }: a built-in, or a row the mix's host_rows
@@ -225,7 +226,7 @@ append_clip :: proc(m: ^Song, c: Clip) -> i32 {
 	append(&m.devices, device.Device_Kind.Voice)
 	append(&m.labels, "Player")
 	append(&m.params, p)
-	t := Track{part = part, style = -1, instrument = i32(len(m.devices) - 1), gain_db = c.gain_db, pan = c.pan, pan_law = .Balance, notes = {i32(len(m.notes)), 1}}
+	t := Track{part = part, style = -1, instrument = i32(len(m.devices) - 1), gain = c.gain.? or_else 1, room = 1, pan = c.pan, pan_law = .Balance, notes = {i32(len(m.notes)), 1}}
 	if c.effects != nil {
 		// read for this call only (the song keeps copies of what it plays)
 		fx := new(spec.Spec, context.temp_allocator)
@@ -236,7 +237,7 @@ append_clip :: proc(m: ^Song, c: Clip) -> i32 {
 	}
 	if c.ducked {
 		t.sidechains = {i32(len(m.sidechains)), 1}
-		append(&m.sidechains, duck_under_voice(c.duck.depth_db, c.duck.attack, c.duck.hold, c.duck.release, c.duck.merge))
+		append(&m.sidechains, duck_under_voice(c.duck.floor, c.duck.attack, c.duck.hold, c.duck.release, c.duck.merge))
 	}
 	track := i32(len(m.tracks))
 	append(&m.tracks, t)
@@ -249,11 +250,11 @@ append_clip :: proc(m: ^Song, c: Clip) -> i32 {
 	return track
 }
 
-// A spans sidechain with onimite's (fframes') defaults for what is 0:
-// -12 dB, 0.2 s before the voice, 0.3 s hold, 0.8 s release, gaps under
-// 0.8 s merged.
-duck_under_voice :: proc(depth_db, attack, hold, release, merge: f64) -> Sidechain {
-	return {mode = .Spans, depth = depth_db != 0 ? depth_db : -12, attack = attack > 0 ? attack : 0.2, hold = hold > 0 ? hold : 0.3, release = release > 0 ? release : 0.8, merge = merge > 0 ? merge : 0.8}
+// A spans sidechain with onimite's (fframes') defaults for what is unset
+// or 0: down to -12 dB, 0.2 s before the voice, 0.3 s hold, 0.8 s release,
+// gaps under 0.8 s merged.
+duck_under_voice :: proc(floor: Maybe(base.Gain), attack, hold, release, merge: f64) -> Sidechain {
+	return {mode = .Spans, floor = floor.? or_else base.db_to_gain(-12), attack = attack > 0 ? attack : 0.2, hold = hold > 0 ? hold : 0.3, release = release > 0 ? release : 0.8, merge = merge > 0 ? merge : 0.8}
 }
 
 // After the appends: the notes in time order, the voice spans merged by the

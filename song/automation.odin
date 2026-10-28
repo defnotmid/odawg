@@ -18,13 +18,25 @@ import tempo "../tempo"
 
 // What a row moves.
 Automation_Kind :: enum u8 {
-	Track_Gain, // a track's fader (dB): ref the track
+	Track_Gain, // a track's fader (a gain): ref the track
 	Track_Pan, // its pan (-1..1): ref the track
-	Send, // a send's level (dB): the edge from `from` to `to`
+	Send, // a send's level (a gain): the edge from `from` to `to`
 	Param, // an effect's param: ref the device, param it
 	Control, // an instrument's control (an option, or a field's own): ref the control in programs, track the track playing it
 	Effect_Control, // an effect row's control: ref the control in programs (the effect playing its program reads it)
-	Placement_Gain, // a placed song's level (dB; `master/gain_db`): ref the placement
+	Placement_Gain, // a placed song's level (a gain; `master/gain_db`): ref the placement
+}
+
+// The kinds that move a level: their lanes are written in dB (`gain_db`)
+// and kept as gains, moving evenly in dB.
+AUTOMATION_LEVELS := [Automation_Kind]bool {
+	.Track_Gain     = true,
+	.Track_Pan      = false,
+	.Send           = true,
+	.Param          = false,
+	.Control        = false,
+	.Effect_Control = false,
+	.Placement_Gain = true,
 }
 
 Automation :: struct {
@@ -89,6 +101,65 @@ automation_value :: proc(s: ^Song, a: Automation, t: i64) -> f32 {
 	case .Linear:
 	}
 	return a0.value + (a1.value - a0.value) * f32(x)
+}
+
+// Lane `a`'s values over len(out) samples from song sample `at`: what
+// automation_value gives, walking its points once. An exp segment's (a
+// level's) is stepped by one factor a sample from the exact value at each
+// cell's start, so it is a function of the song sample alone wherever a
+// block starts.
+automation_values :: proc(s: ^Song, a: Automation, at: i64, out: []f32) {
+	pts := s.automation_points[a.points.first:base.span_end(a.points)]
+	n := i64(len(out))
+	if len(pts) == 0 {
+		slice.fill(out, 0)
+		return
+	}
+	k := 0 // the first point after the sample
+	for i: i64 = 0; i < n; {
+		t := at + i
+		for k < len(pts) && pts[k].at <= t {
+			k += 1
+		}
+		if k == 0 || k == len(pts) {
+			// before the first point, after the last: held
+			v, end := pts[0].value, min(n, pts[0].at - at)
+			if k > 0 {
+				v, end = pts[len(pts) - 1].value, n
+			}
+			for ; i < end; i += 1 {
+				out[i] = v
+			}
+			continue
+		}
+		a0, a1 := pts[k - 1], pts[k]
+		end := min(n, a1.at - at)
+		span := f64(a1.at - a0.at)
+		switch a1.curve {
+		case .Step:
+			for ; i < end; i += 1 {
+				out[i] = a0.value
+			}
+		case .Linear:
+			for ; i < end; i += 1 {
+				out[i] = a0.value + (a1.value - a0.value) * f32(f64(at + i - a0.at) / span)
+			}
+		case .Exp:
+			ratio := f64(a1.value) / f64(a0.value)
+			step := math.pow(ratio, 1 / span)
+			for i < end {
+				from := max(automation_cell(at + i), a0.at)
+				v := f64(a0.value) * math.pow(ratio, f64(from - a0.at) / span)
+				for _ in from ..< at + i {
+					v *= step
+				}
+				for stop := min(end, automation_cell(at + i) + AUTOMATION_CELL - at); i < stop; i += 1 {
+					out[i] = f32(v)
+					v *= step
+				}
+			}
+		}
+	}
 }
 
 // Its value held over the cell sample t is in.
@@ -181,11 +252,25 @@ automation_from_spec :: proc(s: ^spec.Spec, song: ^Song) {
 		if len(song.automation) == first {
 			continue
 		}
+		pts := song.automation_points[points.first:base.span_end(points)]
+		if AUTOMATION_LEVELS[song.automation[first].kind] {
+			// a level, written in dB: kept as gains, moving evenly in dB
+			// (geometrically; straight in gain to or from silence) or stepping
+			for &pt, i in pts {
+				if s.automation_points[lane.points.first + i32(i)].curve == "exp" {
+					base.report(&song.findings, "bad_value", .Warning, base.path_index(path, i + 1), "%s: a level moves evenly in dB already (\"linear\") or steps; \"exp\" reads as \"linear\"", base.path_index(path, i + 1))
+				}
+				pt.value = f32(base.db_to_gain(base.Db(pt.value)))
+				if pt.curve != .Step {
+					pt.curve = i > 0 && pt.value > 0 && pts[i - 1].value > 0 ? .Exp : .Linear
+				}
+			}
+			continue
+		}
 		// a lane's values are in its field's unit: a frequency or a time
 		// travels geometrically unless written otherwise, and only through
 		// values above 0 then
 		unit := automation_unit(song, song.automation[first])
-		pts := song.automation_points[points.first:base.span_end(points)]
 		for &pt, i in pts {
 			ps := s.automation_points[lane.points.first + i32(i)]
 			if ps.curve == "" && (unit == .Hz || unit == .Seconds) {

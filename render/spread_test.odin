@@ -39,7 +39,7 @@ test_lfo_spread :: proc(t: ^testing.T) {
 	worst: f64
 	for i in 0 ..< int(2.5 * RATE) {
 		tt := f64(i) / RATE
-		g := base.db_to_gain(-6) * base.db_to_gain(s.tracks[0].gain_db)
+		g := f64(base.db_to_gain(-6) * s.tracks[0].gain)
 		worst = max(worst, abs(f64(out.left[i]) - g * math.sin(math.TAU * 2 * tt)), abs(f64(out.right[i]) - g * math.cos(math.TAU * 2 * tt)))
 	}
 	testing.expectf(t, worst < 1e-4, "the sides stray %g from a sine and its cosine", worst)

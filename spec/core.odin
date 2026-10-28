@@ -28,7 +28,7 @@ Spec :: struct {
 	swing:             f64,
 	swing_subdivision: string,
 	duration:          f64, // a target length, seconds (UNSET: none)
-	gain_db:           f64, // the whole song's level: headroom for a mix it joins (-10)
+	gain_db:           base.Db, // the whole song's level: headroom for a mix it joins (-10)
 	from:              string,
 	// The first section's style, energy and chords when it names none.
 	style:             string,
@@ -122,10 +122,10 @@ Section_Spec :: struct {
 Part_Spec :: struct {
 	name:       string,
 	instrument: i32, // a device (a Voice: its row); -1: the style's (none: the part doesn't play)
-	gain_db:    f64,
+	gain_db:    base.Db,
 	pan:        f64,
 	octave:     f64,
-	room_db:    f64, // dB it dips by where the song makes room
+	room_db:    base.Db, // what it dips by where the song makes room
 	effects:    Span, // into chain; count -1: not given (the style's)
 	sends:      Span,
 	sidechain:  Sidechain_Spec,
@@ -143,7 +143,7 @@ Set_Spec :: struct {
 	name:    string,
 	key:     string, // its name in the bank (set_key's), found as it is read
 	zones:   Span, // into set_zones
-	gain_db: f64,
+	gain_db: base.Db,
 	credit:  string, // what to credit, for odawg credits and a host's
 	loop:    bool, // its zones' files' loops play (a sustained instrument's)
 }
@@ -160,7 +160,7 @@ Set_Zone_Spec :: struct {
 	lo, hi:      f64, // MIDI keys (UNSET: split)
 	lo_velocity: f64,
 	hi_velocity: f64,
-	gain_db:     f64,
+	gain_db:     base.Db,
 	one_shot:    f64, // 1 yes, 0 no (UNSET: a pad's is, a key's isn't)
 	offset:      f64, // frames into the file a note starts at
 }
@@ -300,14 +300,14 @@ Bus_Spec :: struct {
 }
 
 Sidechain_Spec :: struct {
-	source:  string, // "drums/kick": a part and the pad or note that ducks this one
-	depth:   f64,
-	release: f64,
+	source:   string, // "drums/kick": a part and the pad or note that ducks this one
+	depth_db: base.Db, // the level the dip reaches (<= 0; -Infinity: silence)
+	release:  f64,
 }
 
 Send_Spec :: struct {
 	to:      string,
-	gain_db: f64,
+	gain_db: base.Db,
 }
 
 Return_Spec :: struct {
@@ -525,7 +525,7 @@ set_key :: proc(owner: ^Spec, set: Set_Spec, allocator := context.allocator) -> 
 		h = base.hash_combine(h, base.hash_string(z.file))
 		h = base.hash_combine(h, base.hash_string(z.pad))
 		h = base.hash_combine(h, transmute(u64)z.key)
-		for x in ([?]f64{z.root, z.lo, z.hi, z.lo_velocity, z.hi_velocity, z.gain_db, z.one_shot, z.offset}) {
+		for x in ([?]f64{z.root, z.lo, z.hi, z.lo_velocity, z.hi_velocity, f64(z.gain_db), z.one_shot, z.offset}) {
 			h = base.hash_combine(h, transmute(u64)x)
 		}
 	}

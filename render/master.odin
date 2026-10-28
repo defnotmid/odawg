@@ -39,9 +39,9 @@ MASTER_TABLE := [Master]Master_Row {
 // song is left as it is.
 Mastering :: struct {
 	on:         bool,
-	gain_db:    f64,
+	gain:       Maybe(base.Gain), // nil: 1
 	limit:      bool,
-	ceiling_db: f64,
+	ceiling_db: base.Db,
 }
 
 // A master as it runs over the mix in order: its gain, its chain, its
@@ -52,8 +52,8 @@ Master_Run :: struct {
 	songs:     bool, // its rows are the song's (else a target's)
 	own_kinds: []device.Device_Kind,
 	own:       []device.Params,
-	own_gain:  f64,
-	gain_to:   f64, // an edit's: the next block ramps there
+	own_gain:  base.Gain,
+	gain_to:   base.Gain, // an edit's: the next block ramps there
 	states:    [][]u8,
 	scratch:   ^device.Fx_Scratch,
 	latency:   int,
@@ -63,7 +63,7 @@ Master_Run :: struct {
 master_run_init :: proc(m: ^Master_Run, s: ^song.Song, mastering: Mastering, allocator := context.allocator) {
 	context.allocator = allocator
 	if mastering.on {
-		m.own_gain = mastering.gain_db
+		m.own_gain = mastering.gain.? or_else 1
 		if mastering.limit {
 			p := device.params_from_kind(.Limiter)
 			p[.Threshold] = f32(mastering.ceiling_db)
@@ -73,7 +73,7 @@ master_run_init :: proc(m: ^Master_Run, s: ^song.Song, mastering: Mastering, all
 		}
 	} else {
 		m.songs = true
-		m.own_gain = s.master_gain_db
+		m.own_gain = s.master_gain
 		m.own_kinds = make([]device.Device_Kind, s.master.count)
 		m.own = make([]device.Params, s.master.count)
 		for d, i in s.chain[s.master.first:base.span_end(s.master)] {
@@ -117,13 +117,13 @@ master_run_row :: proc(m: ^Master_Run, i: int) -> (device.Device_Kind, device.Pa
 }
 
 @(private = "file")
-master_run_gain :: proc(m: ^Master_Run) -> f64 {
+master_run_gain :: proc(m: ^Master_Run) -> base.Gain {
 	return m.own_gain
 }
 
 // Whether it does anything to the mix.
 master_run_active :: proc(m: ^Master_Run) -> bool {
-	return master_run_rows(m) > 0 || master_run_gain(m) != 0 || m.gain_to != m.own_gain
+	return master_run_rows(m) > 0 || master_run_gain(m) != 1 || m.gain_to != m.own_gain
 }
 
 // Its chain put at song sample `at`, its measurements cleared.
@@ -137,9 +137,9 @@ master_run_reset :: proc(m: ^Master_Run, at: i64) {
 
 // A block of the mix through it: its gain, what it measures, its chain.
 master_run_block :: proc(m: ^Master_Run, l, r: []f32) {
-	g := f32(base.db_to_gain(master_run_gain(m)))
+	g := f32(master_run_gain(m))
 	// an edit's gain: ramped to over this block
-	to := f32(base.db_to_gain(m.gain_to))
+	to := f32(m.gain_to)
 	ramp := m.gain_to != m.own_gain
 	m.own_gain = m.gain_to
 	if ramp {
@@ -175,7 +175,7 @@ master_run_block :: proc(m: ^Master_Run, l, r: []f32) {
 		after = max(after, abs(l[i]), abs(r[i]))
 	}
 	if peak > 0 && after < peak {
-		m.stats.reduction_db = min(m.stats.reduction_db, f32(base.gain_to_db(f64(after / peak))))
+		m.stats.reduction_db = min(m.stats.reduction_db, f32(base.gain_to_db(base.Gain(after / peak))))
 	}
 }
 
@@ -227,14 +227,14 @@ master_export :: proc(s: ^song.Song, opts: Options, m: Master, sink: Sink) -> an
 		return measure(s, final, sink)
 	}
 	// its gain, then the limiter at the ceiling
-	o.mastering = {on = true, gain_db = row.lufs - before.integrated, limit = true, ceiling_db = row.ceiling}
+	o.mastering = {on = true, gain = base.db_to_gain(base.Db(row.lufs - before.integrated)), limit = true, ceiling_db = base.Db(row.ceiling)}
 	for pass in 0 ..< 3 {
 		got := measure(s, o, {})
 		miss := row.lufs - got.integrated
 		if math.abs(miss) < 0.3 || pass == 2 {
 			break
 		}
-		o.mastering.gain_db += miss
+		o.mastering.gain = (o.mastering.gain.? or_else 1) * base.db_to_gain(base.Db(miss))
 	}
 	final := opts
 	final.mastering = o.mastering

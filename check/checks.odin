@@ -152,7 +152,7 @@ balance_rows :: proc(s: ^song.Song, m: ^Measures, spans: []Section_Span, plays: 
 		for sp, j in spans {
 			part := analyze.loudness_of_span(energy, sp.first, sp.last)
 			peak := peak_over(peaks, sp.first, sp.last)
-			rows[i * per + j] = {lufs = part, mix = mix[j], under = mix[j] - part, peak_db = base.gain_to_db(f64(peak)), mix_peak_db = base.gain_to_db(f64(mix_peak[j])), plays = plays[i * len(spans) + j]}
+			rows[i * per + j] = {lufs = part, mix = mix[j], under = mix[j] - part, peak_db = f64(base.gain_to_db(base.Gain(peak))), mix_peak_db = f64(base.gain_to_db(base.Gain(mix_peak[j]))), plays = plays[i * len(spans) + j]}
 			if plays[i * len(spans) + j] {
 				append(&played, [2]int{sp.first, sp.last})
 				song_peak = max(song_peak, peak)
@@ -161,7 +161,7 @@ balance_rows :: proc(s: ^song.Song, m: ^Measures, spans: []Section_Span, plays: 
 		}
 		part := analyze.loudness_of_spans(energy, played[:])
 		whole := analyze.loudness_of_spans(m.mix_energy, played[:])
-		rows[i * per + len(spans)] = {lufs = part, mix = whole, under = whole - part, peak_db = base.gain_to_db(f64(song_peak)), mix_peak_db = base.gain_to_db(f64(song_mix_peak)), plays = len(played) > 0}
+		rows[i * per + len(spans)] = {lufs = part, mix = whole, under = whole - part, peak_db = f64(base.gain_to_db(base.Gain(song_peak))), mix_peak_db = f64(base.gain_to_db(base.Gain(song_mix_peak))), plays = len(played) > 0}
 	}
 	return rows
 }
@@ -190,7 +190,7 @@ CHECK_TABLE := [Check]Check_Row {
 		}},
 	.Clipping = {"clipping", proc(c: ^Context) {
 			if p := c.measures.mix_peak; p > 1 {
-				base.report(c.findings, "clipping", .Error, "mix", "the mix clips: samples reach %.2f (%.1f dBFS)", p, base.gain_to_db(f64(p)))
+				base.report(c.findings, "clipping", .Error, "mix", "the mix clips: samples reach %.2f (%.1f dBFS)", p, base.gain_to_db(base.Gain(p)))
 			}
 		}},
 	.Silent_Part = {"silent_part", proc(c: ^Context) {

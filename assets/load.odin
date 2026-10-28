@@ -133,7 +133,7 @@ declare_set :: proc(bank: ^device.Bank, s: ^Set_Row) -> Error {
 			hi_velocity = z.hi_velocity,
 			group = group,
 			sequence = sequence,
-			gain = f32(base.db_to_gain(f64(z.gain_db + s.gain_db + s.level_db))),
+			gain = f32(base.db_to_gain(base.Db(z.gain_db + s.gain_db + s.level_db))),
 			one_shot = z.one_shot,
 			loop_to = device.LOOP_FROM_FILE,
 		})

@@ -80,11 +80,11 @@ Track :: struct {
 	part:       i32, // into parts
 	style:      i32, // into styles: the style it plays for (-1: the song's own)
 	instrument: i32, // into devices
-	gain_db:    f64,
+	gain:       base.Gain,
 	pan:        f64,
 	pan_law:    Pan_Law,
 	muted:      bool, // heard by nothing (still ducking the ducked: one track heard alone)
-	room:       f64, // dB it dips by where its song makes room
+	room:       base.Gain, // what it dips to where its song makes room (1: it doesn't)
 	chain:      Span, // into chain: its effects in order
 	sends:      Span, // into sends
 	sidechains: Span, // into sidechains: what ducks it (a part's kick and a voice, both)
@@ -96,14 +96,14 @@ Track :: struct {
 Pad_Gain :: struct {
 	track: i32, // into tracks
 	pad:   u32,
-	db:    f32,
+	gain:  base.Gain,
 }
 
 // What ducks a track, and how: under each hit of a part (synth.lua's: the
-// gain falls by `depth` at a hit and recovers with time constant
+// gain falls to `floor` at a hit and recovers with time constant
 // `release`), or under the spans of the voice tracks (onimite's, fframes'
-// duck_under_voice: `depth` in dB, ramping over `attack` before a span and
-// `release` after `hold`, spans closer than `merge` merged).
+// duck_under_voice: down to `floor`, ramping over `attack` before a span
+// and `release` after `hold`, spans closer than `merge` merged).
 Sidechain_Mode :: enum u8 {
 	None,
 	Hits,
@@ -115,7 +115,7 @@ Sidechain :: struct {
 	part:    i32, // Hits: the source part
 	pad:     u32, // Hits: the pad (0: any)
 	pitch:   f32, // Hits: -1 any note of the part
-	depth:   f64, // Hits: 0..1; Spans: dB
+	floor:   base.Gain, // the gain at the bottom of the dip (0: silence)
 	attack:  f64,
 	hold:    f64,
 	release: f64,
@@ -124,7 +124,7 @@ Sidechain :: struct {
 
 Send :: struct {
 	ret:  i32, // into returns
-	gain: f32, // linear
+	gain: base.Gain,
 }
 
 Return :: struct {
@@ -153,7 +153,7 @@ Fixed_Length :: struct {
 Placement :: struct {
 	name:    string, // the song's, or what a mix calls it ("score")
 	at:      f64, // seconds its clock starts on this one
-	gain_db: f64,
+	gain:    base.Gain,
 	duck:    Sidechain,
 	window:  Window,
 	tracks:  Span,
@@ -246,7 +246,7 @@ Song :: struct {
 	name:     string,
 	start:    f64, // on the outside clock
 	duration: f64, // seconds to the end of the last section
-	gain_db:  f64, // the spec's: its placement's level
+	gain:     base.Gain, // the spec's: its placement's level
 	key:      theory.Key,
 	seed:     u64,
 	tempo:    tempo.Tempo_Map,
@@ -294,8 +294,9 @@ Song :: struct {
 	// each lane's points once.
 	automation:        [dynamic]Automation,
 	automation_points: [dynamic]Automation_Point,
-	// The master: its gain, then its chain (into chain; a mix's limiter).
-	master_gain_db: f64,
+	// The master: its gain (1 as composed), then its chain (into chain; a
+	// mix's limiter).
+	master_gain: base.Gain,
 	master:   Span,
 	bank:     ^device.Bank, // the sample sets its Samplers play (nil: none)
 	findings: base.Findings,
@@ -322,7 +323,8 @@ DURATION_TEMPO_LIMIT :: 0.03
 // context.allocator: give it an arena and release the arena with the song.
 song_from_spec :: proc(s: ^spec.Spec, out: ^Song, bank: ^device.Bank = nil) -> bool {
 	out.bank = bank
-	out.name, out.start, out.seed, out.gain_db = s.name, s.start, u64(s.seed), s.gain_db
+	out.name, out.start, out.seed, out.gain = s.name, s.start, u64(s.seed), base.db_to_gain(s.gain_db)
+	out.master_gain = 1
 	out.findings = make(base.Findings)
 	key, key_ok := theory.key_from_string(s.key)
 	if !key_ok {
@@ -361,7 +363,7 @@ song_from_spec :: proc(s: ^spec.Spec, out: ^Song, bank: ^device.Bank = nil) -> b
 	index_notes(out, &work)
 	sort_regions(out)
 	append(&out.placements, Placement {
-		name = out.name, gain_db = out.gain_db,
+		name = out.name, gain = out.gain,
 		tracks = {0, i32(len(out.tracks))}, parts = {0, i32(len(out.parts))},
 		returns = {0, i32(len(out.returns))}, buses = {0, i32(len(out.buses))},
 	})

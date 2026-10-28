@@ -62,10 +62,10 @@ Command_Row :: struct {
 COMMAND_KINDS := [Command_Kind]Command_Kind_Row {
 	.None = {},
 	.Part_Gain_Set = {"part/gain_db", "a part's level, dB", .Part, proc(s: ^Song, row: Command_Row, tracks: []int) -> bool {
-		return part_gain(s, tracks, row.value, false)
+		return part_gain(s, tracks, base.db_to_gain(base.Db(row.value)), false)
 	}},
 	.Part_Gain_Step = {"part/gain_db+", "a part's level moved by dB", .Part, proc(s: ^Song, row: Command_Row, tracks: []int) -> bool {
-		return part_gain(s, tracks, row.value, true)
+		return part_gain(s, tracks, base.db_to_gain(base.Db(row.value)), true)
 	}},
 	.Part_Pan_Set = {"part/pan", "a part's pan, -1..1", .Part, proc(s: ^Song, row: Command_Row, tracks: []int) -> bool {
 		for ti in tracks {
@@ -95,16 +95,16 @@ COMMAND_KINDS := [Command_Kind]Command_Kind_Row {
 		return done
 	}},
 	.Master_Gain_Set = {"master/gain_db", "the master's gain, dB", .Mix, proc(s: ^Song, row: Command_Row, tracks: []int) -> bool {
-		s.master_gain_db = row.value
+		s.master_gain = base.db_to_gain(base.Db(row.value))
 		return true
 	}},
 	.Master_Gain_Step = {"master/gain_db+", "the master's gain moved by dB", .Mix, proc(s: ^Song, row: Command_Row, tracks: []int) -> bool {
-		s.master_gain_db += row.value
+		s.master_gain *= base.db_to_gain(base.Db(row.value))
 		return true
 	}},
 	.Send_Set = {"send/gain_db", "a part's send to a return or a bus, dB (\"keys/sends/hall\")", .Part, proc(s: ^Song, row: Command_Row, tracks: []int) -> bool {
 		rows := command_rows(s, row)
-		g := f32(base.db_to_gain(row.value))
+		g := base.db_to_gain(base.Db(row.value))
 		for a in rows {
 			if a.kind != .Send {
 				continue
@@ -269,9 +269,9 @@ part_from_path :: proc(s: ^Song, path: string) -> (part: int, rest: string) {
 }
 
 @(private = "file")
-part_gain :: proc(s: ^Song, tracks: []int, db: f64, step: bool) -> bool {
+part_gain :: proc(s: ^Song, tracks: []int, g: base.Gain, step: bool) -> bool {
 	for ti in tracks {
-		s.tracks[ti].gain_db = step ? s.tracks[ti].gain_db + db : db
+		s.tracks[ti].gain = step ? s.tracks[ti].gain * g : g
 	}
 	return len(tracks) > 0
 }
@@ -298,10 +298,11 @@ pad_gain :: proc(s: ^Song, row: Command_Row, tracks: []int, step: bool) -> bool 
 			}
 		}
 		if g == nil {
-			append(&s.pad_gains, Pad_Gain{track = i32(ti), pad = pad})
+			append(&s.pad_gains, Pad_Gain{track = i32(ti), pad = pad, gain = 1})
 			g = &s.pad_gains[len(s.pad_gains) - 1]
 		}
-		g.db = step ? g.db + f32(row.value) : f32(row.value)
+		by := base.db_to_gain(base.Db(row.value))
+		g.gain = step ? g.gain * by : by
 	}
 	return len(tracks) > 0
 }

@@ -8,18 +8,12 @@ import "core:math"
 
 // Bumped whenever the samples for the same spec change: a host's render
 // cache keys on it (like ottis's pocket.VERSION).
-VERSION :: 2
+VERSION :: 3
 
 // The rate everything renders at (onimite's mix rate).
 RATE :: 48000
 
 TAU :: 2 * math.PI
-
-db_to_gain :: proc "contextless" (db: f64) -> f64 {return math.pow(10, db / 20)}
-
-gain_to_db :: proc "contextless" (g: f64) -> f64 {
-	return g > 0 ? 20 * math.log10(g) : -math.INF_F64
-}
 
 // Hz for a MIDI note number (fractional numbers are between semitones).
 midi_to_hz :: proc "contextless" (n: f64) -> f64 {return 440 * math.pow(2, (n - 69) / 12)}

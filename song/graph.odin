@@ -97,7 +97,7 @@ Edge_Kind :: enum u8 {
 
 Edge :: struct {
 	from, to: i32, // into nodes
-	gain:     f32, // linear
+	gain:     base.Gain,
 	kind:     Edge_Kind,
 }
 
@@ -115,13 +115,13 @@ Bus :: struct {
 Route :: struct {
 	from, to: Node, // a part, a return, a bus; or the master
 	kind:     Edge_Kind,
-	gain:     f32,
+	gain:     base.Gain,
 	moves:    bool,
 }
 
 // Adds the route `from` into `to` (names as the spec writes them), once: a
 // finding where either names nothing.
-route_add :: proc(s: ^Song, from, to: string, kind: Edge_Kind, gain: f32, moves: bool) {
+route_add :: proc(s: ^Song, from, to: string, kind: Edge_Kind, gain: base.Gain, moves: bool) {
 	a, a_ok := node_ref_from_name(s, from)
 	b, b_ok := node_ref_from_name(s, to)
 	if !a_ok || !b_ok {

@@ -12,7 +12,7 @@ fx_test_sine :: proc(hz, peak_db, seconds: f64) -> (l, r: []f32) {
 	n := int(seconds * RATE)
 	l = make([]f32, n)
 	r = make([]f32, n)
-	a := base.db_to_gain(peak_db)
+	a := f64(base.db_to_gain(base.Db(peak_db)))
 	for i in 0 ..< n {
 		l[i] = f32(a * math.sin(math.TAU * hz * f64(i) / RATE))
 		r[i] = l[i]
@@ -46,7 +46,7 @@ fx_test_peak_db :: proc(x: []f32) -> f64 {
 	for v in x {
 		p = max(p, abs(v))
 	}
-	return base.gain_to_db(f64(p))
+	return f64(base.gain_to_db(base.Gain(p)))
 }
 
 @(private = "file")
@@ -490,11 +490,11 @@ test_effect_memory :: proc(t: ^testing.T) {
 		for i in from ..< past + same {
 			worst = max(worst, abs(al[i] - bl[i]), abs(ar[i] - br[i]))
 		}
-		testing.expectf(t, base.gain_to_db(f64(worst)) < base.gain_to_db(0.7) - 40, "%s still remembers its past %.3f s on: %.1f dB", row.name, m.state, base.gain_to_db(f64(worst)))
+		testing.expectf(t, base.gain_to_db(base.Gain(worst)) < base.gain_to_db(0.7) - 40, "%s still remembers its past %.3f s on: %.1f dB", row.name, m.state, base.gain_to_db(base.Gain(worst)))
 		loud: f32
 		for i in n - int(0.1 * RATE) ..< n {
 			loud = max(loud, abs(bl[i]), abs(br[i]))
 		}
-		testing.expectf(t, base.gain_to_db(f64(loud)) < base.gain_to_db(0.25) - 40, "%s still sounds %.3f s after its input: %.1f dB", row.name, m.ring, base.gain_to_db(f64(loud)))
+		testing.expectf(t, base.gain_to_db(base.Gain(loud)) < base.gain_to_db(0.25) - 40, "%s still sounds %.3f s after its input: %.1f dB", row.name, m.ring, base.gain_to_db(base.Gain(loud)))
 	}
 }

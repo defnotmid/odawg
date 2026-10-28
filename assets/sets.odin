@@ -261,7 +261,7 @@ append_set :: proc(bank: ^device.Bank, name: string, stamp: u64, drafts: []Zone_
 			hi_velocity = u8(clamp(z.hi_velocity, 0, 127)),
 			group = group,
 			sequence = sequence,
-			gain = f32(base.db_to_gain(f64(z.gain_db))),
+			gain = f32(base.db_to_gain(base.Db(z.gain_db))),
 			one_shot = z.one_shot,
 			offset = z.offset,
 			loop_from = z.loop_from,

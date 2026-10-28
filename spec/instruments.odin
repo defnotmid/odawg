@@ -1012,7 +1012,7 @@ draft_field :: proc(c: ^Ctx, node: ^Draft_Node, field: ^device.Node_Field, slot:
 			report(c, "bad_value", .Error, path, "%s: one of %s", path, strings.join(field.choices, ", ", context.temp_allocator))
 			return
 		}
-		node.values[slot] = field.unit == .Gain ? f32(base.db_to_gain(n)) : f32(n)
+		node.values[slot] = field.unit == .Gain ? f32(base.db_to_gain(base.Db(n))) : f32(n)
 		node.beats -= {slot}
 		return
 	}
@@ -1232,7 +1232,7 @@ draft_layer :: proc(c: ^Ctx, d: ^Draft, v: json.Value, path: string, owner: ^Spe
 			case "rt_decay":
 				l.region.rt_decay = f32(n)
 			case "gain_db":
-				l.gain = f32(base.db_to_gain(n))
+				l.gain = f32(base.db_to_gain(base.Db(n)))
 			}
 		case:
 			report(c, "unknown_key", .Warning, at, "%s: a layer reads instrument, lo_key, hi_key, lo_vel, hi_vel, lo_rand, hi_rand, seq_length, seq_position, trigger, sw_last_lo, sw_last_hi, group, off_by, off_mode, off_time, polyphony, note_polyphony, rt_decay, gain_db; not %q", at, k)
@@ -1354,7 +1354,7 @@ draft_desc :: proc(c: ^Ctx, d: ^Draft, written: string) -> ^device.Program_Desc 
 	desc.nodes, desc.keys = nodes, keys[:]
 	pads := make([]device.Pad_Desc, len(d.pads), context.temp_allocator)
 	for &p, i in d.pads {
-		pads[i] = {name = p.name, key = f32(p.key), gain_db = f32(p.gain_db), chokes = p.chokes[:], path = p.path}
+		pads[i] = {name = p.name, key = f32(p.key), gain = base.db_to_gain(base.Db(p.gain_db)), chokes = p.chokes[:], path = p.path}
 		if sub, ok := drafted(c, p.row, p.path, p.owner); ok {
 			pads[i].program = draft_desc(c, sub, p.path)
 		}

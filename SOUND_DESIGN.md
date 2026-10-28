@@ -241,7 +241,9 @@ and places a row in any chain by its name, with its options:
   spread parts across the stereo field (`pan: -0.22` on keys, `+0.25` on arp,
   `-0.15` on brass, lead dead-centre).
 - **Pumping.** `sidechain` from `drums/kick` ducks pads, basses and stabs in
-  dance music; a song that isn't dance music usually shouldn't pump.
+  dance music (`sidechain = { "drums/kick", depth_db = -6, release = 0.1 }`:
+  the level each hit dips the part to); a song that isn't dance music usually
+  shouldn't pump.
 - **Roles hold levels to what the part is for.** A part's `role` gives it a
   band of LU under the mix where it plays, from the songs onimite's user
   accepted; `inspect` reports a part more than 1 LU outside its band

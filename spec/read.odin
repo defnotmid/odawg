@@ -269,7 +269,7 @@ BUS_FIELDS := []Field_Row {
 SIDECHAIN_FIELDS := []Field_Row {
 	{"name", .String, offset_of(Sidechain_Spec, source)},
 	{"source", .String, offset_of(Sidechain_Spec, source)},
-	{"depth", .Number, offset_of(Sidechain_Spec, depth)},
+	{"depth_db", .Number, offset_of(Sidechain_Spec, depth_db)},
 	{"release", .Number, offset_of(Sidechain_Spec, release)},
 }
 
@@ -549,11 +549,14 @@ read_sends_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
 			bad(r, base.path_join(path, k), "a level in dB")
 			continue
 		}
-		append(&r.spec.sends, Send_Spec{strings.clone(k), db})
+		append(&r.spec.sends, Send_Spec{strings.clone(k), base.Db(db)})
 		sp.count += 1
 	}
 	(^Span)(dst)^ = sp
 }
+
+// A sidechain's dip when it gives none: to -14 dB (a gain of about 0.2).
+SIDECHAIN_DEPTH_DB :: base.Db(-14)
 
 @(private = "file")
 read_sidechain_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
@@ -563,7 +566,7 @@ read_sidechain_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawpt
 		return
 	}
 	read_record(r, v, path, SIDECHAIN_FIELDS, sc)
-	sc.depth = clamp(sc.depth, 0, 1)
+	sc.depth_db = min(sc.depth_db, 0)
 	sc.release = max(sc.release, 0.005)
 }
 
@@ -850,7 +853,7 @@ read_parts_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
 	}
 	for name in names {
 		pp := base.path_join(path, name, context.allocator)
-		p := Part_Spec{name = strings.clone(name), instrument = -1, gain_db = UNSET, pan = UNSET, octave = UNSET, room_db = UNSET, effects = {0, -1}, sidechain = {depth = 0.8, release = 0.07}}
+		p := Part_Spec{name = strings.clone(name), instrument = -1, gain_db = base.Db(UNSET), pan = UNSET, octave = UNSET, room_db = base.Db(UNSET), effects = {0, -1}, sidechain = {depth_db = SIDECHAIN_DEPTH_DB, release = 0.07}}
 		if !read_record(r, o[name], pp, PART_FIELDS, &p) {
 			continue
 		}

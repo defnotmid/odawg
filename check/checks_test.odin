@@ -204,7 +204,7 @@ test_balance_rows :: proc(t: ^testing.T) {
 		for sec, j in s.sections {
 			first := (int(math.round(sec.start * render.RATE)) + STEP - 1) / STEP
 			last := int(math.round(sec.stop * render.RATE)) / STEP
-			want := base.gain_to_db(f64(render.peak_from_samples(st[0][first * STEP:min(last * STEP, len(st[0]))], st[1][first * STEP:min(last * STEP, len(st[1]))])))
+			want := f64(base.gain_to_db(base.Gain(render.peak_from_samples(st[0][first * STEP:min(last * STEP, len(st[0]))], st[1][first * STEP:min(last * STEP, len(st[1]))]))))
 			testing.expectf(t, rows[p * per + j].peak_db == want, "%s in %s: peak %v, its stem's %v", s.parts[p], sec.name, rows[p * per + j].peak_db, want)
 		}
 	}

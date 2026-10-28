@@ -96,6 +96,13 @@ Added in odawg:
   time is always a string: `"2m"`, `"8n"`, `"drop@1m"`.
 - **Levels are `gain_db`**, as on onimite's tracks and buses. This is the one place odawg
   doesn't use Tone's name (`volume`), so a script has one word for level. `pan` runs -1..1.
+- **Inside, one unit a quantity.** odawg keeps a level as a linear gain. What authors and
+  hosts write in dB (`gain_db`, a sidechain's `depth_db`, a level's lane) is converted once,
+  where it comes in: the reader, a command, or the host calling the Odin API with
+  `base.db_to_gain`. The units are distinct Odin types (`base.Db`, `base.Gain`), so one
+  can't be passed for the other unconverted, and nothing converts per sample. Where odawg
+  writes a level out in dB (a report, `timeline --json`) it writes silence as -120: JSON has
+  no -inf.
 - **The first entry is the name**: `song { "score", ... }`, `{ "drop", duration = "8m" }`,
   `{ "Filter", type = "lowpass" }`. It works like `scene { "Intro" }` and
   `{ "music.mp3", start = 0 }`. Devices take their class this way, not as `type =`
@@ -192,6 +199,9 @@ silent compromise.
 
 A part takes `instrument` (a row's name or file, or `{ "Class", ...its options }`: §3.4), `gain_db`,
 `pan`, `effects`, `sends`, `sidechain = "part/note"`, `mute = "range"`, `role` and `play`.
+A sidechain is `"part/note"` or `{ "part/note", depth_db = -6, release = 0.1 }`: the level
+the part dips to at each hit (at most 0; -14 when not given; `-Infinity` is silence) and the
+time constant it recovers with (0.07 s when not given).
 `role` says what the part is for in the mix (`melody`, `counter`, `bass`, `drums`, `comp`,
 `pad`, `fx`, `texture`); `inspect` holds it to that role's level (`role_balance`).
 
@@ -627,11 +637,14 @@ automation = {
   - `"exp"`: geometrically, the default for Hz and seconds. It needs values above 0.
   - `"step"`: holds, then jumps at the point.
 
+  A level (`gain_db`, a send, `master/gain_db`) moves evenly in dB, or steps; `"exp"` on one
+  reads as `"linear"`, with a warning. To or from `-Infinity` it moves straight in gain.
+
   Before the first point a lane holds the first point's value, and after the last it holds
   the last.
 - A lane's value is a function of song time alone (`song.automation_value`; a host reads it
   with `song.automation_at(s, path, seconds)`, the same function, so a picture following a
-  sweep agrees with the sound). Effects and instruments read it per 64-sample cell of song
+  sweep agrees with the sound; a level's lane gives a gain, `base.gain_to_db` for dB). Effects and instruments read it per 64-sample cell of song
   time (1.3 ms), taken at the cell's start. Faders, pans and sends move every sample. The same
   samples come out on any thread count, in any block size, and from any exact seek.
 - An instrument value moves inside a held note where its field moves per sample (a filter's
@@ -748,7 +761,11 @@ e: render.Engine                                  // realtime: any block, from a
 render.engine_init(&e, &g, pool = nil); render.engine_seek(&e, at, exact = false); render.engine_process(&e, l, r)
 render.export_song(&g, {from, to, stems}, sink)   // the stream on every core, to a sink in order
 render.master_export(&g, opts, .Streaming, sink)  // measured, gained, limited, written
-song.mix_init(&mix); song.append_song(&mix, &g, at, "score", window = w, duck = d); song.append_clip(&mix, clip); song.mix_end(&mix)
+song.mix_init(&mix); song.append_song(&mix, &g, at, "score", gain = base.db_to_gain(-6), window = w, duck = d)
+song.append_clip(&mix, {name = "vo.wav", set = set, start = 2, stop = 9, gain = base.db_to_gain(-3), voice = true}); song.mix_end(&mix)
+                                                  // levels are base.Gain (linear; the host converts its dB): a
+                                                  // clip's gain and its duck's floor are Maybe (nil: 1, -12 dB);
+                                                  // a duck's floor is the gain it dips to (0: silence)
 
 g.nodes, g.edges                                  // the routing: tracks, parts, returns, buses, master; edges by where they go
 song.graph_order(&g)                              // each node after everything feeding it (loops: their edges)
