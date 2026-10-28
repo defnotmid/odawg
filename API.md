@@ -99,10 +99,14 @@ Added in odawg:
 - **Inside, one unit a quantity.** odawg keeps a level as a linear gain. What authors and
   hosts write in dB (`gain_db`, a sidechain's `depth_db`, a level's lane) is converted once,
   where it comes in: the reader, a command, or the host calling the Odin API with
-  `base.db_to_gain`. The units are distinct Odin types (`base.Db`, `base.Gain`), so one
-  can't be passed for the other unconverted, and nothing converts per sample. Where odawg
-  writes a level out in dB (a report, `timeline --json`) it writes silence as -120: JSON has
-  no -inf.
+  `base.db_to_gain`. A time is seconds in the song (`base.Seconds`: a note, a section, a
+  clip's start and fades, a duck's attack, an export's range, the queries' answers) and
+  frames at the rate in the engine (i64), converted by `base.samples_from_seconds` and
+  `base.seconds_from_samples`, nowhere else. The units are distinct Odin types (`base.Db`,
+  `base.Gain`, `base.Seconds`), so one can't be passed for another unconverted (a level for
+  a gain, seconds for beats), and nothing converts per sample. A literal still converts
+  silently: `append_song(..., 0, ...)` is a gain of 0, silence. Where odawg writes a level
+  out in dB (a report, `timeline --json`) it writes silence as -120: JSON has no -inf.
 - **The first entry is the name**: `song { "score", ... }`, `{ "drop", duration = "8m" }`,
   `{ "Filter", type = "lowpass" }`. It works like `scene { "Intro" }` and
   `{ "music.mp3", start = 0 }`. Devices take their class this way, not as `type =`

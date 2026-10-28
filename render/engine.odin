@@ -377,7 +377,7 @@ engine_init :: proc(e: ^Engine, s: ^song.Song, pool: ^common.Work_Pool = nil, ma
 		run := &e.nodes[k]
 		run.placement = song.node_placement(s, k)
 		if pl := run.placement; pl >= 0 {
-			run.origin = i64(math.round(s.placements[pl].at * RATE))
+			run.origin = base.samples_from_seconds(s.placements[pl].at)
 		}
 		first := fi
 		c := s.nodes[k].kind == .Master ? base.Span{} : song.node_chain(s, k)
@@ -1320,7 +1320,7 @@ node_may_write :: proc(e: ^Engine, w: ^Worker, k: int) -> bool {
 		run := &e.tracks[k]
 		input := run.cursor + nd.latency
 		end := base.span_end(s.tracks[k].notes)
-		return input < nd.awake_until || (run.next_note < end && i64(math.round(s.notes.time[run.next_note] * RATE)) < input + n)
+		return input < nd.awake_until || (run.next_note < end && base.samples_from_seconds(s.notes.time[run.next_note]) < input + n)
 	case .Voices:
 		gi := int(s.nodes[k].ref)
 		run := &e.groups[gi]
@@ -1329,7 +1329,7 @@ node_may_write :: proc(e: ^Engine, w: ^Worker, k: int) -> bool {
 			return true
 		}
 		end := base.span_end(s.tracks[s.groups[gi].track].notes)
-		return run.next_note < end && i64(math.round(s.notes.time[run.next_note] * RATE)) < input + n
+		return run.next_note < end && base.samples_from_seconds(s.notes.time[run.next_note]) < input + n
 	case .Part, .Return, .Bus, .Song:
 		if nd.chain.count > 0 && w.at + nd.lead + nd.latency < nd.awake_until {
 			return true
@@ -1711,7 +1711,7 @@ track_seek :: proc(e: ^Engine, w: ^Worker, ti: int, at: i64) {
 // or after song sample `at`: its offset.
 @(private = "file")
 first_note_from :: proc(s: ^song.Song, first, count: int, at: i64) -> int {
-	k, _ := slice.binary_search_by(s.notes.time[first:first + count], f64(at) / RATE, proc(x, target: f64) -> slice.Ordering {
+	k, _ := slice.binary_search_by(s.notes.time[first:first + count], base.seconds_from_samples(at), proc(x, target: base.Seconds) -> slice.Ordering {
 		return x < target - 0.5 / RATE ? .Less : .Greater
 	})
 	return k
@@ -1768,8 +1768,8 @@ group_seek :: proc(e: ^Engine, w: ^Worker, gi: int, at: i64) {
 		}
 		e.note_end[i] = min(i64)
 		n := note_from_row(s, i)
-		start := i64(math.round(n.time * RATE))
-		over := f64(input - start) >= device.note_tail(&p, n, &e.env) * RATE && input - start > memory
+		start := base.samples_from_seconds(n.time)
+		over := f64(input - start) >= f64(device.note_tail(&p, n, &e.env)) * RATE && input - start > memory
 		if over && !group_sounding(e, gi) {
 			continue
 		}
@@ -1831,7 +1831,7 @@ chase_to :: proc(e: ^Engine, w: ^Worker, gi: int, at: i64, jump: bool) {
 		if e.slot_note[slot] < 0 {
 			continue
 		}
-		started := i64(math.round(s.notes.time[e.slot_note[slot]] * RATE))
+		started := base.samples_from_seconds(s.notes.time[e.slot_note[slot]])
 		target := at - started
 		if jump {
 			if e.slot_at[slot] == 0 {
@@ -1950,7 +1950,7 @@ start_note :: proc(e: ^Engine, w: ^Worker, gi: int, ni: i32, mono: bool, start: 
 	if n.kind == .Keyswitch {
 		return nil // it switches the regions later notes play; it doesn't sound
 	}
-	tail := i64(math.ceil(device.note_tail(&p, n, &e.env) * RATE))
+	tail := i64(math.ceil(f64(device.note_tail(&p, n, &e.env)) * RATE))
 	nd := &e.nodes[e.groups_at + gi]
 	nd.awake_until = max(nd.awake_until, start + tail + nd.tail)
 	e.note_end[ni] = start + tail
@@ -2003,7 +2003,7 @@ choke_at :: proc(e: ^Engine, ti: int, program: i32, ni: i32, start: i64, total: 
 		return max(i64)
 	}
 	for j := ni + 1; j < base.span_end(s.tracks[ti].notes); j += 1 {
-		at := i64(math.round(s.notes.time[j] * RATE))
+		at := base.samples_from_seconds(s.notes.time[j])
 		if at - start >= total {
 			break
 		}
@@ -2122,7 +2122,7 @@ voice_tempo :: proc(e: ^Engine, ti: int, play: i32, v: ^device.Graph_Voice) {
 		return
 	}
 	v.tempo = node_tempo(e, ti)
-	v.seconds = v.note.time - f64(e.nodes[ti].origin) / RATE
+	v.seconds = v.note.time - base.seconds_from_samples(e.nodes[ti].origin)
 	v.beat0 = device.song_beat(v.tempo, v.seconds)
 }
 
@@ -2286,7 +2286,7 @@ group_block :: proc(e: ^Engine, w: ^Worker, gi: int, l, r: []f32) -> (wrote: boo
 	mono := device.voice_mono(&p, &e.env)
 	end := base.span_end(t.notes)
 	next_start :: proc(s: ^song.Song, run: ^Group_Run, end: i32) -> i64 {
-		return run.next_note < end ? i64(math.round(s.notes.time[run.next_note] * RATE)) : max(i64)
+		return run.next_note < end ? base.samples_from_seconds(s.notes.time[run.next_note]) : max(i64)
 	}
 	// the earliest choke still to fall on a sounding voice
 	next_cut :: proc(e: ^Engine, run: ^Group_Run) -> i64 {
@@ -2371,7 +2371,7 @@ track_block :: proc(e: ^Engine, w: ^Worker, ti: int, j: int, l, r: []f32) -> (wr
 	heard := node_inputs(e, w, ti, j, l, r)
 	end := base.span_end(t.notes)
 	next_start :: proc(s: ^song.Song, run: ^Track_Run, end: i32) -> i64 {
-		return run.next_note < end ? i64(math.round(s.notes.time[run.next_note] * RATE)) : max(i64)
+		return run.next_note < end ? base.samples_from_seconds(s.notes.time[run.next_note]) : max(i64)
 	}
 	// silent outside its awake stretches: from `clean` on, once it has
 	// written; its groups' sum where it is awake
@@ -2518,11 +2518,11 @@ reset_track_fx :: proc(e: ^Engine, w: ^Worker, ti: int, at: i64) {
 // (`origin`) does, an end may.
 @(private = "file")
 apply_window :: proc(w: song.Window, origin: i64, at: i64, l, r: []f32) {
-	a := i64(math.round(w.start * RATE))
-	b := i64(math.round(w.stop * RATE))
+	a := base.samples_from_seconds(w.start)
+	b := base.samples_from_seconds(w.stop)
 	length := b - a
-	fi := dsp.edge_fade(i64(math.round(w.fade_in * RATE)), a > origin)
-	fo := dsp.edge_fade(i64(math.round(w.fade_out * RATE)), true)
+	fi := dsp.edge_fade(base.samples_from_seconds(w.fade_in), a > origin)
+	fo := dsp.edge_fade(base.samples_from_seconds(w.fade_out), true)
 	for i in 0 ..< len(l) {
 		k := at + i64(i) - a
 		g: f32 = 0
@@ -2594,10 +2594,10 @@ duck_spans :: proc(s: ^song.Song, sc: song.Sidechain, at: i64, l, r: []f32) {
 		return
 	}
 	n := i64(len(l))
-	attack := i64(math.round(sc.attack * RATE))
-	hold := i64(math.round(sc.hold * RATE))
-	release := i64(math.round(sc.release * RATE))
-	gap := i64(math.round(sc.merge * RATE))
+	attack := base.samples_from_seconds(sc.attack)
+	hold := base.samples_from_seconds(sc.hold)
+	release := base.samples_from_seconds(sc.release)
+	gap := base.samples_from_seconds(sc.merge)
 	floor := f32(sc.floor)
 	weight := make([]f32, n, context.temp_allocator)
 	region :: proc(a, b, at, n, attack, hold, release: i64, weight: []f32) {
@@ -2615,10 +2615,10 @@ duck_spans :: proc(s: ^song.Song, sc: song.Sidechain, at: i64, l, r: []f32) {
 		}
 	}
 	// merged as they come (the spans are sorted by start)
-	a := i64(math.round(s.voices[0][0] * RATE))
-	b := i64(math.round(s.voices[0][1] * RATE))
+	a := base.samples_from_seconds(s.voices[0][0])
+	b := base.samples_from_seconds(s.voices[0][1])
 	for v in s.voices[1:] {
-		va, vb := i64(math.round(v[0] * RATE)), i64(math.round(v[1] * RATE))
+		va, vb := base.samples_from_seconds(v[0]), base.samples_from_seconds(v[1])
 		if va - b < gap {
 			b = max(b, vb)
 			continue
@@ -2645,9 +2645,9 @@ duck :: proc(s: ^song.Song, sc: song.Sidechain, at: i64, l, r: []f32) {
 	k1 := (at + i64(len(l)) - 1) / B
 	g := make([]f32, int(k1 - k0 + 1), context.temp_allocator)
 	slice.fill(g, 1)
-	window := 0.5 + f64(B) / RATE
-	from_t := f64(k0 * B) / RATE - window
-	to_t := f64((k1 + 1) * B) / RATE
+	window := base.Seconds(0.5 + f64(B) / RATE)
+	from_t := base.seconds_from_samples(k0 * B) - window
+	to_t := base.seconds_from_samples((k1 + 1) * B)
 	// the first note at or after from_t, by the time index
 	lo, hi := 0, len(s.by_time)
 	for lo < hi {
@@ -2667,10 +2667,10 @@ duck :: proc(s: ^song.Song, sc: song.Sidechain, at: i64, l, r: []f32) {
 		if s.tracks[s.notes.track[i]].part != sc.part || (sc.pad != 0 && s.notes.pad[i] != sc.pad) || (sc.pitch >= 0 && math.abs(s.notes.pitch[i] - sc.pitch) > 0.01) {
 			continue
 		}
-		j0 := i64(math.floor(nt * RATE / B))
+		j0 := i64(math.floor(f64(nt) * RATE / B))
 		for k in max(j0, k0) ..= min(k1, j0 + i64(0.5 * RATE / B)) {
-			dt := max(f64(k * B) / RATE - nt, 0)
-			g[k - k0] = min(g[k - k0], f32(1 - (1 - f64(sc.floor)) * math.exp(-dt / sc.release)))
+			dt := max(base.seconds_from_samples(k * B) - nt, 0)
+			g[k - k0] = min(g[k - k0], f32(1 - (1 - f64(sc.floor)) * math.exp(f64(-dt / sc.release))))
 		}
 	}
 	for i in 0 ..< len(l) {
@@ -2691,11 +2691,11 @@ make_room :: proc(s: ^song.Song, room: base.Gain, placement: i32, at: i64, l, r:
 		if span.placement != placement {
 			continue
 		}
-		i0 := max(0, int(math.floor((span.start - RAMP) * RATE)) - int(at))
-		i1 := min(len(l), int(math.ceil((span.stop + RAMP) * RATE)) - int(at) + 1)
+		i0 := max(0, int(math.floor(f64(span.start - RAMP) * RATE)) - int(at))
+		i1 := min(len(l), int(math.ceil(f64(span.stop + RAMP) * RATE)) - int(at) + 1)
 		for i in i0 ..< i1 {
-			t := f64(at + i64(i)) / RATE
-			depth := clamp(min(t - (span.start - RAMP), (span.stop + RAMP) - t) / RAMP, 0, 1)
+			t := base.seconds_from_samples(at + i64(i))
+			depth := clamp(f64(min(t - (span.start - RAMP), (span.stop + RAMP) - t)) / RAMP, 0, 1)
 			g := 1 + (low - 1) * f32(depth)
 			l[i] *= g
 			r[i] *= g

@@ -27,7 +27,7 @@ mix_init :: proc(m: ^Song) {
 // level, `window` (on the mix's clock) letting it through with fades as a
 // placed clip is, `duck` (a spans sidechain) dipping all it plays under the
 // voice. Returns its placement (a host's room spans for it name it).
-append_song :: proc(m: ^Song, s: ^Song, at: f64, prefix: string, gain: base.Gain = 1, window: Window = {}, duck: Sidechain = {}) -> i32 {
+append_song :: proc(m: ^Song, s: ^Song, at: base.Seconds, prefix: string, gain: base.Gain = 1, window: Window = {}, duck: Sidechain = {}) -> i32 {
 	if m.bank == nil {
 		m.bank = s.bank
 	}
@@ -183,13 +183,13 @@ append_song :: proc(m: ^Song, s: ^Song, at: f64, prefix: string, gain: base.Gain
 Clip :: struct {
 	name:     string, // its part ("music.mp3", "intro")
 	set:      i32, // into bank.sets
-	start:    f64,
-	stop:     f64,
-	offset:   f64,
+	start:    base.Seconds,
+	stop:     base.Seconds,
+	offset:   base.Seconds,
 	gain:     Maybe(base.Gain), // nil: 1
 	pan:      f64,
-	fade_in:  f64,
-	fade_out: f64,
+	fade_in:  base.Seconds,
+	fade_out: base.Seconds,
 	curve:    device.Curve,
 	mono:     bool,
 	rate:     f64, // playback rate, a tape's (pitch moves with it; -1: backwards from offset); 0 reads as 1
@@ -197,7 +197,7 @@ Clip :: struct {
 	ducked:   bool,
 	duck:     struct {
 		floor:                         Maybe(base.Gain), // nil: duck_under_voice's
-		attack, hold, release, merge: f64,
+		attack, hold, release, merge: base.Seconds,
 	},
 	// its effects, as a part's `effects` is written ({ { "Reverb", wet =
 	// 0.2 }, "tremolo", ... }: a built-in, or a row the mix's host_rows
@@ -243,7 +243,7 @@ append_clip :: proc(m: ^Song, c: Clip) -> i32 {
 	append(&m.tracks, t)
 	append_soa(&m.notes, Note_Row{time = c.start, duration = c.stop - c.start, velocity = 1, track = u16(track)})
 	if c.voice {
-		append(&m.voices, [2]f64{c.start, c.stop}) // speech: what a spans sidechain ducks under
+		append(&m.voices, [2]base.Seconds{c.start, c.stop}) // speech: what a spans sidechain ducks under
 	}
 	append(&m.regions, Region{part, c.start, c.stop, c.name})
 	m.duration = max(m.duration, c.stop)
@@ -253,7 +253,7 @@ append_clip :: proc(m: ^Song, c: Clip) -> i32 {
 // A spans sidechain with onimite's (fframes') defaults for what is unset
 // or 0: down to -12 dB, 0.2 s before the voice, 0.3 s hold, 0.8 s release,
 // gaps under 0.8 s merged.
-duck_under_voice :: proc(floor: Maybe(base.Gain), attack, hold, release, merge: f64) -> Sidechain {
+duck_under_voice :: proc(floor: Maybe(base.Gain), attack, hold, release, merge: base.Seconds) -> Sidechain {
 	return {mode = .Spans, floor = floor.? or_else base.db_to_gain(-12), attack = attack > 0 ? attack : 0.2, hold = hold > 0 ? hold : 0.3, release = release > 0 ? release : 0.8, merge = merge > 0 ? merge : 0.8}
 }
 
@@ -264,7 +264,7 @@ mix_end :: proc(m: ^Song) {
 	sort_regions(m)
 	graph_build(m)
 	notes_by_time(m)
-	slice.sort_by(m.voices[:], proc(a, b: [2]f64) -> bool {return a[0] < b[0]})
+	slice.sort_by(m.voices[:], proc(a, b: [2]base.Seconds) -> bool {return a[0] < b[0]})
 }
 
 // The mode of the program owning layer `i` (its row's table).

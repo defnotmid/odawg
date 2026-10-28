@@ -26,14 +26,14 @@ Laying :: struct {
 }
 
 @(private = "file")
-seconds_of :: proc(l: Laying) -> f64 {return tempo.seconds_from_ramp(f64(l.bars * l.bpb), l.bpm0, l.bpm1)}
+seconds_of :: proc(l: Laying) -> f64 {return f64(tempo.seconds_from_ramp(f64(l.bars * l.bpb), l.bpm0, l.bpm1))}
 
 @(private = "file")
-seconds_at :: proc(l: Laying, bars: int) -> f64 {return tempo.seconds_from_ramp(f64(bars * l.bpb), l.bpm0, l.bpm1)}
+seconds_at :: proc(l: Laying, bars: int) -> f64 {return f64(tempo.seconds_from_ramp(f64(bars * l.bpb), l.bpm0, l.bpm1))}
 
 lay_out :: proc(s: ^spec.Spec, song: ^Song) -> bool {
 	if len(s.sections) == 0 {
-		append(&s.sections, spec.Section_Spec{name = "song", duration = {"4m", base.UNSET}, start = base.UNSET, energy = base.UNSET, flex = {{"", base.UNSET}, {"", base.UNSET}}})
+		append(&s.sections, spec.Section_Spec{name = "song", duration = {"4m", spec.UNSET_SECONDS}, start = spec.UNSET_SECONDS, energy = base.UNSET, flex = {{"", spec.UNSET_SECONDS}, {"", spec.UNSET_SECONDS}}})
 	}
 	lay := make([]Laying, len(s.sections), context.temp_allocator)
 	bpm, bpb, bars := s.bpm, int(s.beats_per_bar), 4
@@ -52,8 +52,8 @@ lay_out :: proc(s: ^spec.Spec, song: ^Song) -> bool {
 		l.bpb = bpb
 		d := ss.duration
 		switch {
-		case !math.is_nan(d.seconds):
-			l.min_seconds = d.seconds
+		case !math.is_nan(f64(d.seconds)):
+			l.min_seconds = f64(d.seconds)
 		case d.text != "":
 			len_, ok := tempo.length_from_string(d.text, bpb)
 			switch {
@@ -93,10 +93,10 @@ lay_out :: proc(s: ^spec.Spec, song: ^Song) -> bool {
 	// each section that must start at a time, then the song's end
 	from, from_seconds := 0, 0.0
 	for &ss, i in s.sections {
-		if math.is_nan(ss.start) {
+		if math.is_nan(f64(ss.start)) {
 			continue
 		}
-		target := ss.start - s.start
+		target := f64(ss.start - s.start)
 		what := fmt.tprintf("section %s's start (%.3fs)", ss.name, ss.start)
 		if i == 0 {
 			if math.abs(target) > 1e-6 {
@@ -107,8 +107,8 @@ lay_out :: proc(s: ^spec.Spec, song: ^Song) -> bool {
 		fit_span(lay[from:i], target - from_seconds, START_TEMPO_LIMIT, false, "start_unreachable", what, &song.findings)
 		from, from_seconds = i, target
 	}
-	if !math.is_nan(s.duration) {
-		fit_span(lay[from:], s.duration - from_seconds, DURATION_TEMPO_LIMIT, true, "duration_unreachable", fmt.tprintf("the song's duration (%.3fs)", s.duration), &song.findings)
+	if !math.is_nan(f64(s.duration)) {
+		fit_span(lay[from:], f64(s.duration) - from_seconds, DURATION_TEMPO_LIMIT, true, "duration_unreachable", fmt.tprintf("the song's duration (%.3fs)", s.duration), &song.findings)
 	}
 
 	style, energy, chords := s.style, s.energy, s.chords
@@ -130,7 +130,7 @@ lay_out :: proc(s: ^spec.Spec, song: ^Song) -> bool {
 			chords = ss.chords
 		}
 		sec := Section {
-			name = ss.name, beat = g.beat, beats = g.beats, start = g.seconds, stop = g.seconds + seconds_of(l),
+			name = ss.name, beat = g.beat, beats = g.beats, start = g.seconds, stop = g.seconds + base.Seconds(seconds_of(l)),
 			bpm0 = l.bpm0, bpm1 = l.bpm1, beats_per_bar = l.bpb, bars = l.bars, style = style_intern(song, style), energy = energy,
 			transition_part = ss.transition_part,
 		}
@@ -165,11 +165,11 @@ lay_out :: proc(s: ^spec.Spec, song: ^Song) -> bool {
 // The fewest whole bars lasting at least `seconds`.
 @(private = "file")
 bars_lasting :: proc(seconds, bpm0, bpm1: f64, bpb: int) -> int {
-	n := max(1, int(math.ceil(seconds / tempo.seconds_from_ramp(f64(bpb), bpm0, bpm1) - 1e-9)))
-	for n > 1 && tempo.seconds_from_ramp(f64((n - 1) * bpb), bpm0, bpm1) >= seconds - 1e-9 {
+	n := max(1, int(math.ceil(seconds / f64(tempo.seconds_from_ramp(f64(bpb), bpm0, bpm1)) - 1e-9)))
+	for n > 1 && f64(tempo.seconds_from_ramp(f64((n - 1) * bpb), bpm0, bpm1)) >= seconds - 1e-9 {
 		n -= 1
 	}
-	for tempo.seconds_from_ramp(f64(n * bpb), bpm0, bpm1) < seconds - 1e-9 {
+	for f64(tempo.seconds_from_ramp(f64(n * bpb), bpm0, bpm1)) < seconds - 1e-9 {
 		n += 1
 	}
 	return n

@@ -300,7 +300,7 @@ read_record :: proc(r: ^Reader, v: json.Value, path: string, fields: []Field_Row
 spec_init :: proc(s: ^Spec, allocator := context.allocator) {
 	s^ = {
 		bpm = 120, beats_per_bar = 4, key = "C major", seed = 1, swing_subdivision = "8n",
-		duration = UNSET, energy = UNSET, start = 0, gain_db = -10,
+		duration = UNSET_SECONDS, energy = UNSET, start = 0, gain_db = -10,
 	}
 	s.sections.allocator, s.parts.allocator, s.plays.allocator = allocator, allocator, allocator
 	s.lanes.allocator, s.bars.allocator, s.tokens.allocator, s.varies.allocator = allocator, allocator, allocator, allocator
@@ -393,11 +393,11 @@ read_string_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) 
 read_time_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
 	t := (^Time_Spec)(dst)
 	if n, ok := number_from_value(v); ok {
-		t^ = {"", n}
+		t^ = {"", base.Seconds(n)}
 		return
 	}
 	if s, ok := v.(json.String); ok {
-		t^ = {strings.clone(s), UNSET}
+		t^ = {strings.clone(s), UNSET_SECONDS}
 		return
 	}
 	bad(r, path, "seconds or a Tone length (\"8m\", \"2:0:0\")")
@@ -757,7 +757,7 @@ read_events_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) 
 	}
 	p.rows.first = i32(len(r.spec.events))
 	for x, i in a {
-		e := Event_Spec{time = {"0:0:0", UNSET}, note = "C4", duration = {"8n", UNSET}, velocity = UNSET}
+		e := Event_Spec{time = {"0:0:0", UNSET_SECONDS}, note = "C4", duration = {"8n", UNSET_SECONDS}, velocity = UNSET}
 		if read_record(r, x, base.path_index(path, i + 1), EVENT_FIELDS, &e) {
 			append(&r.spec.events, e)
 		}
@@ -793,7 +793,7 @@ read_sections_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr
 		return
 	}
 	for x, i in a {
-		s := Section_Spec{start = UNSET, energy = UNSET, flex = {{"", UNSET}, {"", UNSET}}, duration = {"", UNSET}, at = {"", UNSET}}
+		s := Section_Spec{start = UNSET_SECONDS, energy = UNSET, flex = {{"", UNSET_SECONDS}, {"", UNSET_SECONDS}}, duration = {"", UNSET_SECONDS}, at = {"", UNSET_SECONDS}}
 		sp := base.path_index(path, i + 1)
 		if !read_record(r, x, sp, SECTION_FIELDS, &s) {
 			continue
@@ -920,7 +920,7 @@ read_markers_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr)
 		return
 	}
 	for x, i in a {
-		m := Marker_Spec{at = {"", UNSET}}
+		m := Marker_Spec{at = {"", UNSET_SECONDS}}
 		mp := base.path_index(path, i + 1)
 		if read_record(r, x, mp, MARKER_FIELDS, &m) && m.name != "" {
 			append(&r.spec.markers, m)
@@ -1241,7 +1241,7 @@ read_room_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
 	for x, i in a {
 		pair: [2]f64
 		read_pair_field(r, x, base.path_index(path, i + 1), &pair)
-		append(&r.spec.room, pair)
+		append(&r.spec.room, [2]base.Seconds{base.Seconds(pair[0]), base.Seconds(pair[1])})
 	}
 }
 

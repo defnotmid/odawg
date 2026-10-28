@@ -242,7 +242,7 @@ test_sampler_pads :: proc(t: ^testing.T) {
 	kick_tail := tail_sampler(i32(set), 0.1, 36, {pad = base.name_id("kick"), velocity = 1}, &env)
 	testing.expectf(t, kick_tail >= 0.2 && kick_tail < 0.21, "a 0.2 s kick's tail is %f", kick_tail)
 	l4, _, _ := play(&b, set, {pad = base.name_id("kick"), velocity = 1, duration = 0.01}, RATE / 2, key = 36)
-	testing.expect(t, rms(l4[int(math.ceil(kick_tail * RATE)):]) == 0)
+	testing.expect(t, rms(l4[int(math.ceil(f64(kick_tail) * RATE)):]) == 0)
 	// a held note on a sample that doesn't loop: cut by the sample's end
 	held := tail_sampler(i32(set), 0.1, 36, {pitch = 36, velocity = 1, duration = 2}, &env)
 	testing.expectf(t, abs(held - kick_tail) < 1e-9, "held %f", held)

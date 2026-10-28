@@ -31,7 +31,7 @@ Transition :: enum u8 {
 Section :: struct {
 	name:          string,
 	beat, beats:   f64,
-	start, stop:   f64, // song seconds
+	start, stop:   base.Seconds, // song seconds
 	bpm0, bpm1:    f64,
 	beats_per_bar: int,
 	bars:          int,
@@ -43,15 +43,16 @@ Section :: struct {
 }
 
 Marker :: struct {
-	name:          string,
-	beat, seconds: f64,
+	name:    string,
+	beat:    f64,
+	seconds: base.Seconds,
 }
 
 // Where a placed song is let through: from `start` to `stop` seconds (stop
 // <= start: always), fading in and out over its edges with `curve`.
 Window :: struct {
-	start, stop:       f64,
-	fade_in, fade_out: f64,
+	start, stop:       base.Seconds,
+	fade_in, fade_out: base.Seconds,
 	curve:             device.Curve,
 }
 
@@ -116,10 +117,10 @@ Sidechain :: struct {
 	pad:     u32, // Hits: the pad (0: any)
 	pitch:   f32, // Hits: -1 any note of the part
 	floor:   base.Gain, // the gain at the bottom of the dip (0: silence)
-	attack:  f64,
-	hold:    f64,
-	release: f64,
-	merge:   f64,
+	attack:  base.Seconds,
+	hold:    base.Seconds,
+	release: base.Seconds,
+	merge:   base.Seconds,
 }
 
 Send :: struct {
@@ -152,7 +153,7 @@ Fixed_Length :: struct {
 
 Placement :: struct {
 	name:    string, // the song's, or what a mix calls it ("score")
-	at:      f64, // seconds its clock starts on this one
+	at:      base.Seconds, // where its clock starts on this one
 	gain:    base.Gain,
 	duck:    Sidechain,
 	window:  Window,
@@ -166,7 +167,7 @@ Placement :: struct {
 // dB, ramping in and out): its own spans, or the host's for it (a mix).
 Room_Span :: struct {
 	placement:   i32, // into placements
-	start, stop: f64, // song seconds
+	start, stop: base.Seconds, // song seconds
 }
 
 // Where a part is triggered: an entry (the spec's own, or its style's in a
@@ -176,7 +177,7 @@ Room_Span :: struct {
 // shape.
 Region :: struct {
 	part:        i32, // into parts
-	start, stop: f64, // song seconds: the range it plays over
+	start, stop: base.Seconds, // song seconds: the range it plays over
 	// What triggered it: an entry's path ("parts/bass/play/2"), a style's
 	// ("style/house/parts/bass/play/1"), a transition ("sections/drop/transition").
 	source:      string,
@@ -184,7 +185,7 @@ Region :: struct {
 
 // A note in the song: what the voice plays, where it is in beats, whose.
 Note_Row :: struct {
-	time, duration: f64,
+	time, duration: base.Seconds,
 	beat:           f64,
 	pitch:          f32,
 	velocity:       f32,
@@ -244,8 +245,8 @@ PART_ROLE_NAMES := [Part_Role]string {
 
 Song :: struct {
 	name:     string,
-	start:    f64, // on the outside clock
-	duration: f64, // seconds to the end of the last section
+	start:    base.Seconds, // on the outside clock
+	duration: base.Seconds, // to the end of the last section
 	gain:     base.Gain, // the spec's: its placement's level
 	key:      theory.Key,
 	seed:     u64,
@@ -287,7 +288,7 @@ Song :: struct {
 	// texts of the files they name (spec_add_instrument_text; what to read:
 	// spec.instrument_files). nil: built-ins only.
 	host_rows: ^spec.Spec,
-	voices:   [dynamic][2]f64, // the voice tracks' spans, sorted (a spans sidechain ducks under them)
+	voices:   [dynamic][2]base.Seconds, // the voice tracks' spans, sorted (a spans sidechain ducks under them)
 	sidechains: [dynamic]Sidechain,
 	pad_gains: [dynamic]Pad_Gain,
 	// Values moving over song time (automation.odin): a row per thing moved,
@@ -338,7 +339,7 @@ song_from_spec :: proc(s: ^spec.Spec, out: ^Song, bank: ^device.Bank = nil) -> b
 	for m in s.markers {
 		b: f64
 		ok: bool
-		if math.is_nan(m.at.seconds) {
+		if math.is_nan(f64(m.at.seconds)) {
 			b, ok = beat_from_position(out, m.at.text)
 		} else {
 			b, ok = tempo.beat_from_seconds(&out.tempo, m.at.seconds - s.start), true

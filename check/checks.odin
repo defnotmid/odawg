@@ -36,7 +36,7 @@ Measures :: struct {
 	part_energy: [][]f64,
 	part_peak_steps: [][]f32, // each measured part's sample peak (linear) every 100 ms step
 	mix_peak_steps:  []f32, // the mix's
-	from:        f64,
+	from:        base.Seconds,
 	samples:     i64,
 }
 
@@ -83,7 +83,7 @@ ROLE_TABLE := [song.Part_Role]Role_Row {
 // boundary) and its seconds within the render.
 Section_Span :: struct {
 	first, last: int, // steps [first, last)
-	from, to:    f64, // song seconds
+	from, to:    base.Seconds, // song seconds
 }
 
 // What the rules read: the song, what was measured, and from both once,
@@ -309,12 +309,12 @@ findings_from_measures :: proc(s: ^song.Song, m: ^Measures, findings: ^base.Find
 @(private = "file")
 section_plays :: proc(s: ^song.Song, m: ^Measures) -> (spans: []Section_Span, plays: []bool) {
 	STEP :: i64(render.RATE / 10)
-	start := i64(math.round(m.from * render.RATE)) // the render's first sample
-	from, to := f64(start) / render.RATE, f64(start + m.samples) / render.RATE
+	start := base.samples_from_seconds(m.from) // the render's first sample
+	from, to := base.seconds_from_samples(start), base.seconds_from_samples(start + m.samples)
 	spans = make([]Section_Span, len(s.sections), context.temp_allocator)
 	for sec, j in s.sections {
-		a := max(i64(math.round(sec.start * render.RATE)) - start, 0)
-		b := max(i64(math.round(sec.stop * render.RATE)) - start, 0)
+		a := max(base.samples_from_seconds(sec.start) - start, 0)
+		b := max(base.samples_from_seconds(sec.stop) - start, 0)
 		spans[j] = {first = int((a + STEP - 1) / STEP), last = int(b / STEP), from = max(sec.start, from), to = min(sec.stop, to)}
 	}
 	plays = make([]bool, len(s.parts) * len(spans), context.temp_allocator)
@@ -366,10 +366,10 @@ Measuring :: struct {
 	mix_peak_steps: [dynamic]f32, // the mix's
 	parts:      []analyze.Steps,
 	measured:   int, // the parts whose stems came
-	from:       f64,
+	from:       base.Seconds,
 }
 
-measuring_init :: proc(m: ^Measuring, s: ^song.Song, allocator := context.allocator, from := 0.0) {
+measuring_init :: proc(m: ^Measuring, s: ^song.Song, allocator := context.allocator, from: base.Seconds = 0) {
 	analyze.meter_init(&m.meter, render.RATE, allocator)
 	m.peak_steps = make([][dynamic]f32, len(s.parts), allocator)
 	m.mix_peak_steps = make([dynamic]f32, allocator)

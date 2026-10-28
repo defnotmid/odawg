@@ -57,7 +57,7 @@ test_automation_moves :: proc(t: ^testing.T) {
 	out := output_from_song(s, {stems = true})
 	defer output_destroy(&out)
 	pad := song.part_index(s, "pad")
-	b := int(math.round(s.sections[1].start * RATE))
+	b := int(base.samples_from_seconds(s.sections[1].start))
 	rms :: proc(x: []f32) -> f64 {
 		sum: f64
 		for v in x {
@@ -117,7 +117,7 @@ test_automation_exact :: proc(t: ^testing.T) {
 	}
 	testing.expectf(t, worst == 0, "800-sample blocks differ by %e", worst)
 	FROM :: 5.3701 // inside a cell, past where every lane moves
-	cut := output_from_song(s, {from = FROM, to = f64(whole.frames) / RATE})
+	cut := output_from_song(s, {from = FROM, to = base.seconds_from_samples(i64(whole.frames))})
 	defer output_destroy(&cut)
 	offset := int(math.round(FROM * RATE))
 	diff, peak: f32
@@ -280,7 +280,7 @@ test_sidechain_depth_db :: proc(t: ^testing.T) {
 			continue
 		}
 		// the hit's 64-sample cell is silent: its gain is the floor, 0
-		cell := int(math.floor(full.notes.time[k] * RATE / 64)) * 64
+		cell := int(math.floor(f64(full.notes.time[k]) * RATE / 64)) * 64
 		quiet, loud: f32
 		for i in cell ..< cell + 64 {
 			quiet = max(quiet, abs(pad[i]))

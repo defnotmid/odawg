@@ -96,7 +96,7 @@ test_pickup :: proc(t: ^testing.T) {
 	for tr in s.tracks {
 		if int(tr.part) == p {
 			for i in tr.notes.first ..< tr.notes.first + tr.notes.count {
-				append(&times, s.notes.time[i])
+				append(&times, f64(s.notes.time[i]))
 			}
 		}
 	}

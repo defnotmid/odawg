@@ -111,7 +111,7 @@ test_seek_is_straight :: proc(t: ^testing.T) {
 	FROM :: 5.37
 	tp7 := test_pool(3)
 	defer test_pool_free(tp7)
-	cut := output_from_song(s, {from = FROM, to = f64(straight.frames) / RATE, pool = &tp7.work_pool, stems = true})
+	cut := output_from_song(s, {from = FROM, to = base.seconds_from_samples(i64(straight.frames)), pool = &tp7.work_pool, stems = true})
 	defer output_destroy(&cut)
 	offset := int(math.round(FROM * RATE))
 	testing.expect_value(t, cut.frames, straight.frames - offset)
@@ -244,7 +244,7 @@ test_clip :: proc(t: ^testing.T) {
 	straight := output_from_song(&m, {})
 	tp8 := test_pool(3)
 	defer test_pool_free(tp8)
-	cut := output_from_song(&m, {from = 37, to = f64(straight.frames) / RATE, pool = &tp8.work_pool})
+	cut := output_from_song(&m, {from = 37, to = base.seconds_from_samples(i64(straight.frames)), pool = &tp8.work_pool})
 	worst := seek_differs(straight, cut, 37)
 	testing.expectf(t, worst == 0, "from a seek the clip differs by %g", worst)
 	// silent before its start; then the source from its offset, faded in
@@ -298,8 +298,8 @@ test_song_placed_sounds_alone :: proc(t: ^testing.T) {
 				play: [ { name: "a", notes: "A4 C5 E5 -", subdivision: "8n" } ] },
 			pad: { instrument: "Synth", effects: [ { name: "Chorus" }, { name: "AutoFilter" } ], play: [ { name: "a", notes: "A3 - C4 -", subdivision: "4n" } ] } } }`, &arena)
 	alone := output_from_song(s, {})
-	length := f64(alone.frames) / RATE
-	for place in ([][2]f64{{1.25, 1.25}, {0.1, 0}}) {
+	length := base.seconds_from_samples(i64(alone.frames))
+	for place in ([][2]base.Seconds{{1.25, 1.25}, {0.1, 0}}) {
 		at, opens := place[0], place[1]
 		m: song.Song
 		song.mix_init(&m)
@@ -323,7 +323,7 @@ test_song_placed_sounds_alone :: proc(t: ^testing.T) {
 	for i in 0 ..< alone.frames {
 		frames[2 * i], frames[2 * i + 1] = alone.left[i], alone.right[i]
 	}
-	start, offset, stop := 2000.0 / RATE, 1500.0 / RATE, length - 4000.0 / RATE
+	start, offset, stop := base.Seconds(2000.0 / RATE), base.Seconds(1500.0 / RATE), length - 4000.0 / RATE
 	placed, clip: Output
 	for as_clip in ([]bool{false, true}) {
 		bank: device.Bank
@@ -466,7 +466,7 @@ test_clip_rate :: proc(t: ^testing.T) {
 		straight := output_from_song(&m, {})
 		tp9 := test_pool(3)
 		defer test_pool_free(tp9)
-		cut := output_from_song(&m, {from = 3.7, to = f64(straight.frames) / RATE, pool = &tp9.work_pool})
+		cut := output_from_song(&m, {from = 3.7, to = base.seconds_from_samples(i64(straight.frames)), pool = &tp9.work_pool})
 		worst := seek_differs(straight, cut, 3.7)
 		testing.expectf(t, worst == 0, "rate %v: from a seek the clip differs by %g", rate, worst)
 		// past the declick fades, the source at offset + k * rate (a 2x clip
@@ -615,7 +615,7 @@ test_layers :: proc(t: ^testing.T) {
 	FROM :: 0.37
 	tp10 := test_pool(3)
 	defer test_pool_free(tp10)
-	seg := output_from_song(s, {from = FROM, to = f64(out.frames) / RATE, pool = &tp10.work_pool, stems = true})
+	seg := output_from_song(s, {from = FROM, to = base.seconds_from_samples(i64(out.frames)), pool = &tp10.work_pool, stems = true})
 	defer output_destroy(&seg)
 	worst := seek_differs(out, seg, FROM)
 	testing.expectf(t, worst == 0, "from a seek it differs by %g", worst)
@@ -704,7 +704,7 @@ test_nested_layers :: proc(t: ^testing.T) {
 	FROM :: 0.37
 	tp := test_pool(3)
 	defer test_pool_free(tp)
-	seg := output_from_song(s, {from = FROM, to = f64(out.frames) / RATE, pool = &tp.work_pool, stems = true})
+	seg := output_from_song(s, {from = FROM, to = base.seconds_from_samples(i64(out.frames)), pool = &tp.work_pool, stems = true})
 	defer output_destroy(&seg)
 	worst := seek_differs(out, seg, FROM)
 	testing.expectf(t, worst == 0, "from a seek it differs by %g", worst)
@@ -759,7 +759,7 @@ test_stereo_input_kinds_seek :: proc(t: ^testing.T) {
 		out := output_from_song(s, {})
 		defer output_destroy(&out)
 		FROM :: 5 * 4 * 60.0 / 112 // the fifth bar
-		seg := output_from_song(s, {from = FROM, to = f64(out.frames) / RATE})
+		seg := output_from_song(s, {from = FROM, to = base.seconds_from_samples(i64(out.frames))})
 		defer output_destroy(&seg)
 		worst := seek_differs(out, seg, FROM)
 		testing.expectf(t, worst == 0, "%s fed two sides: from a seek it differs by %g", kind, worst)

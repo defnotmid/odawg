@@ -122,8 +122,8 @@ PARAM_TABLE := [Param]Param_Row {
 
 // A note as a voice plays it: times in seconds.
 Note :: struct {
-	time:     f64, // its start (the voice renders from its own sample 0)
-	duration: f64, // how long the gate is held; the release follows
+	time:     base.Seconds, // its start (the voice renders from its own sample 0)
+	duration: base.Seconds, // how long the gate is held; the release follows
 	pitch:    f32, // MIDI, 60 = C4; drums: 0 means the pad's own tuning
 	velocity: f32, // 0..1
 	pad:      u32, // the pad it plays (name_id of its name; 0: none)
@@ -332,7 +332,7 @@ voice_bytes :: proc(p: ^Params, env: ^Voice_Env) -> int {
 }
 
 // Seconds a note of an instrument sounds (at most 30 past what is held).
-note_tail :: proc(p: ^Params, n: Note, env: ^Voice_Env = nil) -> f64 {
+note_tail :: proc(p: ^Params, n: Note, env: ^Voice_Env = nil) -> base.Seconds {
 	return clamp(tail_graph(p, n, env), 0, max(30, n.duration))
 }
 

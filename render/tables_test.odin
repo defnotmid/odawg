@@ -47,7 +47,7 @@ test_tables :: proc(t: ^testing.T) {
 	defer test_pool_free(tp11)
 	tables_build(s, tables, &tp11.work_pool)
 	testing.expect(t, !table_stale(s, &energy))
-	whole := output_from_song(s, {to = f64(energy.frames) / RATE, stems = true})
+	whole := output_from_song(s, {to = base.seconds_from_samples(i64(energy.frames)), stems = true})
 	defer output_destroy(&whole)
 	testing.expect_value(t, whole.frames, energy.frames)
 	n := whole.frames
@@ -162,7 +162,7 @@ test_tables_shape :: proc(t: ^testing.T) {
 	tables_build(s, {&lead, &mix}, &tp12.work_pool)
 	tp13 := test_pool(2)
 	defer test_pool_free(tp13)
-	whole := output_from_song(s, {to = f64(lead.frames) / RATE, stems = true, pool = &tp13.work_pool}, context.temp_allocator)
+	whole := output_from_song(s, {to = base.seconds_from_samples(i64(lead.frames)), stems = true, pool = &tp13.work_pool}, context.temp_allocator)
 	st := whole.stems[song.part_index(s, "lead")]
 	worst: f32
 	rows := 0

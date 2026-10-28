@@ -98,7 +98,7 @@ test_effect_rows_exact :: proc(t: ^testing.T) {
 		testing.expectf(t, worst == 0, "800-sample blocks differ by %e", worst)
 	}
 	FROM :: 6.4321 // inside section a's last bar: every LFO mid-sweep, the lane moving
-	cut := output_from_song(s, {from = FROM, to = f64(whole.frames) / RATE, stems = true})
+	cut := output_from_song(s, {from = FROM, to = base.seconds_from_samples(i64(whole.frames)), stems = true})
 	defer output_destroy(&cut)
 	offset := int(math.round(FROM * RATE))
 	for stem, k in cut.stems {

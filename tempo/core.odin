@@ -6,6 +6,7 @@ package odawg_tempo
 import "core:math"
 import "core:strconv"
 import "core:strings"
+import base "../base"
 
 // A length: beats (quarter notes) or seconds.
 Length :: struct {
@@ -156,7 +157,8 @@ is_name :: proc(s: string) -> bool {
 // tempo). Over a ramp seconds = 60 n / (b1 - b0) * ln(b1 / b0), the model of
 // onimite's examples/common/tempo.lua.
 Tempo_Segment :: struct {
-	beat, seconds: f64,
+	beat:          f64,
+	seconds:       base.Seconds,
 	beats:         f64,
 	bpm0, bpm1:    f64,
 }
@@ -166,15 +168,16 @@ Tempo_Map :: struct {
 }
 
 // Seconds that `beats` last when the tempo ramps from bpm0 to bpm1.
-seconds_from_ramp :: proc "contextless" (beats, bpm0, bpm1: f64) -> f64 {
+seconds_from_ramp :: proc "contextless" (beats, bpm0, bpm1: f64) -> base.Seconds {
 	if math.abs(bpm1 - bpm0) < 1e-9 {
-		return 60 * beats / bpm0
+		return base.Seconds(60 * beats / bpm0)
 	}
-	return 60 * beats / (bpm1 - bpm0) * math.ln(bpm1 / bpm0)
+	return base.Seconds(60 * beats / (bpm1 - bpm0) * math.ln(bpm1 / bpm0))
 }
 
 tempo_push :: proc(m: ^Tempo_Map, beats, bpm0, bpm1: f64) {
-	beat, secs: f64
+	beat: f64
+	secs: base.Seconds
 	if n := len(m.segments); n > 0 {
 		last := m.segments[n - 1]
 		beat, secs = last.beat + last.beats, last.seconds + seconds_from_ramp(last.beats, last.bpm0, last.bpm1)
@@ -193,7 +196,7 @@ segment_from_beat :: proc(m: ^Tempo_Map, beat: f64) -> Tempo_Segment {
 }
 
 @(private = "file")
-segment_from_seconds :: proc(m: ^Tempo_Map, t: f64) -> Tempo_Segment {
+segment_from_seconds :: proc(m: ^Tempo_Map, t: base.Seconds) -> Tempo_Segment {
 	#reverse for g in m.segments {
 		if t >= g.seconds {
 			return g
@@ -203,27 +206,27 @@ segment_from_seconds :: proc(m: ^Tempo_Map, t: f64) -> Tempo_Segment {
 }
 
 // Seconds at a beat (beats past the end keep the last tempo).
-seconds_from_beat :: proc(m: ^Tempo_Map, beat: f64) -> f64 {
+seconds_from_beat :: proc(m: ^Tempo_Map, beat: f64) -> base.Seconds {
 	g := segment_from_beat(m, beat)
 	d := beat - g.beat
 	if math.abs(g.bpm1 - g.bpm0) < 1e-9 || d > g.beats {
 		if d > g.beats { 	// past a ramp's end: the end tempo
-			return g.seconds + seconds_from_ramp(g.beats, g.bpm0, g.bpm1) + (d - g.beats) * 60 / g.bpm1
+			return g.seconds + seconds_from_ramp(g.beats, g.bpm0, g.bpm1) + base.Seconds((d - g.beats) * 60 / g.bpm1)
 		}
-		return g.seconds + d * 60 / g.bpm0
+		return g.seconds + base.Seconds(d * 60 / g.bpm0)
 	}
 	bpm := g.bpm0 + (g.bpm1 - g.bpm0) * d / g.beats
-	return g.seconds + 60 * g.beats / (g.bpm1 - g.bpm0) * math.ln(bpm / g.bpm0)
+	return g.seconds + base.Seconds(60 * g.beats / (g.bpm1 - g.bpm0) * math.ln(bpm / g.bpm0))
 }
 
 // The (fractional) beat at seconds.
-beat_from_seconds :: proc(m: ^Tempo_Map, t: f64) -> f64 {
+beat_from_seconds :: proc(m: ^Tempo_Map, t: base.Seconds) -> f64 {
 	g := segment_from_seconds(m, t)
-	d := t - g.seconds
+	d := f64(t - g.seconds)
 	if math.abs(g.bpm1 - g.bpm0) < 1e-9 {
 		return g.beat + d * g.bpm0 / 60
 	}
-	length := seconds_from_ramp(g.beats, g.bpm0, g.bpm1)
+	length := f64(seconds_from_ramp(g.beats, g.bpm0, g.bpm1))
 	if d > length {
 		return g.beat + g.beats + (d - length) * g.bpm1 / 60
 	}

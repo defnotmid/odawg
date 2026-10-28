@@ -174,10 +174,10 @@ automation_cell :: #force_inline proc(t: i64) -> i64 {
 
 // A lane's value by its path at `seconds` of song time (a host's picture
 // following a sweep): the engine's own function.
-automation_at :: proc(s: ^Song, path: string, seconds: f64) -> (value: f32, ok: bool) {
+automation_at :: proc(s: ^Song, path: string, seconds: base.Seconds) -> (value: f32, ok: bool) {
 	for a in s.automation {
 		if a.path == path {
-			return automation_value(s, a, i64(math.round(seconds * base.RATE))), true
+			return automation_value(s, a, base.samples_from_seconds(seconds)), true
 		}
 	}
 	return 0, false
@@ -292,7 +292,7 @@ automation_points_from_spec :: proc(s: ^spec.Spec, song: ^Song, lane: spec.Autom
 		pp := base.path_index(path, i + 1)
 		b: f64
 		found: bool
-		if math.is_nan(ps.at.seconds) {
+		if math.is_nan(f64(ps.at.seconds)) {
 			b, found = beat_from_position(song, ps.at.text)
 		} else {
 			b, found = tempo.beat_from_seconds(&song.tempo, ps.at.seconds - s.start), true
@@ -301,7 +301,7 @@ automation_points_from_spec :: proc(s: ^spec.Spec, song: ^Song, lane: spec.Autom
 			base.report(&song.findings, "bad_value", .Error, pp, "%s: %q is not a position in the song", pp, ps.at.text)
 			return sp, false
 		}
-		at := i64(math.round(tempo.seconds_from_beat(&song.tempo, b) * base.RATE))
+		at := base.samples_from_seconds(tempo.seconds_from_beat(&song.tempo, b))
 		if at < last {
 			base.report(&song.findings, "bad_value", .Error, pp, "%s: points go in time order (this one is before the one before it)", pp)
 			return sp, false

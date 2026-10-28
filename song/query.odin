@@ -21,7 +21,7 @@ section_from_beat :: proc(song: ^Song, beat: f64) -> int {
 	return len(song.sections) - 1
 }
 
-section_from_seconds :: proc(song: ^Song, t: f64) -> int {
+section_from_seconds :: proc(song: ^Song, t: base.Seconds) -> int {
 	return section_from_beat(song, tempo.beat_from_seconds(&song.tempo, t))
 }
 
@@ -101,7 +101,7 @@ beat_from_position :: proc(song: ^Song, text: string) -> (beat: f64, ok: bool) {
 	}
 	l := tempo.length_from_string(offset, bpb) or_return
 	if l.in_seconds {
-		return tempo.beat_from_seconds(&song.tempo, tempo.seconds_from_beat(&song.tempo, origin) + l.value), true
+		return tempo.beat_from_seconds(&song.tempo, tempo.seconds_from_beat(&song.tempo, origin) + base.Seconds(l.value)), true
 	}
 	return origin + l.value, true
 }
@@ -149,26 +149,26 @@ beats_from_range :: proc(song: ^Song, text: string) -> (from, to: f64, ok: bool)
 }
 
 // Song seconds of a position.
-seconds_from_position :: proc(song: ^Song, text: string) -> (seconds: f64, ok: bool) {
+seconds_from_position :: proc(song: ^Song, text: string) -> (seconds: base.Seconds, ok: bool) {
 	b := beat_from_position(song, text) or_return
 	return tempo.seconds_from_beat(&song.tempo, b), true
 }
 
 // How long a length lasts from a position (a bar is shorter where the
 // tempo is higher).
-seconds_from_length :: proc(song: ^Song, length, at: string) -> (seconds: f64, ok: bool) {
+seconds_from_length :: proc(song: ^Song, length, at: string) -> (seconds: base.Seconds, ok: bool) {
 	start := at == "" ? 0 : (beat_from_position(song, at) or_return)
 	bpb := len(song.sections) > 0 ? song.sections[section_from_beat(song, start)].beats_per_bar : 4
 	l := tempo.length_from_string(length, bpb) or_return
 	if l.in_seconds {
-		return l.value, true
+		return base.Seconds(l.value), true
 	}
 	return tempo.seconds_from_beat(&song.tempo, start + l.value) - tempo.seconds_from_beat(&song.tempo, start), true
 }
 
 // The grid point ("8n", "1m") nearest song seconds `t`, counted from the
 // start of the section it is in.
-seconds_snapped :: proc(song: ^Song, t: f64, grid: string) -> (seconds: f64, ok: bool) {
+seconds_snapped :: proc(song: ^Song, t: base.Seconds, grid: string) -> (seconds: base.Seconds, ok: bool) {
 	if len(song.sections) == 0 {
 		return t, false
 	}
@@ -190,7 +190,7 @@ Place :: struct {
 	beat:     f64, // beat in the bar
 }
 
-place_from_seconds :: proc(song: ^Song, t: f64) -> (p: Place, ok: bool) {
+place_from_seconds :: proc(song: ^Song, t: base.Seconds) -> (p: Place, ok: bool) {
 	if len(song.sections) == 0 || t < 0 || t >= song.duration {
 		return {}, false
 	}
@@ -198,7 +198,7 @@ place_from_seconds :: proc(song: ^Song, t: f64) -> (p: Place, ok: bool) {
 	i := section_from_beat(song, b)
 	s := song.sections[i]
 	into := b - s.beat
-	return {i, s.name, clamp((t - s.start) / (s.stop - s.start), 0, 1), int(into / f64(s.beats_per_bar)), math.mod(into, f64(s.beats_per_bar))}, true
+	return {i, s.name, clamp(f64((t - s.start) / (s.stop - s.start)), 0, 1), int(into / f64(s.beats_per_bar)), math.mod(into, f64(s.beats_per_bar))}, true
 }
 
 chord_from_beat :: proc(song: ^Song, beat: f64) -> theory.Chord {
@@ -236,13 +236,13 @@ Matcher :: struct {
 	part:     i32, // -1 any
 	pad:      u32, // 0 any
 	pitch:    f32, // -1 any
-	from, to: f64, // seconds
+	from, to: base.Seconds,
 	made:     bool, // the notes compose made too
 }
 
 @(private = "file")
 matcher_from_filter :: proc(song: ^Song, f: Note_Filter) -> (m: Matcher, ok: bool) {
-	m = {part = -1, pitch = -1, from = -math.INF_F64, to = math.INF_F64, made = f.made}
+	m = {part = -1, pitch = -1, from = base.Seconds(-math.INF_F64), to = base.Seconds(math.INF_F64), made = f.made}
 	if f.part != "" {
 		for n, i in song.parts {
 			if n == f.part {
@@ -313,7 +313,7 @@ notes_from_filter :: proc(song: ^Song, f: Note_Filter, out: ^[dynamic]i32) -> bo
 // 1 at each matching note, falling by e^(-decay * beats since it):
 // beat_clock's pulse, from the notes that are really there (0 before the
 // filter's range, the last one in it fading after).
-pulse_from_seconds :: proc(song: ^Song, t: f64, f: Note_Filter, decay: f64) -> f64 {
+pulse_from_seconds :: proc(song: ^Song, t: base.Seconds, f: Note_Filter, decay: f64) -> f64 {
 	m, ok := matcher_from_filter(song, f)
 	if !ok {
 		return 0
@@ -346,13 +346,13 @@ note_name :: proc(s: ^Song, pad: u32, pitch: f32) -> string {
 Sounding_Note :: struct {
 	part:     string,
 	note:     string,
-	time:     f64,
+	time:     base.Seconds,
 	velocity: f32,
 	held:     bool,
 }
 
 // All written notes sounding at song seconds `t` (held or in their release tail).
-notes_at :: proc(s: ^Song, t: f64, allocator := context.temp_allocator) -> []Sounding_Note {
+notes_at :: proc(s: ^Song, t: base.Seconds, allocator := context.temp_allocator) -> []Sounding_Note {
 	out := make([dynamic]Sounding_Note, allocator)
 	env := voice_env(s)
 	for tr in s.tracks {
@@ -372,7 +372,7 @@ notes_at :: proc(s: ^Song, t: f64, allocator := context.temp_allocator) -> []Sou
 
 // How far song seconds `t` is from the nearest 8th-note grid point in a
 // section that has drum pad hits, and the beat duration at `t`.
-off_grid :: proc(s: ^Song, t: f64) -> (off, beat: f64, ok: bool) {
+off_grid :: proc(s: ^Song, t: base.Seconds) -> (off, beat: base.Seconds, ok: bool) {
 	beaten := false
 	for sec in s.sections {
 		if t < sec.start || t >= sec.stop {
@@ -393,12 +393,12 @@ off_grid :: proc(s: ^Song, t: f64) -> (off, beat: f64, ok: bool) {
 	}
 	snapped := seconds_snapped(s, t, "8n") or_return
 	b := tempo.beat_from_seconds(&s.tempo, t)
-	return t - snapped, 60 / tempo.bpm_from_beat(&s.tempo, b), true
+	return t - snapped, base.Seconds(60 / tempo.bpm_from_beat(&s.tempo, b)), true
 }
 
 // Song seconds of every integer beat from 0 to total_beats(s).
-beat_seconds :: proc(s: ^Song, allocator := context.temp_allocator) -> []f64 {
-	out := make([dynamic]f64, allocator)
+beat_seconds :: proc(s: ^Song, allocator := context.temp_allocator) -> []base.Seconds {
+	out := make([dynamic]base.Seconds, allocator)
 	total := total_beats(s)
 	for b := 0.0; b < total - 1e-9; b += 1 {
 		append(&out, tempo.seconds_from_beat(&s.tempo, b))

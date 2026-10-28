@@ -113,7 +113,7 @@ test_buried_part :: proc(t: ^testing.T) {
 	s := new(song.Song)
 	testing.expect(t, song.song_from_spec(sp, s))
 	Case :: struct {
-		from, to: f64,
+		from, to: base.Seconds,
 		buried:   []string, // the parts found buried, the rest not
 	}
 	cases := []Case {
@@ -202,8 +202,8 @@ test_balance_rows :: proc(t: ^testing.T) {
 	for p in 0 ..< len(s.parts) {
 		st := out.stems[p]
 		for sec, j in s.sections {
-			first := (int(math.round(sec.start * render.RATE)) + STEP - 1) / STEP
-			last := int(math.round(sec.stop * render.RATE)) / STEP
+			first := (int(base.samples_from_seconds(sec.start)) + STEP - 1) / STEP
+			last := int(base.samples_from_seconds(sec.stop)) / STEP
 			want := f64(base.gain_to_db(base.Gain(render.peak_from_samples(st[0][first * STEP:min(last * STEP, len(st[0]))], st[1][first * STEP:min(last * STEP, len(st[1]))]))))
 			testing.expectf(t, rows[p * per + j].peak_db == want, "%s in %s: peak %v, its stem's %v", s.parts[p], sec.name, rows[p * per + j].peak_db, want)
 		}

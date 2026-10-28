@@ -303,7 +303,7 @@ run_render :: proc(a: ^Args) -> bool {
 
 Timeline_Section :: struct {
 	name:          string,
-	start, stop:   f64,
+	start, stop:   base.Seconds,
 	bars:          int,
 	bpm:           [2]f64,
 	beats_per_bar: int,
@@ -327,7 +327,7 @@ Timeline_Track :: struct {
 
 Timeline :: struct {
 	name:     string,
-	duration: f64,
+	duration: base.Seconds,
 	key:      string,
 	sections: []Timeline_Section,
 	tracks:   []Timeline_Track,
@@ -343,7 +343,7 @@ Timeline_Lane :: struct {
 }
 
 Timeline_Point :: struct {
-	seconds: f64,
+	seconds: base.Seconds,
 	value:   f32,
 	curve:   string,
 }
@@ -370,7 +370,7 @@ timeline_from_song :: proc(l: ^Loaded) -> Timeline {
 		}
 		points := make([dynamic]Timeline_Point)
 		for pt in s.automation_points[a.points.first:base.span_end(a.points)] {
-			p := Timeline_Point{f64(pt.at) / base.RATE, pt.value, song.AUTOMATION_CURVE_NAMES[pt.curve]}
+			p := Timeline_Point{base.seconds_from_samples(pt.at), pt.value, song.AUTOMATION_CURVE_NAMES[pt.curve]}
 			if song.AUTOMATION_LEVELS[a.kind] {
 				// a level's lane, kept as gains: in dB as written (to 1e-4 dB), even
 				// in dB unless it steps

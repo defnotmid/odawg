@@ -98,7 +98,7 @@ Node_Needs :: enum u8 {
 // node_out(c, lane) (left; right too for a stereo node), not adding.
 Node_Process :: #type proc(c: ^Node_Call)
 // Seconds the node sounds from a note's start (0: nothing past the gate).
-Node_Tail :: #type proc(c: ^Node_Call, lane: ^Lane) -> f64
+Node_Tail :: #type proc(c: ^Node_Call, lane: ^Lane) -> base.Seconds
 
 Node_Kind_Row :: struct {
 	name:     string,
@@ -725,7 +725,7 @@ graph_chokes :: proc(progs: ^Programs, index: i32, n: Note) -> []u32 {
 
 // Seconds a note sounds: a one-shot's length, else the longest of the gate
 // and its nodes' tails.
-tail_graph :: proc(p: ^Params, n: Note, env: ^Voice_Env) -> f64 {
+tail_graph :: proc(p: ^Params, n: Note, env: ^Voice_Env) -> base.Seconds {
 	index := graph_program(p, env)
 	if index < 0 {
 		return 0
@@ -733,7 +733,7 @@ tail_graph :: proc(p: ^Params, n: Note, env: ^Voice_Env) -> f64 {
 	if env.programs.programs[index].layer_mode == .All {
 		// the longest of the layers it may play (whichever its draw picks)
 		layers: [MAX_LAYERS]i32
-		longest: f64
+		longest: base.Seconds
 		for l in layers[:graph_layers(env.programs, index, n, -1, layers[:])] {
 			longest = max(longest, tail_of(env, env.programs.layers[l].program, n, n.pitch, n.pitch, l))
 		}
@@ -747,23 +747,23 @@ tail_graph :: proc(p: ^Params, n: Note, env: ^Voice_Env) -> f64 {
 }
 
 @(private = "file")
-tail_of :: proc(env: ^Voice_Env, play: i32, n: Note, key, pitch: f32, layer: i32 = -1) -> f64 {
+tail_of :: proc(env: ^Voice_Env, play: i32, n: Note, key, pitch: f32, layer: i32 = -1) -> base.Seconds {
 	prog := &env.programs.programs[play]
 	if prog.length > 0 {
-		return f64(prog.length)
+		return base.Seconds(prog.length)
 	}
-	heard: [MAX_NODES]f64
+	heard: [MAX_NODES]base.Seconds
 	if prog.one_shot {
 		// to its end whatever the gate: as long as it is heard with the gate held
 		m := n
 		m.duration = ONE_SHOT_GATE
 		graph_heard(env, prog, m, key, pitch, &heard, layer)
 		tail := heard[prog.out]
-		return math.is_inf(tail) || tail >= ONE_SHOT_GATE ? 30 : tail
+		return math.is_inf(f64(tail)) || tail >= ONE_SHOT_GATE ? 30 : tail
 	}
 	graph_heard(env, prog, n, key, pitch, &heard, layer)
 	tail := heard[prog.out]
-	if math.is_inf(tail) {
+	if math.is_inf(f64(tail)) {
 		tail = max(n.duration, 0) // nothing ends it: it is cut at the gate
 	}
 	return max(tail, max(n.duration, 0))
@@ -774,7 +774,7 @@ tail_of :: proc(env: ^Voice_Env, play: i32, n: Note, key, pitch: f32, layer: i32
 // source with neither: for ever), cut to the shortest envelope its level
 // is multiplied by (amp: a 0..1 node with a tail, at full depth).
 @(private = "file")
-graph_heard :: proc(env: ^Voice_Env, prog: ^Program, n: Note, key, pitch: f32, heard: ^[MAX_NODES]f64, layer: i32 = -1) {
+graph_heard :: proc(env: ^Voice_Env, prog: ^Program, n: Note, key, pitch: f32, heard: ^[MAX_NODES]base.Seconds, layer: i32 = -1) {
 	lanes := [1]Lane{{note = n, key = key, hz = base.midi_to_hz(f64(pitch)), gate = gate_sample(n), params = layer_params(env.programs, layer)}}
 	lanes[0].note.pitch = pitch
 	c := Node_Call{progs = env.programs, env = env, lanes = lanes[:]}
@@ -782,14 +782,14 @@ graph_heard :: proc(env: ^Voice_Env, prog: ^Program, n: Note, key, pitch: f32, h
 	nodes := progs.nodes[prog.nodes.first:base.span_end(prog.nodes)]
 	for &node, k in nodes {
 		row := node_row(node.kind)
-		h := math.INF_F64
+		h := base.Seconds(math.INF_F64)
 		if row.tail != nil {
 			c.node, c.local = &node, u16(k)
 			h = row.tail(&c, &lanes[0])
 		} else if node.inputs.count > 0 {
 			h = 0
 			for x in progs.inputs[node.inputs.first:base.span_end(node.inputs)] {
-				h = max(h, x.node >= 0 ? heard[x.node] : math.INF_F64)
+				h = max(h, x.node >= 0 ? heard[x.node] : base.Seconds(math.INF_F64))
 			}
 		}
 		for m in progs.mods[node.mods.first:base.span_end(node.mods)] {
@@ -815,14 +815,14 @@ graph_ends :: proc(env: ^Voice_Env, prog: ^Program, n: Note, key, pitch: f32, en
 		}
 		return
 	}
-	heard: [MAX_NODES]f64
+	heard: [MAX_NODES]base.Seconds
 	graph_heard(env, prog, n, key, pitch, &heard, layer)
 	gate := max(n.duration, 0)
-	need: [MAX_NODES]f64
-	need[prog.out] = math.INF_F64
+	need: [MAX_NODES]base.Seconds
+	need[prog.out] = base.Seconds(math.INF_F64)
 	#reverse for &node, r in nodes {
 		h := heard[r]
-		if math.is_inf(h) && r == int(prog.out) {
+		if math.is_inf(f64(h)) && r == int(prog.out) {
 			h = gate
 		}
 		e := min(need[r], h)
@@ -840,7 +840,7 @@ graph_ends :: proc(env: ^Voice_Env, prog: ^Program, n: Note, key, pitch: f32, en
 	}
 	for k in 0 ..< len(nodes) {
 		e := min(need[k], heard[k])
-		ends[k] = math.is_inf(e) || e * RATE >= f64(max(i32)) ? max(i32) : i32(math.ceil(e * RATE))
+		ends[k] = math.is_inf(f64(e)) || f64(e) * RATE >= f64(max(i32)) ? max(i32) : i32(math.ceil(f64(e) * RATE))
 	}
 }
 
@@ -893,7 +893,7 @@ graph_start :: proc(s: ^Voice_State, p: ^Params, n: Note, env: ^Voice_Env, fresh
 		play, gain, key, pitch, ok = l.program, l.gain * (n.level > 0 ? n.level : 1), n.pitch, n.pitch, l.program >= 0
 		if n.kind == .Release {
 			// a note's end: its gate already closed, quieter the longer it was held
-			gain *= f32(base.db_to_gain(base.Db(-f64(env.programs.regions[l.row].rt_decay) * n.duration)))
+			gain *= f32(base.db_to_gain(base.Db(-f64(env.programs.regions[l.row].rt_decay) * f64(n.duration))))
 			n.duration = 0
 		}
 		if play >= 0 && env.programs.programs[play].one_shot {
@@ -911,7 +911,7 @@ graph_start :: proc(s: ^Voice_State, p: ^Params, n: Note, env: ^Voice_Env, fresh
 	// the last note's gate still open (a mono voice): a slide
 	h.slide = prog.mono && h.started && h.program == play && h.gate - h.pos > SLIDE_SLACK
 	h.program, h.gain, h.key, h.pitch = play, gain, key, pitch
-	h.total = i64(math.ceil((layer >= 0 ? tail_of(env, play, n, key, pitch, layer) : tail_graph(p, n, env)) * RATE))
+	h.total = i64(math.ceil(f64(layer >= 0 ? tail_of(env, play, n, key, pitch, layer) : tail_graph(p, n, env)) * RATE))
 	graph_ends(env, prog, n, key, pitch, &h.ends, layer)
 	h.gate, h.pos = gate_sample(n), 0
 	h.starting, h.fresh = !h.slide, fresh
@@ -960,7 +960,7 @@ Graph_Voice :: struct {
 	// bpm), its sample 0 in its song's seconds, and the beat its clock's 0
 	// is on (a note's start; an effect row's, the song's start: 0)
 	tempo:        ^tempo.Tempo_Map,
-	seconds:      f64,
+	seconds:      base.Seconds,
 	beat0:        f64,
 }
 
@@ -1001,8 +1001,8 @@ graph_run :: proc(progs: ^Programs, env: ^Voice_Env, play: i32, voices: []Graph_
 			if prog.tempo {
 				// the beats the chunk spans, from the song's map at its ends:
 				// a phase counting them is on the beat at every chunk's edge
-				b0 := song_beat(v.tempo, v.seconds + f64(at) / RATE)
-				b1 := song_beat(v.tempo, v.seconds + f64(at + i64(n)) / RATE)
+				b0 := song_beat(v.tempo, v.seconds + base.seconds_from_samples(at))
+				b1 := song_beat(v.tempo, v.seconds + base.seconds_from_samples(at + i64(n)))
 				lane.beat, lane.beat_step = b0 - v.beat0, (b1 - b0) / f64(n)
 			}
 			lane.note.pitch = h.pitch
@@ -1150,9 +1150,9 @@ graph_run :: proc(progs: ^Programs, env: ^Voice_Env, play: i32, voices: []Graph_
 }
 
 // The song's beat at `seconds` of its time (no map: at 120 bpm).
-song_beat :: proc(m: ^tempo.Tempo_Map, seconds: f64) -> f64 {
+song_beat :: proc(m: ^tempo.Tempo_Map, seconds: base.Seconds) -> f64 {
 	if m == nil || len(m.segments) == 0 {
-		return seconds * 2
+		return f64(seconds) * 2
 	}
 	return tempo.beat_from_seconds(m, seconds)
 }

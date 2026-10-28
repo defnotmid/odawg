@@ -53,9 +53,9 @@ test_segments_shape :: proc(t: ^testing.T) {
 	worst: f64
 	for k in 0 ..< len(s.notes) {
 		start, gate := s.notes.time[k], s.notes.duration[k]
-		for i in 0 ..< int((gate + 0.5) * RATE) {
-			at := int(math.round(start * RATE)) + i
-			worst = max(worst, abs(f64(whole.left[at]) / g - want(f64(i) / RATE, gate)))
+		for i in 0 ..< int(f64(gate + 0.5) * RATE) {
+			at := int(base.samples_from_seconds(start)) + i
+			worst = max(worst, abs(f64(whole.left[at]) / g - want(f64(i) / RATE, f64(gate))))
 		}
 	}
 	testing.expectf(t, worst < 1e-5, "the level strays %g from the envelope's shape", worst)
@@ -72,8 +72,8 @@ test_segments_shape :: proc(t: ^testing.T) {
 	}
 	testing.expectf(t, blocks == 0, "800-sample blocks differ by %e", blocks)
 	from := s.notes.time[1] + s.notes.duration[1] + 0.07 // in the short note's release
-	cut := output_from_song(s, {from = from, to = f64(whole.frames) / RATE})
-	offset := int(math.round(from * RATE))
+	cut := output_from_song(s, {from = from, to = base.seconds_from_samples(i64(whole.frames))})
+	offset := int(base.samples_from_seconds(from))
 	diff: f32
 	for v, i in cut.left {
 		diff = max(diff, abs(v - whole.left[offset + i]), abs(cut.right[i] - whole.right[offset + i]))

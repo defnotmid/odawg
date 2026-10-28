@@ -82,7 +82,7 @@ test_spread_kinds_seek :: proc(t: ^testing.T) {
 		context.allocator = virtual.arena_allocator(&arena)
 		whole := output_from_song(s, {})
 		FROM :: 3 * 4 * 60.0 / 112 // the third bar
-		cut := output_from_song(s, {from = FROM, to = f64(whole.frames) / RATE})
+		cut := output_from_song(s, {from = FROM, to = base.seconds_from_samples(i64(whole.frames))})
 		offset := int(math.round(FROM * RATE))
 		worst: f32
 		for v, i in cut.left {

@@ -5,6 +5,7 @@ import "core:fmt"
 import "core:math"
 import "core:os"
 import analyze "deps:odawg/analyze"
+import base "deps:odawg/base"
 import assets "deps:odawg/assets"
 import render "deps:odawg/render"
 import song "deps:odawg/song"
@@ -99,8 +100,8 @@ run_analyze :: proc(a: ^Args) -> bool {
 		push :: proc(src: ^Source, s: ^song.Song, at: i64, l, r: []f32) {
 			n := i64(len(l))
 			for sec, i in s.sections {
-				a := max(i64(math.round(sec.start * render.RATE)) - at, 0)
-				b := min(i64(math.round(sec.stop * render.RATE)) - at, n)
+				a := max(base.samples_from_seconds(sec.start) - at, 0)
+				b := min(base.samples_from_seconds(sec.stop) - at, n)
 				if b > a {
 					analyze.meter_push(&src.meters[i], l[a:b], r[a:b])
 				}
@@ -112,7 +113,7 @@ run_analyze :: proc(a: ^Args) -> bool {
 			push(&x.sources[1 + p], x.song, at, st[0], st[1])
 		}
 	}}
-	render.master_export(s, {to = f64(frames) / render.RATE, stems = true, pool = a.pool}, m, sink)
+	render.master_export(s, {to = base.seconds_from_samples(i64(frames)), stems = true, pool = a.pool}, m, sink)
 	tables := make([dynamic]^render.Table)
 	for &src in sources {
 		append(&tables, &src.bands, &src.stereo, &src.crest)
@@ -131,9 +132,9 @@ run_analyze :: proc(a: ^Args) -> bool {
 	report.sections = make([]Section_Report, len(s.sections))
 	masking := make([dynamic]render.Masking_Row)
 	for sec, i in s.sections {
-		steps := [2]int{int(sec.start * render.RATE) / ANALYSIS_STEP, int(math.ceil(sec.stop * render.RATE)) / ANALYSIS_STEP}
+		steps := [2]int{int(f64(sec.start) * render.RATE) / ANALYSIS_STEP, int(math.ceil(f64(sec.stop) * render.RATE)) / ANALYSIS_STEP}
 		r := &report.sections[i]
-		r^ = {name = sec.name, start_seconds = s.start + sec.start, end_seconds = s.start + sec.stop}
+		r^ = {name = sec.name, start_seconds = f64(s.start + sec.start), end_seconds = f64(s.start + sec.stop)}
 		r.mix = measures_from(&sources[0], i, steps)
 		r.stems = make([]render.Measures, stems)
 		for p in 0 ..< stems {

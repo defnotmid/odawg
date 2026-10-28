@@ -81,11 +81,11 @@ test_tempo_sync_rows :: proc(t: ^testing.T) {
 	d := output_from_song(dry, {stems = true})
 	Clock :: struct {
 		m:  ^tempo.Tempo_Map,
-		at: f64,
+		at: base.Seconds,
 	}
 	want :: proc(t: f64, data: rawptr) -> f64 {
 		c := (^Clock)(data)
-		beat := tempo.beat_from_seconds(c.m, t - c.at)
+		beat := tempo.beat_from_seconds(c.m, base.Seconds(t) - c.at)
 		return 0.75 + 0.25 * math.sin(math.TAU * beat)
 	}
 	a := song.part_index(wet, "steady/p")
@@ -100,7 +100,7 @@ test_tempo_sync_rows :: proc(t: ^testing.T) {
 	// with it (a Hz rate read at the first section's tempo would be 25% off)
 	testing.expect(t, ramp.sections[0].bpm1 > ramp.sections[0].bpm0 + 20)
 	FROM :: 7.123
-	cut := output_from_song(wet, {from = FROM, to = f64(w.frames) / RATE})
+	cut := output_from_song(wet, {from = FROM, to = base.seconds_from_samples(i64(w.frames))})
 	offset := int(math.round(FROM * RATE))
 	diff, peak: f32
 	for v, i in cut.left {
@@ -138,22 +138,22 @@ test_tempo_sync_instrument :: proc(t: ^testing.T) {
 	defer output_destroy(&d)
 	Clock :: struct {
 		m:     ^tempo.Tempo_Map,
-		start: f64,
+		start: base.Seconds,
 		hz:    f64,
 	}
 	on_beat :: proc(t: f64, data: rawptr) -> f64 {
 		c := (^Clock)(data)
-		beats := tempo.beat_from_seconds(c.m, t) - tempo.beat_from_seconds(c.m, c.start)
+		beats := tempo.beat_from_seconds(c.m, base.Seconds(t)) - tempo.beat_from_seconds(c.m, c.start)
 		return 0.75 + 0.25 * math.sin(math.TAU * beats)
 	}
 	in_hz :: proc(t: f64, data: rawptr) -> f64 {
 		c := (^Clock)(data)
-		return 0.75 + 0.25 * math.sin(math.TAU * c.hz * (t - c.start))
+		return 0.75 + 0.25 * math.sin(math.TAU * c.hz * (t - f64(c.start)))
 	}
 	note := synced.notes.time[0]
 	c := Clock{&synced.tempo, note, 2}
-	s := strays(ws.left, d.left, note + 0.1, note + 11, on_beat, &c)
-	h := strays(wh.left, d.left, note + 0.1, note + 11, in_hz, &c)
+	s := strays(ws.left, d.left, f64(note) + 0.1, f64(note) + 11, on_beat, &c)
+	h := strays(wh.left, d.left, f64(note) + 0.1, f64(note) + 11, in_hz, &c)
 	testing.expectf(t, s < 1e-3, "a \"4n\" rate strays %g from the song's beats", s)
 	testing.expectf(t, h < 1e-3, "a rate of 2 strays %g from 2 Hz", h)
 }

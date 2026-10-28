@@ -128,7 +128,7 @@ test_range :: proc(t: ^testing.T) {
 	from := s.sections[1].start
 	part := output_from_song(s, {from = from, to = from + 2})
 	defer output_destroy(&part)
-	offset := int(math.round(from * RATE))
+	offset := int(base.samples_from_seconds(from))
 	worst: f32
 	for i in 0 ..< part.frames {
 		worst = max(worst, abs(part.left[i] - whole.left[offset + i]))

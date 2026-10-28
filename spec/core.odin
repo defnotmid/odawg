@@ -17,17 +17,19 @@ Span :: base.Span
 
 // Optional numbers are NaN when the spec leaves them out.
 UNSET :: base.UNSET
+// UNSET as a time.
+UNSET_SECONDS :: base.Seconds(base.UNSET)
 
 Spec :: struct {
 	name:              string,
-	start:             f64, // where the song sits on an outside clock (onimite: the video)
+	start:             base.Seconds, // where the song sits on an outside clock (onimite: the video)
 	bpm:               f64,
 	beats_per_bar:     f64,
 	key:               string,
 	seed:              f64,
 	swing:             f64,
 	swing_subdivision: string,
-	duration:          f64, // a target length, seconds (UNSET: none)
+	duration:          base.Seconds, // a target length (UNSET: none)
 	gain_db:           base.Db, // the whole song's level: headroom for a mix it joins (-10)
 	from:              string,
 	// The first section's style, energy and chords when it names none.
@@ -51,7 +53,7 @@ Spec :: struct {
 	markers:           [dynamic]Marker_Spec,
 	automation:        [dynamic]Automation_Spec, // by path, sorted
 	automation_points: [dynamic]Automation_Point_Spec,
-	room:              [dynamic][2]f64, // spans (outside clock) another sound needs room in
+	room:              [dynamic][2]base.Seconds, // spans (outside clock) another sound needs room in
 	room_from:         string, // or a sound the host places, by name ("voice"): its spans
 	strings:           [dynamic]string, // an `.Asset` param's name ("vcsl/upright_piano"): its value is the index here
 	styles:            [dynamic]Style_Spec, // the song's own (and style files the host read)
@@ -105,7 +107,7 @@ Instrument_Spec :: struct {
 Section_Spec :: struct {
 	name:          string,
 	duration:      Time_Spec, // a Tone length, or at least so many seconds
-	start:         f64, // exactly here on the outside clock (UNSET: anywhere)
+	start:         base.Seconds, // exactly here on the outside clock (UNSET: anywhere)
 	bpm:           [2]f64, // from, to (0: carry over; equal: steady)
 	beats_per_bar: f64, // 0: carry over
 	style:         string,
@@ -302,7 +304,7 @@ Bus_Spec :: struct {
 Sidechain_Spec :: struct {
 	source:   string, // "drums/kick": a part and the pad or note that ducks this one
 	depth_db: base.Db, // the level the dip reaches (<= 0; -Infinity: silence)
-	release:  f64,
+	release:  base.Seconds,
 }
 
 Send_Spec :: struct {
@@ -338,7 +340,7 @@ Automation_Point_Spec :: struct {
 // A number (seconds) or a string (a Tone length or a position), as written.
 Time_Spec :: struct {
 	text:    string,
-	seconds: f64, // UNSET when text is set
+	seconds: base.Seconds, // UNSET when text is set
 }
 
 Play_Kind :: enum u8 {

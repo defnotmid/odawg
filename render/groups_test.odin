@@ -72,7 +72,7 @@ test_groups_choke :: proc(t: ^testing.T) {
 	}
 	testing.expectf(t, worst == 0, "800-sample blocks differ by %e", worst)
 	FROM :: 1.3
-	cut := output_from_song(s, {from = FROM, to = f64(whole.frames) / RATE})
+	cut := output_from_song(s, {from = FROM, to = base.seconds_from_samples(i64(whole.frames))})
 	offset := int(math.round(FROM * RATE))
 	diff: f32
 	for v, i in cut.left {

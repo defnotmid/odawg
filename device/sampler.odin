@@ -231,7 +231,7 @@ sampler_start :: proc(st: ^Sampler_State, set: i32, attack, release: f32, key: f
 	rel := max(z.release > 0 ? f64(z.release) : f64(release), SAMPLER_DECLICK)
 	st.env = {attack = max(attack, 0), sustain = 1, release = f32(rel)}
 	dsp.adsr_init(&st.env)
-	st.gate = z.one_shot ? -1 : i64(math.round(max(n.duration, 0) * RATE))
+	st.gate = z.one_shot ? -1 : gate_sample(n)
 	st.over = st.gate >= 0 ? st.gate + i64(math.ceil(rel * RATE)) : -1
 }
 
@@ -306,15 +306,15 @@ sampler_run :: proc(st: ^Sampler_State, data: []$T, channels: int, scale: f32, a
 // release, cut short by its sample's end unless it loops. Before the
 // samples are loaded: a drum note SAMPLER_ONE_SHOT_TAIL, a held one its
 // gate and release.
-tail_sampler :: proc(set_index: i32, release: f32, key: f32, n: Note, env: ^Voice_Env) -> f64 {
-	held := max(n.duration, 0) + max(f64(release), SAMPLER_DECLICK)
+tail_sampler :: proc(set_index: i32, release: f32, key: f32, n: Note, env: ^Voice_Env) -> base.Seconds {
+	held := f64(max(n.duration, 0)) + max(f64(release), SAMPLER_DECLICK)
 	guess := n.pad != 0 ? SAMPLER_ONE_SHOT_TAIL : held
 	if env == nil || env.bank == nil {
-		return guess
+		return base.Seconds(guess)
 	}
 	set := int(set_index)
 	if set < 0 || set >= len(env.bank.sets) {
-		return guess
+		return base.Seconds(guess)
 	}
 	bank := env.bank
 	pitch := n.pitch > 0 ? n.pitch : key
@@ -328,11 +328,11 @@ tail_sampler :: proc(set_index: i32, release: f32, key: f32, n: Note, env: ^Voic
 			continue
 		}
 		if z.sample < 0 || int(z.sample) >= len(bank.samples) {
-			return guess
+			return base.Seconds(guess)
 		}
 		sm := bank.samples[z.sample]
 		step := math.pow(2, f64(pitch - z.root) / 12)
-		held := z.release > 0 ? max(n.duration, 0) + max(f64(z.release), SAMPLER_DECLICK) : held
+		held := z.release > 0 ? f64(max(n.duration, 0)) + max(f64(z.release), SAMPLER_DECLICK) : held
 		// to its last frame, and the kernel's reach past it
 		left := (f64(sm.frames - i64(max(z.offset, 0))) / step + f64(SINC_HALF * SINC_MAX_STRETCH)) / RATE
 		loops := z.loop_to - z.loop_from >= 2 && i64(z.loop_to) <= sm.frames
@@ -347,7 +347,7 @@ tail_sampler :: proc(set_index: i32, release: f32, key: f32, n: Note, env: ^Voic
 			tail = max(tail, min(held, left))
 		}
 	}
-	return tail
+	return base.Seconds(tail)
 }
 
 // ---- Region: one zone of a set, as an SFZ region plays it --------------------------
@@ -555,14 +555,14 @@ region_run :: proc(st: ^Region_State, lane: ^Lane, data: []$T, channels: int, sc
 // Seconds it sounds from the note's start: to its sample's end at its
 // pitch (INF: it loops, so its note's envelope ends it).
 @(private = "package")
-tail_region :: proc(c: ^Node_Call, lane: ^Lane) -> f64 {
+tail_region :: proc(c: ^Node_Call, lane: ^Lane) -> base.Seconds {
 	st: Region_State
 	region_start(c, lane, &st)
 	if st.zone < 0 {
 		return 0
 	}
 	if st.loop_to > st.loop_from {
-		return math.INF_F64
+		return base.Seconds(math.INF_F64)
 	}
-	return (f64(st.length) - st.start) / st.step / RATE + f64(st.delay) / RATE
+	return base.Seconds((f64(st.length) - st.start) / st.step / RATE + f64(st.delay) / RATE)
 }

@@ -662,7 +662,7 @@ emit :: proc(x: ^Expand, beat, beats: f64, pitch: f32, velocity: f64, pad: u32, 
 	vel := velocity
 	if h := x.play.humanize; h > 0 {
 		k := base.hash_combine(x.seed, u64(beat * 9600 + 0.5))
-		t0 += (base.hash_unit(k) - 0.5) * 2 * h
+		t0 += base.Seconds((base.hash_unit(k) - 0.5) * 2 * h)
 		jittered := vel * (0.92 + 0.16 * base.hash_unit(base.hash_combine(k, 7)))
 		// a note at or under an accent's line (0.8) stays under it
 		vel = vel <= 0.8 ? min(jittered, 0.8) : jittered
@@ -1032,12 +1032,12 @@ expand_events :: proc(x: ^Expand) {
 @(private = "file")
 beats_from_time :: proc(x: ^Expand, t: spec.Time_Spec, origin: f64, bpb: int) -> (beats: f64, ok: bool) {
 	seconds := t.seconds
-	if math.is_nan(seconds) {
+	if math.is_nan(f64(seconds)) {
 		l := tempo.length_from_string(t.text, bpb) or_return
 		if !l.in_seconds {
 			return l.value, true
 		}
-		seconds = l.value
+		seconds = base.Seconds(l.value)
 	}
 	m := &x.song.tempo
 	return tempo.beat_from_seconds(m, tempo.seconds_from_beat(m, origin) + seconds) - origin, true
@@ -1229,7 +1229,7 @@ Transition_Call :: struct {
 	song:       ^Song,
 	work:       ^Work,
 	prev, next: Section,
-	at:         f64, // the section's start
+	at:         base.Seconds, // the section's start
 	ti:         int,
 	root:       f32,
 	pad:        u32,
@@ -1259,7 +1259,7 @@ TRANSITIONS := [Transition]Transition_Row {
 }
 
 @(private = "file")
-transition_note :: proc(song: ^Song, t0, duration: f64, pitch, velocity: f32, pad: u32 = 0) -> Note_Row {
+transition_note :: proc(song: ^Song, t0, duration: base.Seconds, pitch, velocity: f32, pad: u32 = 0) -> Note_Row {
 	return {time = t0, duration = duration, beat = tempo.beat_from_seconds(&song.tempo, t0), pitch = pitch, velocity = velocity, pad = pad}
 }
 
@@ -1334,7 +1334,7 @@ layered_notes :: proc(song: ^Song, work: ^Work) {
 		slice.sort_by(notes[:], proc(a, b: Note_Row) -> bool {return a.time < b.time || (a.time == b.time && a.pitch < b.pitch)})
 		last := prog.sw_default
 		rounds: [128]u16
-		held := make([dynamic]f64, context.temp_allocator) // the ends of the notes sounding
+		held := make([dynamic]base.Seconds, context.temp_allocator) // the ends of the notes sounding
 		releases := make([dynamic]Note_Row, context.temp_allocator)
 		for &n in notes {
 			key := int(math.round(n.pitch))

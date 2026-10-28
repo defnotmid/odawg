@@ -398,8 +398,8 @@ process_env :: proc(c: ^Node_Call) {
 }
 
 @(private = "file")
-tail_env :: proc(c: ^Node_Call, lane: ^Lane) -> f64 {
-	return max(lane.note.duration, 0) + f64(max(node_value(c, lane, 6), 0))
+tail_env :: proc(c: ^Node_Call, lane: ^Lane) -> base.Seconds {
+	return max(lane.note.duration, 0) + base.Seconds(max(node_value(c, lane, 6), 0))
 }
 
 // ---- Decay: a rise, a hold, an exponential fall; bursts; a release ----------------
@@ -513,7 +513,7 @@ process_decay :: proc(c: ^Node_Call) {
 }
 
 @(private = "file")
-tail_decay :: proc(c: ^Node_Call, lane: ^Lane) -> f64 {
+tail_decay :: proc(c: ^Node_Call, lane: ^Lane) -> base.Seconds {
 	period := 1 / max(lane.hz, 1)
 	bursts := clamp(f64(node_value(c, lane, DECAY_BURSTS)), 1, MAX_BURSTS)
 	last := f64(node_value(c, lane, DECAY_DELAY)) + (bursts - 1) * f64(node_value(c, lane, DECAY_SPACING))
@@ -522,9 +522,9 @@ tail_decay :: proc(c: ^Node_Call, lane: ^Lane) -> f64 {
 	// a release to -104 dB: a mono voice still sounding hands what it holds
 	// to the next note (the 303's VCA, as its circuit does under 1e-5)
 	if release := f64(node_value(c, lane, DECAY_RELEASE)); release > 0 {
-		ring = min(ring, max(lane.note.duration, 0) + 12 * release)
+		ring = min(ring, f64(max(lane.note.duration, 0)) + 12 * release)
 	}
-	return ring
+	return base.Seconds(ring)
 }
 
 // ---- Ramp: from `from` to `to` over `time` (the gate when 0), as t^curve ----------
@@ -1264,7 +1264,7 @@ process_comb :: proc(c: ^Node_Call) {
 // Its ring: until the release has taken its feedback away, or it has
 // fallen 80 dB.
 @(private = "file")
-tail_comb :: proc(c: ^Node_Call, lane: ^Lane) -> f64 {
+tail_comb :: proc(c: ^Node_Call, lane: ^Lane) -> base.Seconds {
 	fb := f64(abs(node_value(c, lane, COMB_FEEDBACK)))
 	d := f64(node_value(c, lane, COMB_DELAY))
 	period := d > 0 ? d : 1 / max(lane.hz, 1)
@@ -1275,9 +1275,9 @@ tail_comb :: proc(c: ^Node_Call, lane: ^Lane) -> f64 {
 		ring = math.ln(f64(1e-4)) / math.ln(fb) * period
 	}
 	if release := f64(node_value(c, lane, COMB_RELEASE)); release > 0 {
-		ring = min(ring, max(lane.note.duration, 0) + release)
+		ring = min(ring, f64(max(lane.note.duration, 0)) + release)
 	}
-	return ring + period
+	return base.Seconds(ring + period)
 }
 
 @(private = "file")
@@ -1306,7 +1306,7 @@ process_sampler :: proc(c: ^Node_Call) {
 }
 
 @(private = "file")
-tail_sampler_node :: proc(c: ^Node_Call, lane: ^Lane) -> f64 {
+tail_sampler_node :: proc(c: ^Node_Call, lane: ^Lane) -> base.Seconds {
 	return tail_sampler(i32(node_values(c, lane)[3]), node_value(c, lane, 5), lane.key, lane.note, c.env)
 }
 
@@ -1416,8 +1416,8 @@ clip_run_rate :: proc(data: []$T, channels: int, scale: f32, frames, first: i64,
 }
 
 @(private = "file")
-tail_clip :: proc(c: ^Node_Call, lane: ^Lane) -> f64 {
-	return f64(lane.gate) / RATE
+tail_clip :: proc(c: ^Node_Call, lane: ^Lane) -> base.Seconds {
+	return base.seconds_from_samples(lane.gate)
 }
 
 // ---- Segments: an envelope of points ------------------------------------------------
@@ -1524,7 +1524,7 @@ process_segments :: proc(c: ^Node_Call) {
 }
 
 @(private = "file")
-tail_segments :: proc(c: ^Node_Call, lane: ^Lane) -> f64 {
+tail_segments :: proc(c: ^Node_Call, lane: ^Lane) -> base.Seconds {
 	v := node_values(c, lane)
 	points := clamp(int(v[SEGMENTS_POINTS]), 1, SEGMENT_POINTS)
 	sustain := int(v[SEGMENTS_SUSTAIN])
@@ -1533,14 +1533,14 @@ tail_segments :: proc(c: ^Node_Call, lane: ^Lane) -> f64 {
 		total += max(f64(v[SEGMENTS_TIMES + k]), 0)
 	}
 	if v[SEGMENTS_LEVELS + points - 1] != 0 {
-		return math.INF_F64 // it ends somewhere other than silence: what it moves decides
+		return base.Seconds(math.INF_F64) // it ends somewhere other than silence: what it moves decides
 	}
 	if sustain >= 0 && sustain < points {
 		after: f64
 		for k in sustain + 1 ..< points {
 			after += max(f64(v[SEGMENTS_TIMES + k]), 0)
 		}
-		return max(lane.note.duration, total - after) + after
+		return base.Seconds(max(f64(lane.note.duration), total - after) + after)
 	}
-	return total
+	return base.Seconds(total)
 }

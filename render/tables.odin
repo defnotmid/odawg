@@ -125,7 +125,7 @@ Table :: struct {
 
 // The song's samples with its tail: what a table covers.
 frames_from_song :: proc(s: ^song.Song) -> int {
-	return int(math.ceil((s.duration + tail_from_song(s)) * RATE))
+	return int(math.ceil(f64(s.duration + tail_from_song(s)) * RATE))
 }
 
 // Sizes table `t` for song `s`: rows for the steps where its source sounds
@@ -144,13 +144,13 @@ table_init :: proc(t: ^Table, s: ^song.Song, kind: Table_Kind, stem: i32, step_n
 	// a part's where it plays; the mix's where anything does; a return's or
 	// a bus's as long as the song (it sounds where what feeds it does, and
 	// rings after)
-	sounding := [][2]f64{{0, f64(t.frames) / RATE}}
+	sounding := [][2]base.Seconds{{0, base.seconds_from_samples(i64(t.frames))}}
 	if part := stem_part(s, stem); part >= 0 || stem < 0 {
 		sounding = sounding_from_song(s, part)
 	}
 	for x in sounding {
-		a := int(x[0] * RATE) - window
-		b := int(math.ceil(x[1] * RATE))
+		a := int(f64(x[0]) * RATE) - window
+		b := int(math.ceil(f64(x[1]) * RATE))
 		from := clamp((max(a, 0) * t.step_den) / t.step_num, 0, steps)
 		to := clamp((b * t.step_den + t.step_num - 1) / t.step_num + 1, 0, steps)
 		if n := len(spans); n > 0 && from <= spans[n - 1].to {
@@ -224,8 +224,8 @@ stem_part :: proc(s: ^song.Song, stem: i32) -> i32 {
 	return stem >= 0 && stem < i32(len(s.parts)) ? stem : -1
 }
 
-sounding_from_song :: proc(s: ^song.Song, part: i32) -> [][2]f64 {
-	out := make([dynamic][2]f64, context.temp_allocator)
+sounding_from_song :: proc(s: ^song.Song, part: i32) -> [][2]base.Seconds {
+	out := make([dynamic][2]base.Seconds, context.temp_allocator)
 	env := song.voice_env(s)
 	rings := rings_from_song(s, context.temp_allocator)
 	for r in s.regions {
@@ -245,10 +245,10 @@ sounding_from_song :: proc(s: ^song.Song, part: i32) -> [][2]f64 {
 				}
 			}
 		}
-		append(&out, [2]f64{r.start, end})
+		append(&out, [2]base.Seconds{r.start, end})
 	}
-	slice.sort_by(out[:], proc(a, b: [2]f64) -> bool {return a[0] < b[0]})
-	merged := make([dynamic][2]f64, 0, len(out), context.temp_allocator)
+	slice.sort_by(out[:], proc(a, b: [2]base.Seconds) -> bool {return a[0] < b[0]})
+	merged := make([dynamic][2]base.Seconds, 0, len(out), context.temp_allocator)
 	for x in out {
 		if n := len(merged); n > 0 && x[0] <= merged[n - 1][1] {
 			merged[n - 1][1] = max(merged[n - 1][1], x[1])
@@ -429,7 +429,7 @@ tables_build :: proc(s: ^song.Song, tables: []^Table, pool: ^common.Work_Pool = 
 			b.held_first = low
 		}
 	}
-	export_song(s, {to = f64(b.frames) / RATE, pool = pool, stems = stems}, {&b, proc(data: rawptr, at: i64, l, r: []f32, stems: [][2][]f32) {
+	export_song(s, {to = base.seconds_from_samples(i64(b.frames)), pool = pool, stems = stems}, {&b, proc(data: rawptr, at: i64, l, r: []f32, stems: [][2][]f32) {
 		b := (^Build)(data)
 		append(&b.held[0], ..l)
 		append(&b.held[1], ..r)

@@ -41,7 +41,7 @@ track_polyphony :: proc(s: ^Song, ti: int, g: Voice_Group = {of = 1}) -> int {
 	if device.voice_mono(&p, &env) || t.notes.count == 0 {
 		return 1
 	}
-	ends := make([dynamic]f64, context.temp_allocator)
+	ends := make([dynamic]base.Seconds, context.temp_allocator)
 	most := 0
 	program := i32(p[.Program])
 	layered := program >= 0 && s.programs.programs[program].layer_mode == .All

@@ -36,7 +36,7 @@ test_tempo_map :: proc(t: ^testing.T) {
 		b := (f64(i) + 0.5) / N * 16
 		sum += 60 / (60 + 68 * b / 16) * 16 / N
 	}
-	testing.expectf(t, math.abs(seconds_from_ramp(16, 60, 128) - sum) < 1e-6, "ramp %f vs %f", seconds_from_ramp(16, 60, 128), sum)
+	testing.expectf(t, math.abs(f64(seconds_from_ramp(16, 60, 128)) - sum) < 1e-6, "ramp %f vs %f", seconds_from_ramp(16, 60, 128), sum)
 	for beat in ([]f64{0, 3.5, 16, 20.25, 31.9, 32, 39, 45}) {
 		s := seconds_from_beat(&m, beat)
 		testing.expectf(t, math.abs(beat_from_seconds(&m, s) - beat) < 1e-9, "beat %f -> %f s -> %f", beat, s, beat_from_seconds(&m, s))

@@ -15,8 +15,8 @@ import song "../song"
 RATE :: base.RATE
 
 Options :: struct {
-	from:    f64, // song seconds
-	to:      f64, // song seconds; <= from: the song's end and its tail
+	from:    base.Seconds, // song seconds
+	to:      base.Seconds, // song seconds; <= from: the song's end and its tail
 	pool:    ^common.Work_Pool, // the caller's threads (nil: the caller's alone)
 	stems:   bool, // hand each stem (stem_count: the parts, the returns, the buses; what the master sums) to the sink too
 	mastering: Mastering, // a target's master in place of the song's (master_export)
@@ -31,7 +31,7 @@ Sink :: struct {
 }
 
 // Seconds of sound past the last section: release tails and reverbs.
-tail_from_song :: proc(s: ^song.Song) -> f64 {
+tail_from_song :: proc(s: ^song.Song) -> base.Seconds {
 	end := s.duration
 	env := song.voice_env(s)
 	rings := rings_from_song(s, context.temp_allocator)
@@ -49,8 +49,8 @@ tail_from_song :: proc(s: ^song.Song) -> f64 {
 // chain's tail and the longest of what it feeds' (sound, not keys; the
 // master's chain runs apart: none here). A track's: its effects, then its
 // part's or a bus's, a return it sends to, all the way down.
-rings_from_song :: proc(s: ^song.Song, allocator := context.allocator) -> []f64 {
-	ring := make([]f64, len(s.nodes), allocator)
+rings_from_song :: proc(s: ^song.Song, allocator := context.allocator) -> []base.Seconds {
+	ring := make([]base.Seconds, len(s.nodes), allocator)
 	if len(s.nodes) == 0 {
 		return ring
 	}
@@ -60,20 +60,20 @@ rings_from_song :: proc(s: ^song.Song, allocator := context.allocator) -> []f64 
 		looped[i] = true
 	}
 	#reverse for k in order {
-		after := 0.0
+		after: base.Seconds
 		for x, i in s.edges {
 			if x.from == k && x.kind == .Audio && !looped[i] {
 				after = max(after, ring[x.to])
 			}
 		}
-		ring[k] = node_memory(s, int(k)).ring + after
+		ring[k] = base.Seconds(node_memory(s, int(k)).ring) + after
 	}
 	return ring
 }
 
 // Seconds an exact seek renders before its target: what the node that needs
 // most needs (prerolls_from_song).
-preroll_from_song :: proc(s: ^song.Song) -> f64 {
+preroll_from_song :: proc(s: ^song.Song) -> base.Seconds {
 	if len(s.nodes) == 0 {
 		return 0
 	}
@@ -86,7 +86,7 @@ preroll_from_song :: proc(s: ^song.Song) -> f64 {
 	for p in prerolls_from_song(s, order, looped, context.temp_allocator) {
 		most = max(most, p)
 	}
-	return f64(most) / RATE
+	return base.seconds_from_samples(most)
 }
 
 // Samples an exact seek starts each node (song.nodes) early: its own
@@ -131,9 +131,9 @@ note_from_row :: proc(s: ^song.Song, i: int) -> device.Note {
 // one stream, each chunk handed on as it is made, its nodes on the caller's
 // pool. Returns what the master measured.
 export_song :: proc(s: ^song.Song, opts: Options, sink: Sink) -> Master_Stats {
-	first := i64(math.round(max(opts.from, 0) * RATE))
+	first := base.samples_from_seconds(max(opts.from, 0))
 	to := opts.to > opts.from ? opts.to : s.duration + tail_from_song(s)
-	frames := max(0, int(math.round(to * RATE)) - int(first))
+	frames := max(0, int(base.samples_from_seconds(to)) - int(first))
 	if frames == 0 || len(s.tracks) == 0 {
 		return {}
 	}
@@ -155,7 +155,7 @@ export_song :: proc(s: ^song.Song, opts: Options, sink: Sink) -> Master_Stats {
 // parts in song.parts order, then the returns, then the buses: what the
 // master sums). Only what was asked is held.
 Output :: struct {
-	from:        f64,
+	from:        base.Seconds,
 	frames:      int,
 	left, right: []f32,
 	stems:       [][2][]f32,
@@ -164,10 +164,10 @@ Output :: struct {
 }
 
 output_from_song :: proc(s: ^song.Song, opts: Options, allocator := context.allocator) -> (out: Output) {
-	first := i64(math.round(max(opts.from, 0) * RATE))
+	first := base.samples_from_seconds(max(opts.from, 0))
 	to := opts.to > opts.from ? opts.to : s.duration + tail_from_song(s)
-	out.from = f64(first) / RATE
-	out.frames = max(0, int(math.round(to * RATE)) - int(first))
+	out.from = base.seconds_from_samples(first)
+	out.frames = max(0, int(base.samples_from_seconds(to)) - int(first))
 	parts := opts.stems ? stem_count(s) : 0
 	out.slab = make([]f32, 2 * out.frames * (1 + parts), allocator)
 	out.left, out.right = out.slab[:out.frames], out.slab[out.frames:][:out.frames]
@@ -208,7 +208,7 @@ export_into :: proc(s: ^song.Song, opts: Options, mix: [2][]f32, parts: [][2][]f
 	o := opts
 	o.stems = len(parts) > 0
 	if o.to <= o.from {
-		o.to = o.from + f64(min(len(mix[0]), len(mix[1]))) / RATE
+		o.to = o.from + base.seconds_from_samples(i64(min(len(mix[0]), len(mix[1]))))
 	}
 	return export_song(s, o, {&x, proc(data: rawptr, at: i64, l, r: []f32, stems: [][2][]f32) {
 		x := (^Into)(data)

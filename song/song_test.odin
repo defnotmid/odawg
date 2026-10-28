@@ -335,7 +335,7 @@ test_regions :: proc(t: ^testing.T) {
 		out := make([dynamic][2]f64, context.temp_allocator)
 		for r in s.regions {
 			if int(r.part) == part {
-				append(&out, [2]f64{r.start, r.stop})
+				append(&out, [2]f64{f64(r.start), f64(r.stop)})
 			}
 		}
 		return out
@@ -558,7 +558,7 @@ test_chord_rhythm_bars :: proc(t: ^testing.T) {
 			parts: { keys: { instrument: "Synth", play: [ { name: "a", chords: { rhythm: `, c.rhythm, ` }, octave: 4 } ] } } }`}, context.temp_allocator), &arena)
 		starts := make([dynamic]f64, context.temp_allocator)
 		for i in 0 ..< len(s.notes) {
-			beat := math.round(s.notes.time[i] * 2 * 100) / 100 // 120 bpm: 2 beats a second
+			beat := math.round(f64(s.notes.time[i]) * 2 * 100) / 100 // 120 bpm: 2 beats a second
 			found := false
 			for x in starts {
 				found ||= x == beat
