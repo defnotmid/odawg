@@ -1,7 +1,7 @@
 # odawg: API proposal
 
 odawg is sound for Odin, in Tone.js's vocabulary. It is a sibling library of ovg, o3d,
-oksl, odecs and ottis, built the same way:
+oksl, oicut and ottis, built the same way:
 
 - **A plain Odin library.** It has no Lua. onimite binds it to Lua, as it binds o3d
   (`script/view3d_api.odin`) and ottis (`script/say_api.odin`, through `speech/`).
@@ -19,7 +19,7 @@ oksl, odecs and ottis, built the same way:
 - **Realtime first.** The engine streams any block from anywhere, deterministically and
   independent of block size and of how many threads render it: a chunk at a time, each
   node once what feeds it has, running ahead of the slowest. **odawg owns no threads**:
-  the caller lends its one pool, odecs's `common.Work_Pool` (`engine_init(&e, &song,
+  the caller lends its one pool, oicut's `common.Work_Pool` (`engine_init(&e, &song,
   pool)`, `Options.pool`, `Bank_Host.pool` for decodes, `tables_build(s, tables, pool)`;
   nil runs everything on the caller's thread); a walk of the stream is one `run` of the
   pool. An export is that one stream, each chunk handed on as it is made. A track sounding

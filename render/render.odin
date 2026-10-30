@@ -7,7 +7,7 @@
 package odawg_render
 
 import "core:math"
-import common "deps:odecs/common"
+import common "deps:oicut/common"
 import base "../base"
 import device "../device"
 import song "../song"

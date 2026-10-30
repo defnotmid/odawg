@@ -27,15 +27,15 @@ streaming (reverb, delays, chorus, compressor, true-peak limiter, EQ, ...),
 and effects as data too: a row of nodes over what it is put on, on the
 song's clock (instruments/effects.json: a phaser, a flanger, a tremolo, an
 autopan, an autowah). A sibling
-of ovg, o3d, oksl, odecs and ottis; onimite binds it for its videos. MIT
+of ovg, o3d, oksl, oicut and ottis; onimite binds it for its videos. MIT
 licensed. [API.md](API.md) is the design; [WORKFLOWS.md](WORKFLOWS.md) walks
 through using it; [SOUND_DESIGN.md](SOUND_DESIGN.md) is how to build voices
 by role and write songs that aren't the default one, with reference songs
 across genres (funk, a jazz waltz, a 6/8 ballad, boom bap, a Dorian groove,
 drum & bass).
 
-It builds against odecs (its audio decoding and WAV header) checked out beside it:
-`git clone -b v0.0.9 https://github.com/defnotmid/odecs ../odecs`.
+It builds against oicut (its audio decoding and WAV header) checked out beside it:
+`git clone -b v0.0.21 https://github.com/defnotmid/oicut ../oicut`.
 
 ```sh
 make build                                     # build/odawg
@@ -64,7 +64,7 @@ them by their directory names (`import song "deps:odawg/song"`).
 | `dsp` | signal primitives over slices: band-limited oscillators and unison, filters, envelopes, noise |
 | `device` | the node kinds' registry and programs (graph.odin: a program's nodes run a chunk at a time for every voice playing it), the built-in kinds (nodes.odin), the compiler from a `Program_Desc` and the controls (compile.odin), `PARAM_TABLE` and `DEVICE_TABLE` for the effects (tables.odin), the Sampler, the sample Bank (chunks that never move; lent and viewed, not copied) |
 | `analyze` | loudness (EBU R128), true peak, loudness range (onimite's, ported) |
-| `assets` | the sample register (every set's source, pinned SHA-256, licence, credit), a song's own sets and SFZ files (sets.odin, sfz.odin; read from its folder or through the host's `Bank_Host`), declaring sets and loading only the zones a song's notes reach (downloaded on first use into the user data folder), decoding (through odecs's audio: WAV, FLAC, Ogg, MP3 and the rest) |
+| `assets` | the sample register (every set's source, pinned SHA-256, licence, credit), a song's own sets and SFZ files (sets.odin, sfz.odin; read from its folder or through the host's `Bank_Host`), declaring sets and loading only the zones a song's notes reach (downloaded on first use into the user data folder), decoding (through oicut's audio: WAV, FLAC, Ogg, MP3 and the rest) |
 | `spec` | the spec's flat tables and the one table-driven reader (JSON, or a host's tables as json.Value); instrument rows read into a `Program_Desc` (instruments.odin; the built-in rows in tone_rows.json) |
 | `song` | composing: the form, the arrangement (styles a song names, as files), transitions; the note table and the questions; a mix of songs and clips on one timeline (a host's video); the commands that edit it; the sample keys a song needs |
 | `render` | the engine (a stream: voice pools, effect states, dormant tracks, the master), an export (the one stream, its nodes on every core, handed to a sink in order: a WAV written as it comes, memory), mastering to a target, WAV |

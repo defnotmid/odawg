@@ -8,10 +8,10 @@ import "core:math"
 import "core:mem/virtual"
 import "core:os"
 import "core:strings"
-import common "deps:odecs/common"
+import common "deps:oicut/common"
 import "core:sync"
 
-// Loading: a set's files decoded (by odecs's audio, any format it reads),
+// Loading: a set's files decoded (by oicut's audio, any format it reads),
 // at most stereo, resampled to device.RATE once (through a Kaiser-windowed
 // sinc) if recorded at another rate, and appended to a device.Bank (frames to its slab, a sample row each, a zone row per
 // register zone, the set's row naming them).

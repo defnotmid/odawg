@@ -3,9 +3,9 @@ package odawg_assets
 import "base:runtime"
 import "core:bytes"
 import "core:fmt"
-import audio "deps:odecs/audio"
+import audio "deps:oicut/audio"
 
-// Every file is decoded by odecs's audio (WAV, FLAC, Ogg Vorbis and Opus,
+// Every file is decoded by oicut's audio (WAV, FLAC, Ogg Vorbis and Opus,
 // MP3, MP4 and the rest), told apart by its contents, not its name.
 
 // A file's first audio track as T, at most `keep` of its channels (0: all),

@@ -6,7 +6,7 @@ import analyze "../analyze"
 import base "../base"
 import device "../device"
 import song "../song"
-import common "deps:odecs/common"
+import common "deps:oicut/common"
 import "core:sync"
 
 // Tables: what is read of a song at random (a lane's peaks, a video frame's

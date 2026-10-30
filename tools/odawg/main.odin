@@ -29,7 +29,7 @@ import song "deps:odawg/song"
 import spec "deps:odawg/spec"
 import tempo "deps:odawg/tempo"
 import theory "deps:odawg/theory"
-import common "deps:odecs/common"
+import common "deps:oicut/common"
 
 Args :: struct {
 	positional: [dynamic]string,

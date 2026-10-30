@@ -12,7 +12,7 @@ import device "../device"
 import render "../render"
 import song "../song"
 import spec "../spec"
-import wav "deps:odecs/audio/wav"
+import wav "deps:oicut/audio/wav"
 
 // A mono 16-bit WAV at `rate` of `frames` frames of a sine at `hz`.
 @(private = "file")

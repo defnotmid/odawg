@@ -7,7 +7,7 @@ import "core:testing"
 import base "../base"
 import spec "../spec"
 import song "../song"
-import common "deps:odecs/common"
+import common "deps:oicut/common"
 
 @(private = "file")
 SPEC :: `{ key: "A minor", seed: 5, sections: [
@@ -104,7 +104,7 @@ test_threads :: proc(t: ^testing.T) {
 	}
 }
 
-// A pool of `threads` workers for a test (odecs's reference Work_Pool); a
+// A pool of `threads` workers for a test (oicut's reference Work_Pool); a
 // test's own, since a pool is never run reentrantly.
 test_pool :: proc(threads: int) -> ^common.Static_Pool {
 	p := new(common.Static_Pool)

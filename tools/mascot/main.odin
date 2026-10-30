@@ -1,5 +1,5 @@
 // The odawg mascot: a 32x32 pixel-art dog (a dawg) in headphones at a drum
-// machine, in the family of onimite's Pip, odecs' turntable, ovg's
+// machine, in the family of onimite's Pip, oicut's hedgehog, ovg's
 // chameleon and ottis' Ottis. Writes an SVG whose parts are groups a script
 // shows or hides by id (onimite: svg{ overrides = { pad_1 = { visible = true } } }),
 // so the dog can play along with a song's own hits:
@@ -26,7 +26,7 @@ import "core:fmt"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
-import odimg "deps:odecs/image"
+import odimg "deps:oicut/image"
 
 W :: 32
 H :: 32

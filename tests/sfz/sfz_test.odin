@@ -15,7 +15,7 @@ import device "../../device"
 import render "../../render"
 import song "../../song"
 import spec "../../spec"
-import wav "deps:odecs/audio/wav"
+import wav "deps:oicut/audio/wav"
 
 RATE :: 48000
 

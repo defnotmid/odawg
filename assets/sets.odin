@@ -7,7 +7,7 @@ import "core:strings"
 import base "../base"
 import device "../device"
 import spec "../spec"
-import common "deps:odecs/common"
+import common "deps:oicut/common"
 
 // Sample sets from wherever a song's are: the register's (pinned, fetched
 // on first use), a set the song brings (`sets = { my_kit = { pads = ... } }`)
@@ -21,7 +21,7 @@ import common "deps:odecs/common"
 // relative path is from it). `read`: a file's samples, decoded by the host
 // (any format it reads) and lent, at the file's own rate: it may be called
 // from any of the loader's threads, and what it returns must outlive the
-// banks that borrow it; .Declined leaves the file to the loader (odecs's
+// banks that borrow it; .Declined leaves the file to the loader (oicut's
 // audio, loops included). Without it, the loader reads every file
 // from root itself. `text`: a file's text (an SFZ), and `stamp`: its content's
 // identity (a changed file declares its set again); without them, from

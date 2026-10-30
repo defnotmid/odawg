@@ -4,7 +4,7 @@ import "core:math"
 import "core:mem"
 import "core:os"
 import "core:slice"
-import wav "deps:odecs/audio/wav"
+import wav "deps:oicut/audio/wav"
 import analyze "../analyze"
 import base "../base"
 import device "../device"
@@ -245,7 +245,7 @@ master_export :: proc(s: ^song.Song, opts: Options, m: Master, sink: Sink) -> an
 
 // A stereo WAV at RATE being written: 16-bit PCM (dithered with seeded
 // triangular noise, carried across pieces) or 32-bit float. The header is
-// odecs's, written again with the frame count when the file closes.
+// oicut's, written again with the frame count when the file closes.
 Wav_Writer :: struct {
 	file:   ^os.File,
 	format: wav.Write_Format,
