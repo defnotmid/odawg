@@ -1313,7 +1313,8 @@ tail_sampler_node :: proc(c: ^Node_Call, lane: ^Lane) -> base.Seconds {
 // ---- Clip: a recording as it was made ----------------------------------------------
 
 // A clip played as recorded (Tone's Player; onimite's track, sample for
-// sample: its envelope is onimite's track_envelope): the first sample of
+// sample: its envelope is dsp.span_edges and dsp.fade_envelope, as a host's
+// view of it is): the first sample of
 // bank set `set`, from `offset` seconds in, for the note's gate, with fades
 // in and out of `curve`'s shape (dsp.edge_fade: at least a declick where it
 // cuts into its file),
@@ -1361,11 +1362,7 @@ clip_run :: proc(v: ^[MAX_FIELDS]f32, lane: ^Lane, data: []$T, channels: int, sc
 	first := i64(math.round(f64(v[CLIP_OFFSET]) * RATE))
 	length := lane.gate
 	rate := f64(v[CLIP_RATE])
-	// its edges cut into the file unless it starts at the file's first frame
-	// and ends at its last or past it
-	last := f64(first) + f64(length) * rate
-	fade_in := dsp.edge_fade(i64(math.round(f64(v[CLIP_FADE_IN]) * RATE)), first > 0)
-	fade_out := dsp.edge_fade(i64(math.round(f64(v[CLIP_FADE_OUT]) * RATE)), last > 0 && last < f64(frames))
+	fade_in, fade_out := dsp.span_edges(i64(math.round(f64(v[CLIP_FADE_IN]) * RATE)), i64(math.round(f64(v[CLIP_FADE_OUT]) * RATE)), first, length, rate, frames)
 	curve := Curve(clamp(int(v[CLIP_CURVE]), 0, len(Curve) - 1))
 	mono := v[CLIP_MONO] > 0.5
 	right := channels > 1 ? 1 : 0
@@ -1379,7 +1376,7 @@ clip_run :: proc(v: ^[MAX_FIELDS]f32, lane: ^Lane, data: []$T, channels: int, sc
 		if k >= length || src < 0 || src >= frames {
 			continue
 		}
-		g := dsp.fade_gain(k, fade_in, curve) * dsp.fade_gain(length - 1 - k, fade_out, curve)
+		g := dsp.fade_envelope(k, length, fade_in, fade_out, curve)
 		a := f32(data[src * i64(channels)]) * scale
 		b := f32(data[src * i64(channels) + i64(right)]) * scale
 		if mono {
@@ -1405,7 +1402,7 @@ clip_run_rate :: proc(data: []$T, channels: int, scale: f32, frames, first: i64,
 			continue
 		}
 		a, b := read_frame(data, i64(channels), right, frames, 0, 0, pos, f32(cutoff), taps, f32(cutoff) * scale, cutoff == 1)
-		g := dsp.fade_gain(k, fade_in, curve) * dsp.fade_gain(length - 1 - k, fade_out, curve)
+		g := dsp.fade_envelope(k, length, fade_in, fade_out, curve)
 		if mono {
 			a = a * 0.70710678 + b * 0.70710678
 			b = a

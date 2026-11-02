@@ -281,7 +281,6 @@ tables_fill :: proc(s: ^song.Song, tables: []^Table, mix: [2][]f32, parts: [][2]
 	Fill :: struct {
 		table:  ^Table,
 		source: [2][]f32,
-		frames: int,
 	}
 	jobs := make([]Fill, len(tables), context.temp_allocator)
 	for t, k in tables {
@@ -289,34 +288,10 @@ tables_fill :: proc(s: ^song.Song, tables: []^Table, mix: [2][]f32, parts: [][2]
 		if t.stem >= 0 {
 			src = int(t.stem) < len(parts) ? parts[t.stem] : {}
 		}
-		jobs[k] = {t, src, t.frames}
+		jobs[k] = {t, src}
 	}
 	run :: proc(j: ^Fill) {
-		t := j.table
-		row := TABLE_KINDS[t.kind]
-		w := row.window(t)
-		have := min(len(j.source[0]), len(j.source[1]), j.frames)
-		for sp in t.spans {
-			for step in sp.from ..< sp.to {
-				r := t.values[(sp.first + step - sp.from) * t.width:][:t.width]
-				start := row_start(t, step)
-				end := min(start + w, j.frames)
-				if (row.whole && start + w > j.frames) || start >= have {
-					row.fill(t, r, nil, nil) // the kind's silence (bands: FLOOR_DB, not 0 dB)
-					continue
-				}
-				// a window the caller's samples end inside reads silence past them
-				if end > have {
-					l := make([]f32, end - start, context.temp_allocator)
-					rr := make([]f32, end - start, context.temp_allocator)
-					copy(l, j.source[0][start:have])
-					copy(rr, j.source[1][start:have])
-					row.fill(t, r, l, rr)
-					continue
-				}
-				row.fill(t, r, j.source[0][start:end], j.source[1][start:end])
-			}
-		}
+		table_fill_steps(j.table, 0, max(int), 0, j.source[0], j.source[1])
 	}
 	// the jobs by a shared cursor (their sizes differ: a spectrum's rows cost
 	// more than a level's), a scratch arena each
@@ -347,6 +322,55 @@ tables_fill :: proc(s: ^song.Song, tables: []^Table, mix: [2][]f32, parts: [][2]
 	for t in tables {
 		t.version = s != nil ? source_version(s, t.stem) : 1
 	}
+}
+
+// The samples a row of `t` reads from its step's start.
+table_window :: proc(t: ^Table) -> int {
+	return TABLE_KINDS[t.kind].window(t)
+}
+
+// Fills the rows `t` has (where its source sounds) of steps [first, end)
+// from `l` and `r`, the source's samples from song sample `from` on (no
+// row's window starting before it): each row reads its window, silence
+// past the samples given as past the song, and a whole kind's window running
+// past the song is the kind's silence. What tables_fill and tables_build do
+// with each row, for a host filling rows as its samples come (onimite's kept
+// renders).
+table_fill_steps :: proc(t: ^Table, first, end: int, from: int, l, r: []f32) {
+	row := TABLE_KINDS[t.kind]
+	w := row.window(t)
+	for sp in t.spans {
+		if sp.from >= end {
+			break
+		}
+		for step in max(sp.from, first) ..< min(sp.to, end) {
+			fill_row(t, row, w, step, t.values[(sp.first + step - sp.from) * t.width:][:t.width], from, l, r)
+		}
+	}
+}
+
+// Row `dst` of step `step` (`w`: its window) from the source's samples `l`
+// and `r` from song sample `from` on.
+@(private = "file")
+fill_row :: proc(t: ^Table, row: Table_Kind_Row, w, step: int, dst: []f32, from: int, l, r: []f32) {
+	have := min(from + min(len(l), len(r)), t.frames)
+	start := row_start(t, step)
+	end := min(start + w, t.frames)
+	if (row.whole && start + w > t.frames) || start >= have {
+		row.fill(t, dst, nil, nil) // the kind's silence (bands: FLOOR_DB, not 0 dB)
+		return
+	}
+	a := start - from
+	// a window the samples given end inside reads silence past them
+	if end > have {
+		pl := make([]f32, end - start, context.temp_allocator)
+		pr := make([]f32, end - start, context.temp_allocator)
+		copy(pl, l[a:have - from])
+		copy(pr, r[a:have - from])
+		row.fill(t, dst, pl, pr)
+		return
+	}
+	row.fill(t, dst, l[a:end - from], r[a:end - from])
 }
 
 // Sizes table `t` over `frames` samples of a recording (no song: its rows
@@ -410,14 +434,7 @@ tables_build :: proc(s: ^song.Song, tables: []^Table, pool: ^common.Work_Pool = 
 					low = min(low, start)
 					break
 				}
-				// a window running past the song is the kind's silence (row.whole)
-				r := t.values[b.next[k] * t.width:][:t.width]
-				if row.whole && start + w > frames {
-					row.fill(t, r, nil, nil)
-				} else {
-					a, z := start - b.held_first, end - b.held_first
-					row.fill(t, r, b.held[src][a:z], b.held[src + 1][a:z])
-				}
+				fill_row(t, row, w, step, t.values[b.next[k] * t.width:][:t.width], b.held_first, b.held[src][:], b.held[src + 1][:])
 				b.next[k] += 1
 			}
 		}

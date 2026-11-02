@@ -3,6 +3,29 @@ package odawg_dsp
 import "core:math"
 import "core:testing"
 
+// A span's edges (span_edges): one from its sound's first sample to its
+// last (or, backwards, to its first) cuts nothing and keeps its own fades;
+// one starting later or stopping short gets at least a declick there; a
+// window over a song (a sound that never ends) may always cut out. Its
+// envelope is its fade in times its fade out.
+@(test)
+test_span_edges :: proc(t: ^testing.T) {
+	frames := i64(10 * RATE)
+	fi, fo := span_edges(0, 0, 0, frames, 1, frames) // the whole file
+	testing.expect(t, fi == 0 && fo == 0)
+	fi, fo = span_edges(0, 0, 100, 1000, 1, frames) // from inside, short of its end
+	testing.expect(t, fi == DECLICK && fo == DECLICK)
+	fi, fo = span_edges(0, 0, 2 * RATE, 2 * RATE, -1, frames) // backwards to its first sample
+	testing.expect(t, fi == DECLICK && fo == 0)
+	fi, fo = span_edges(0, 0, 2 * RATE, RATE, -1, frames) // backwards, stopping short
+	testing.expect(t, fi == DECLICK && fo == DECLICK)
+	fi, fo = span_edges(RATE, 0, 0, 5 * RATE, 1, -1) // a window opening at its song's start
+	testing.expect(t, fi == RATE && fo == DECLICK)
+	testing.expect_value(t, fade_envelope(0, 1000, 0, 0, .Linear), 1)
+	testing.expect_value(t, fade_envelope(25, 1000, 100, 200, .Linear), 0.25)
+	testing.expect_value(t, fade_envelope(1000 - 1 - 50, 1000, 100, 200, .Linear), 0.25)
+}
+
 // Tone's envelope: a linear attack, a decay approaching the sustain (not
 // linearly, and there exactly at its time), held, then a release from there
 // to nothing by its time; the same samples however the run is cut.

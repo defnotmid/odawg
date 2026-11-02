@@ -765,3 +765,115 @@ test_stereo_input_kinds_seek :: proc(t: ^testing.T) {
 		testing.expectf(t, worst == 0, "%s fed two sides: from a seek it differs by %g", kind, worst)
 	}
 }
+
+// The gain the voice ducks put on a track (duck_gain_at) is what the mix
+// plays: a clip ducked under a voice (its fader duck), and a placed song
+// ducked as a whole (its placement's), sample for sample.
+@(test)
+test_duck_gain_at :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	s := compose_with(t, `{ name: "s", bpm: 120, seed: 4, sections: [ { name: "a", duration: "4m" } ],
+		parts: { pad: { instrument: "Synth", play: [ { name: "a", notes: "A3 C4 E4 C4", subdivision: "4n" } ] } } }`, &arena)
+	context.allocator = virtual.arena_allocator(&arena)
+	frames := 10 * RATE
+	music := make([]f32, 2 * frames)
+	for i in 0 ..< frames {
+		music[2 * i], music[2 * i + 1] = 0.5, 0.25
+	}
+	bank: device.Bank
+	bed := device.bank_borrow(&bank, "bed", music)
+	quiet := device.bank_borrow(&bank, "vo", make([]f32, 2 * frames))
+	duck := song.duck_under_voice(base.db_to_gain(-9), 0.05, 0.02, 0.1, 0)
+	// the bed clip or the song, ducked or not, and a silent voice
+	mix :: proc(s: ^song.Song, bank: ^device.Bank, bed, quiet: i32, duck: song.Sidechain, placed, ducked: bool) -> (m: ^song.Song, track: i32) {
+		m = new(song.Song)
+		song.mix_init(m)
+		m.bank = bank
+		if placed {
+			pl := song.append_song(m, s, 0, "s", 1, {}, ducked ? duck : {})
+			track = m.placements[pl].tracks.first
+		} else {
+			track = song.append_clip(m, {name = "bed", set = bed, start = 0, stop = 9, ducked = ducked, duck = {duck.floor, duck.attack, duck.hold, duck.release, duck.merge}})
+		}
+		song.append_clip(m, {name = "vo", set = quiet, start = 3, stop = 5, voice = true})
+		song.mix_end(m)
+		return
+	}
+	clip_mix, clip := mix(s, &bank, bed, quiet, duck, false, true)
+	song_mix, song_track := mix(s, &bank, bed, quiet, duck, true, true)
+	plain, plain_track := mix(s, &bank, bed, quiet, duck, true, false)
+	ducked_clip := output_from_song(clip_mix, {to = 6})
+	ducked_song := output_from_song(song_mix, {to = 6})
+	open := output_from_song(plain, {to = 6})
+	worst_clip, worst_song, deepest: f32
+	for at in 2 * RATE ..< 6 * RATE {
+		g := f32(duck_gain_at(clip_mix, clip, i64(at)))
+		deepest = min(deepest, g - 1)
+		worst_clip = max(worst_clip, abs(ducked_clip.left[at] - 0.5 * g))
+		gs := f32(duck_gain_at(song_mix, song_track, i64(at)))
+		worst_song = max(worst_song, abs(ducked_song.left[at] - open.left[at] * gs))
+	}
+	testing.expectf(t, deepest < -0.6, "the voice ducks the clip (deepest %g)", deepest)
+	testing.expectf(t, worst_clip < 1e-6, "the clip's duck differs from what plays by %g", worst_clip)
+	testing.expectf(t, worst_song < 1e-6, "the song's duck differs from what plays by %g", worst_song)
+	testing.expect_value(t, duck_gain_at(clip_mix, clip, 0), 1)
+	testing.expect_value(t, duck_gain_at(clip_mix, -1, 4 * RATE), 1)
+	testing.expect_value(t, duck_gain_at(plain, plain_track, 4 * RATE), 1)
+}
+
+// A host's master on its mix (Mastering: a gain and a limiter letting go
+// over `release`) plays the same samples as that master written into the
+// song's own chain, and the release is the one it asks for.
+@(test)
+test_mastering_release :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	_ = virtual.arena_init_growing(&arena)
+	context.allocator = virtual.arena_allocator(&arena)
+	// bursts over the ceiling, a quiet stretch between: the release shows
+	frames := 4 * RATE
+	audio := make([]f32, 2 * frames)
+	for i in 0 ..< frames {
+		v := f32(i % 480) / 240 - 1
+		if (i / (RATE / 4)) % 2 == 1 {
+			v *= 0.1
+		}
+		audio[2 * i], audio[2 * i + 1] = v, -v
+	}
+	bank: device.Bank
+	set := device.bank_borrow(&bank, "bursts", audio)
+	mix :: proc(bank: ^device.Bank, set: i32) -> ^song.Song {
+		m := new(song.Song)
+		song.mix_init(m)
+		m.bank = bank
+		song.append_clip(m, {name = "bursts", set = set, start = 0, stop = 4})
+		song.mix_end(m)
+		return m
+	}
+	own := mix(&bank, set)
+	own.master_gain = base.db_to_gain(3)
+	p := device.params_from_kind(.Limiter)
+	p[.Threshold] = -2
+	p[.Release] = 0.08
+	append(&own.devices, device.Device_Kind.Limiter)
+	append(&own.labels, device.DEVICE_TABLE[.Limiter].name)
+	append(&own.params, p)
+	append(&own.chain, i32(len(own.devices) - 1))
+	own.master = {i32(len(own.chain) - 1), 1}
+	host := mix(&bank, set)
+	mastering := Mastering{on = true, gain = base.db_to_gain(3), limit = true, ceiling_db = -2, release = 0.08}
+	a := output_from_song(own, {})
+	b := output_from_song(host, {mastering = mastering})
+	mastering.release = 0
+	c := output_from_song(host, {mastering = mastering})
+	same, moved := true, false
+	for v, i in a.left {
+		same &&= v == b.left[i] && a.right[i] == b.right[i]
+		moved ||= v != c.left[i]
+	}
+	testing.expect(t, same, "a host's master plays as the song's own chain does")
+	testing.expect(t, moved, "the release is the one asked for, not the Limiter's own")
+	testing.expect_value(t, a.stats.reduction_db, b.stats.reduction_db)
+	testing.expect(t, a.stats.reduction_db < -1)
+}

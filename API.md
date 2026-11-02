@@ -772,6 +772,12 @@ song.append_clip(&mix, {name = "vo.wav", set = set, start = 2, stop = 9, gain = 
                                                   // levels are base.Gain (linear; the host converts its dB): a
                                                   // clip's gain and its duck's floor are Maybe (nil: 1, -12 dB);
                                                   // a duck's floor is the gain it dips to (0: silence)
+song.duck_under_voice(floor, attack, hold, release, merge)   // a duck with the mix's defaults for what is unset
+render.engine_init(&e, &mix, pool, {on = true, gain = g, limit = true, ceiling_db = -2, release = 0.08})
+                                                  // a host's master on its mix (Mastering; export's Options too)
+render.duck_gain_at(&mix, track, at)              // the gain the voice ducks put on a track there (its placement's too)
+fi, fo := dsp.span_edges(fade_in, fade_out, first, length, rate, frames)   // a clip's or a window's fades, as the
+dsp.fade_envelope(k, length, fi, fo, curve)                                // mix plays them (a host's waveforms)
 
 g.nodes, g.edges                                  // the routing: tracks, parts, returns, buses, master; edges by where they go
 song.graph_order(&g)                              // each node after everything feeding it (loops: their edges)
@@ -780,6 +786,7 @@ t: render.Table                                   // what is read at random: pea
 render.table_init(&t, &g, .Peaks, part, 256, 1)   // rows only where the part sounds (its regions and tails)
 render.tables_build(&g, {&t, &u})                 // one streamed export fills them all
 render.table_row(&t, step)                        // nil where it is silent
+render.table_fill_steps(&t, first, end, from, l, r)   // rows from samples a host holds (table_window: what a row reads)
 song.command_apply(&g, {.Pad_Gain_Step, "drums/kick", 3})   // the one place a song changes
 render.table_stale(&g, &t)                        // its source changed: build it again
 ```

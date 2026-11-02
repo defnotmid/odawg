@@ -35,13 +35,15 @@ MASTER_TABLE := [Master]Master_Row {
 }
 
 // The master a delivery target sets, in place of the song's (on): its gain
-// and, `limit`, a true-peak limiter at `ceiling_db`. An export's option: the
-// song is left as it is.
+// and, `limit`, a true-peak limiter at `ceiling_db` letting go over
+// `release`. An export's option (and an engine's: a host's mix, its master
+// its own): the song is left as it is.
 Mastering :: struct {
 	on:         bool,
 	gain:       Maybe(base.Gain), // nil: 1
 	limit:      bool,
 	ceiling_db: base.Db,
+	release:    base.Seconds, // 0: the Limiter's own
 }
 
 // A master as it runs over the mix in order: its gain, its chain, its
@@ -67,6 +69,9 @@ master_run_init :: proc(m: ^Master_Run, s: ^song.Song, mastering: Mastering, all
 		if mastering.limit {
 			p := device.params_from_kind(.Limiter)
 			p[.Threshold] = f32(mastering.ceiling_db)
+			if mastering.release > 0 {
+				p[.Release] = f32(mastering.release)
+			}
 			m.own_kinds = make([]device.Device_Kind, 1)
 			m.own = make([]device.Params, 1)
 			m.own_kinds[0], m.own[0] = .Limiter, p

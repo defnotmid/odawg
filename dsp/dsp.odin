@@ -35,6 +35,25 @@ fade_gain :: #force_inline proc "contextless" (k, length: i64, curve: Curve) -> 
 	return curve == .Equal_Power ? math.sin(t * math.PI / 2) : t
 }
 
+// A span's edge fades (edge_fade), where it plays a sound from the sound's
+// sample `first` for `length` samples at `rate` (the sound's samples a span
+// sample; below 0: backwards), the sound `frames` long (below 0: one that
+// never ends, a song with its tail): its start cuts in after the sound's
+// first sample, its end short of the sound's last (backwards: of its first).
+// A clip's (the Clip node), a placed song's window (`first`: the song's
+// sample where it opens), and a host's view of either: one rule.
+span_edges :: #force_inline proc "contextless" (fade_in, fade_out, first, length: i64, rate: f64, frames: i64) -> (fi, fo: i64) {
+	last := f64(first) + f64(length) * rate
+	return edge_fade(fade_in, first > 0), edge_fade(fade_out, frames < 0 || (last > 0 && last < f64(frames)))
+}
+
+// Gain 0..1 `k` samples into a span `length` samples long whose edges fade
+// over `fade_in` and `fade_out` samples (span_edges): its fade in times its
+// fade out.
+fade_envelope :: #force_inline proc "contextless" (k, length, fade_in, fade_out: i64, curve: Curve) -> f32 {
+	return fade_gain(k, fade_in, curve) * fade_gain(length - 1 - k, fade_out, curve)
+}
+
 // ---- per-sample math ---------------------------------------------------------------------
 
 // What the hot loops call per sample instead of libm: each a pure function

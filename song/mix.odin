@@ -250,9 +250,10 @@ append_clip :: proc(m: ^Song, c: Clip) -> i32 {
 	return track
 }
 
-// A spans sidechain with onimite's (fframes') defaults for what is unset
+// A spans sidechain with the mix's defaults (fframes') for what is unset
 // or 0: down to -12 dB, 0.2 s before the voice, 0.3 s hold, 0.8 s release,
-// gaps under 0.8 s merged.
+// gaps under 0.8 s merged. The one place they are: a host passes what its
+// script set and reads the resolved values back from the Sidechain.
 duck_under_voice :: proc(floor: Maybe(base.Gain), attack, hold, release, merge: base.Seconds) -> Sidechain {
 	return {mode = .Spans, floor = floor.? or_else base.db_to_gain(-12), attack = attack > 0 ? attack : 0.2, hold = hold > 0 ? hold : 0.3, release = release > 0 ? release : 0.8, merge = merge > 0 ? merge : 0.8}
 }

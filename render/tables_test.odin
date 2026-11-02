@@ -1,6 +1,7 @@
 package odawg_render
 
 import "core:mem/virtual"
+import "core:slice"
 import "core:testing"
 import analyze "../analyze"
 import base "../base"
@@ -218,4 +219,54 @@ test_tables_shape :: proc(t: ^testing.T) {
 		same &&= v == mix.values[i]
 	}
 	testing.expect(t, same)
+}
+
+// A host filling a table's rows as its samples come (table_fill_steps, a
+// segment at a time from the samples it holds) fills them as one streamed
+// export does (tables_build): the mix's energy, spectrum and bands, a
+// part's peaks, the rows at the song's end among them.
+@(test)
+test_table_fill_steps :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	s := compose(t, &arena)
+	context.allocator = virtual.arena_allocator(&arena)
+	drums := i32(song.part_index(s, "drums"))
+	init :: proc(s: ^song.Song, drums: i32, set: ^[4]Table) {
+		table_init(&set[0], s, .Energy, -1, RATE, 30)
+		table_init(&set[1], s, .Spectrum, -1, RATE, 30, 512, .Hann)
+		table_init(&set[2], s, .Bands, -1, 4096, 1)
+		table_init(&set[3], s, .Peaks, drums, 256, 1)
+	}
+	built, held: [4]Table
+	init(s, drums, &built)
+	init(s, drums, &held)
+	tables_build(s, {&built[0], &built[1], &built[2], &built[3]})
+	whole := output_from_song(s, {to = base.seconds_from_samples(i64(built[0].frames)), stems = true})
+	n := whole.frames
+	SEGMENT :: 4 * RATE
+	for &tb in held {
+		src := [2][]f32{whole.left, whole.right}
+		if tb.stem >= 0 {
+			src = whole.stems[tb.stem]
+		}
+		w := table_window(&tb)
+		steps := (n * tb.step_den + tb.step_num - 1) / tb.step_num
+		done := 0
+		for upto := min(SEGMENT, n); done < steps; upto = min(upto + SEGMENT, n) {
+			// the steps whose windows the samples so far hold; at the end, the rest
+			end := done
+			for end < steps && (row_start(&tb, end) + w <= upto || upto == n) {
+				end += 1
+			}
+			if end > done {
+				from := row_start(&tb, done)
+				table_fill_steps(&tb, done, end, from, src[0][from:upto], src[1][from:upto])
+			}
+			done = end
+		}
+	}
+	for k in 0 ..< 4 {
+		testing.expectf(t, slice.equal(built[k].values, held[k].values), "%v a segment at a time differs from tables_build", built[k].kind)
+	}
 }

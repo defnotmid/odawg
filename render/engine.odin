@@ -2513,21 +2513,19 @@ reset_track_fx :: proc(e: ^Engine, w: ^Worker, ti: int, at: i64) {
 }
 
 // A placed song's window over a block of it: silent outside, its fades at
-// its edges (onimite's track envelope), each edge's at least a declick where
-// it cuts into the song (dsp.edge_fade): a start after the song's own
-// (`origin`) does, an end may.
+// its edges (dsp.span_edges, a song never ending: a start after the song's
+// own, `origin`, cuts in, and its end always may), as a host's view of it is.
 @(private = "file")
 apply_window :: proc(w: song.Window, origin: i64, at: i64, l, r: []f32) {
 	a := base.samples_from_seconds(w.start)
 	b := base.samples_from_seconds(w.stop)
 	length := b - a
-	fi := dsp.edge_fade(base.samples_from_seconds(w.fade_in), a > origin)
-	fo := dsp.edge_fade(base.samples_from_seconds(w.fade_out), true)
+	fi, fo := dsp.span_edges(base.samples_from_seconds(w.fade_in), base.samples_from_seconds(w.fade_out), a - origin, length, 1, -1)
 	for i in 0 ..< len(l) {
 		k := at + i64(i) - a
 		g: f32 = 0
 		if k >= 0 && k < length {
-			g = dsp.fade_gain(k, fi, w.curve) * dsp.fade_gain(length - 1 - k, fo, w.curve)
+			g = dsp.fade_envelope(k, length, fi, fo, w.curve)
 		}
 		l[i] *= g
 		r[i] *= g
@@ -2582,6 +2580,32 @@ SIDECHAIN_TABLE := [song.Sidechain_Mode]Sidechain_Row {
 	.None  = {},
 	.Hits  = {duck, false},
 	.Spans = {duck_spans, true},
+}
+
+// The gain the ducks after track `track`'s effects put on it at song sample
+// `at` (1: none, or no such track): its fader ducks (a clip under the
+// voice) times, for a placed song's track, its placement's duck. What a
+// host shows of a mix (onimite's `audio at`).
+duck_gain_at :: proc(s: ^song.Song, track: i32, at: i64) -> base.Gain {
+	if track < 0 || int(track) >= len(s.tracks) {
+		return 1
+	}
+	l, r := [1]f32{1}, [1]f32{1}
+	t := s.tracks[track]
+	for sc in s.sidechains[t.sidechains.first:base.span_end(t.sidechains)] {
+		if row := SIDECHAIN_TABLE[sc.mode]; row.duck != nil && row.fader {
+			row.duck(s, sc, at, l[:], r[:])
+		}
+	}
+	for pl in s.placements {
+		if track >= pl.tracks.first && track < base.span_end(pl.tracks) {
+			if row := SIDECHAIN_TABLE[pl.duck.mode]; row.duck != nil {
+				row.duck(s, pl.duck, at, l[:], r[:])
+			}
+			break
+		}
+	}
+	return base.Gain(l[0])
 }
 
 // Dips the block under the voice tracks' spans (onimite's duck_envelope,
