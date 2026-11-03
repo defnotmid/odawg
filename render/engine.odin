@@ -229,7 +229,7 @@ Flow :: struct {
 	chunks:     int, // the walk's
 	frames:     int,
 	master:     bool,
-	out:        ^Walk_Out,
+	out:        Walk_Out, // the walk's while it walks, nowhere after
 	progress:   sync.Futex, // bumped as anything moves on: idle loops wait on it
 }
 
@@ -1052,7 +1052,7 @@ flow_take :: proc(e: ^Engine) -> bool {
 	if int(sync.atomic_load(&f.taken)) != c {
 		return false
 	}
-	take(e, c, f.out)
+	take(e, c)
 	buffers_give(e, c % RING)
 	if c + RING < f.chunks {
 		sync.atomic_store(&f.left[c % RING], i32(len(e.nodes)))
@@ -1128,7 +1128,7 @@ engine_seek :: proc(e: ^Engine, at: i64, exact: bool) {
 					node_start(e, w, int(k))
 				}
 			}
-			walk(e, n, false, nil)
+			walk(e, n, false, {})
 		}
 		// what needs no pre-roll joins at `at` itself
 		for k in e.order {
@@ -1142,7 +1142,7 @@ engine_seek :: proc(e: ^Engine, at: i64, exact: bool) {
 	master_run_reset(&e.master, at)
 	for left := e.no_master ? 0 : i64(e.master.latency); left > 0; {
 		n := int(min(left, BLOCK))
-		walk(e, n, true, nil)
+		walk(e, n, true, {})
 		left -= i64(n)
 	}
 	// the nodes now run its lookahead ahead of the output
@@ -1169,7 +1169,8 @@ node_start :: proc(e: ^Engine, w: ^Worker, k: int) {
 
 // Where a walk hands each chunk as it is made: into the mix (and the stems,
 // when given) from the walk's first sample, or, with a sink, to it in order
-// (the mix as the master made it, the stems through `scratch`: a chunk each).
+// (the mix as the master made it, the stems through `scratch`: a chunk each);
+// with neither, nowhere (a seek's walk).
 Walk_Out :: struct {
 	l, r:    []f32,
 	stems:   [][2][]f32,
@@ -1184,11 +1185,12 @@ Walk_Out :: struct {
 // `master` false: only the nodes before it, a seek's walk), each chunk handed
 // to `out` as the last node makes it. On the caller's pool, one map of loops.
 @(private = "file")
-walk :: proc(e: ^Engine, n: int, master: bool, out: ^Walk_Out) {
+walk :: proc(e: ^Engine, n: int, master: bool, out: Walk_Out) {
 	edits_apply(e)
 	f := &e.flow
 	chunks := (n + CHUNK - 1) / CHUNK
 	f.chunks, f.frames, f.master, f.out = chunks, n, master, out
+	defer f.out = {}
 	if e.pool == nil || len(e.workers) == 1 {
 		w := &e.workers[0]
 		context.temp_allocator = virtual.arena_allocator(&w.temp)
@@ -1198,7 +1200,7 @@ walk :: proc(e: ^Engine, n: int, master: bool, out: ^Walk_Out) {
 				node_chunk(e, w, int(k))
 				temp_reset(w)
 			}
-			take(e, c, out)
+			take(e, c)
 			buffers_give(e, c % RING)
 		}
 		e.cursor += i64(n)
@@ -1217,11 +1219,12 @@ walk :: proc(e: ^Engine, n: int, master: bool, out: ^Walk_Out) {
 	e.cursor += i64(n)
 }
 
-// Chunk c of the walk to `out`: the master's, and each stem's at its
+// Chunk c of the walk to its out: the master's, and each stem's at its
 // placement's level (silence where it made none).
 @(private = "file")
-take :: proc(e: ^Engine, c: int, out: ^Walk_Out) {
-	if out == nil {
+take :: proc(e: ^Engine, c: int) {
+	out := &e.flow.out
+	if out.l == nil && out.sink.take == nil {
 		return
 	}
 	slot := c % RING
@@ -1879,8 +1882,7 @@ reset_fx :: proc(e: ^Engine, k: int, f: Fx_Run, at: i64) {
 // returns, then the buses), as long as l, what goes into the master), on
 // the caller's thread: for a preview playing, or a frame.
 engine_process :: proc(e: ^Engine, l, r: []f32, stems: [][2][]f32 = nil) {
-	out := Walk_Out{l = l, r = r, stems = stems}
-	walk(e, len(l), true, &out)
+	walk(e, len(l), true, {l = l, r = r, stems = stems})
 }
 
 // The next `frames` samples handed to `sink` a chunk at a time, in order (its
@@ -1897,8 +1899,7 @@ engine_stream :: proc(e: ^Engine, frames: int, sink: Sink, stems: bool) {
 	for p in 0 ..< parts {
 		scratch[p] = {slab[2 * CHUNK * p:][:CHUNK], slab[2 * CHUNK * p + CHUNK:][:CHUNK]}
 	}
-	out := Walk_Out{sink = sink, scratch = scratch}
-	walk(e, frames, true, &out)
+	walk(e, frames, true, {sink = sink, scratch = scratch})
 }
 
 // Stem `p`'s name, for a file: a part's own ("drums"), a return's or a
