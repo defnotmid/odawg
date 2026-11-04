@@ -18,7 +18,7 @@ section_from_beat :: proc(song: ^Song, beat: f64) -> int {
 			return i
 		}
 	}
-	return len(song.sections) - 1
+	return max(len(song.sections) - 1, 0)
 }
 
 section_from_seconds :: proc(song: ^Song, t: base.Seconds) -> int {
@@ -80,7 +80,7 @@ beat_from_position :: proc(song: ^Song, text: string) -> (beat: f64, ok: bool) {
 		} else {
 			for m in song.markers {
 				if m.name == anchor {
-					origin, bpb, found = m.beat, song.sections[section_from_beat(song, m.beat)].beats_per_bar, true
+					origin, bpb, found = m.beat, len(song.sections) > 0 ? song.sections[section_from_beat(song, m.beat)].beats_per_bar : 4, true
 					break
 				}
 			}
@@ -96,8 +96,10 @@ beat_from_position :: proc(song: ^Song, text: string) -> (beat: f64, ok: bool) {
 	if anchor == "" && strings.count(offset, ":") > 0 {
 		head := offset[:strings.index_byte(offset, ':')]
 		bars := tempo.length_from_string(strings.concatenate({head, "s"}, context.temp_allocator), 4) or_return
-		rest := tempo.length_from_string(strings.concatenate({"0", offset[len(head):]}, context.temp_allocator), bpb) or_return
-		return beat_from_bars(song, bars.value) + rest.value, true
+		bar_beat := beat_from_bars(song, bars.value)
+		bar_bpb := len(song.sections) > 0 ? song.sections[section_from_beat(song, bar_beat)].beats_per_bar : 4
+		rest := tempo.length_from_string(strings.concatenate({"0", offset[len(head):]}, context.temp_allocator), bar_bpb) or_return
+		return bar_beat + rest.value, true
 	}
 	l := tempo.length_from_string(offset, bpb) or_return
 	if l.in_seconds {
@@ -296,10 +298,24 @@ track_note_count :: proc(song: ^Song, track: int) -> int {
 	return count
 }
 
+// Index into `s.by_time` of the first note at or after `from`.
+first_note_at :: proc "contextless" (s: ^Song, from: base.Seconds) -> int {
+	lo, hi := 0, len(s.by_time)
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if s.notes.time[s.by_time[mid]] < from {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return lo
+}
+
 // The notes matching a filter, in time order (indices into song.notes).
 notes_from_filter :: proc(song: ^Song, f: Note_Filter, out: ^[dynamic]i32) -> bool {
 	m := matcher_from_filter(song, f) or_return
-	for i in song.by_time {
+	for i in song.by_time[first_note_at(song, m.from - 1e-9):] {
 		if song.notes.time[i] >= m.to - 1e-9 {
 			break
 		}
@@ -319,7 +335,7 @@ pulse_from_seconds :: proc(song: ^Song, t: base.Seconds, f: Note_Filter, decay: 
 		return 0
 	}
 	last := -math.INF_F64
-	for i in song.by_time {
+	for i in song.by_time[first_note_at(song, m.from - 1e-9):] {
 		if song.notes.time[i] > t {
 			break
 		}
@@ -378,8 +394,11 @@ off_grid :: proc(s: ^Song, t: base.Seconds) -> (off, beat: base.Seconds, ok: boo
 		if t < sec.start || t >= sec.stop {
 			continue
 		}
-		for i in 0 ..< len(s.notes) {
-			if s.notes.pad[i] != 0 && s.notes.time[i] >= sec.start && s.notes.time[i] < sec.stop {
+		for i in s.by_time[first_note_at(s, sec.start):] {
+			if s.notes.time[i] >= sec.stop {
+				break
+			}
+			if s.notes.pad[i] != 0 {
 				beaten = true
 				break
 			}

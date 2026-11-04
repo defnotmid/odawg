@@ -18,6 +18,9 @@ test_names :: proc(t: ^testing.T) {
 	testing.expect_value(t, string_from_chord(c), "Fmaj7/C")
 	_, bad := chord_from_string("Hm7")
 	testing.expect(t, !bad)
+	_, bad_slash := chord_from_string("Am7/G/D")
+	testing.expect(t, !bad_slash)
+	testing.expect_value(t, string_from_pitch(-1), "B-2")
 	k, key_ok := key_from_string("A minor")
 	testing.expect(t, key_ok && k.tonic == 9 && k.scale[2] == 3)
 }
@@ -34,6 +37,11 @@ test_degrees :: proc(t: ^testing.T) {
 	testing.expect_value(t, pitch_from_degree(k, f, 8, 3), 65)
 	e, _ := chord_from_string("E")
 	testing.expect_value(t, pitch_from_degree(k, e, 3, 3), 56)
+	cmaj, _ := key_from_string("C major")
+	c6, _ := chord_from_string("C6")
+	testing.expect_value(t, pitch_from_degree(cmaj, c6, 7, 4), 69) // its sixth, A4: a B4 would clash with it
+	cdim7, _ := chord_from_string("Cdim7")
+	testing.expect_value(t, pitch_from_degree(cmaj, cdim7, 7, 4), 69) // Bbb4 (A4), the dim7's own seventh
 }
 
 // Steps within a key: up and down its scale across octaves, a note outside

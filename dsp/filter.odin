@@ -192,7 +192,7 @@ filter_chain_coefficients :: proc "contextless" (f: ^Filter_Chain, hz: []f32, ou
 	last: f32 = -1
 	c: Svf
 	for i in 0 ..< min(len(hz), len(out)) {
-		if hz[i] != last {
+		if i == 0 || hz[i] != last {
 			last = hz[i]
 			x := svf64(shape, f64(last))
 			c = {f32(x.a1), f32(x.a2), f32(x.a3), f32(x.m0), f32(x.m1), f32(x.m2)}
@@ -203,7 +203,7 @@ filter_chain_coefficients :: proc "contextless" (f: ^Filter_Chain, hz: []f32, ou
 
 // The one-pole low-pass coefficient for a cutoff (synth.lua's lp(hz)):
 // y += k (x - y).
-one_pole_k :: proc "contextless" (hz: f64) -> f64 {return 1 - math.exp(-math.TAU * hz / RATE)}
+one_pole_k :: proc "contextless" (hz: f64) -> f64 {return 1 - math.exp(-math.TAU * clamp(hz, 0, 0.49 * RATE) / RATE)}
 
 // The responses a filter has.
 Filter_Type :: enum u8 {

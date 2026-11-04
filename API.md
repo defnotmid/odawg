@@ -213,10 +213,12 @@ time constant it recovers with (0.07 s when not given).
 
 A play entry is `{ range, ... }` with one of:
 
-- `steps`: per drum voice, a string, or a list cycled per bar (`x` hit, `X` accent, `.`
-  rest).
+- `steps`: per drum voice, a string, or a list cycled per bar (`x` hit, `X` accent, `o`
+  ghost, `-` hold, `.` rest). A hold carries across the list's bars, not around from its
+  last bar to its first.
 - `notes` and `subdivision`: a Tone.Sequence. A string (`-` holds) or a list
-  (`{ "C4", { "E4", "G4" }, false }`).
+  (`{ "C4", { "E4", "G4" }, false }`). A hold carries from a `pickup` into the first cycle,
+  not from one cycle into the next.
 - `degrees` and `subdivision`: chord degrees that follow the progression.
 - `events`: Tone.Part events.
 - `arpeggio = { pattern, interval, octaves }`.
@@ -656,6 +658,8 @@ automation = {
 - An instrument value moves inside a held note where its field moves per sample (a filter's
   cutoff and q, an oscillator's frequency, a node's gain). A field read when a note starts
   (an envelope's times) takes the lane's value at each note's start.
+- On an SFZ, a lane on a field replaces the value of every region that has its own, as an
+  edit to that field does.
 - An effect's delay lines and memory are sized for the largest value a lane reaches. A param
   that shapes its effect (`rolloff`, a filter's `type`) can't move, nor can an instrument
   value that would change the instrument's shape, such as a node going from mono to stereo.

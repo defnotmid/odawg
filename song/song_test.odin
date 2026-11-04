@@ -754,3 +754,66 @@ test_first_section_tempo :: proc(t: ^testing.T) {
 	}
 	testing.expectf(t, len(told) == 1 && strings.has_prefix(told[0], "parts/bed"), "only the bed is off the beat: %v", told)
 }
+
+// Ties ("-") in both steps and note sequences extend a held note across bar
+// and cycle boundaries, including from a pickup into the first cycle.
+@(test)
+test_cross_bar_ties :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	s := compose(t, `{ bpm: 120, sections: [ { name: "intro", duration: "1m" }, { name: "a", duration: "2m" } ],
+		parts: {
+			lead: { instrument: "Synth", play: [ { name: "a", pickup: "C4", notes: [ "-", "E4" ], subdivision: "1m" } ] },
+			perc: { instrument: "machines/909.json", play: [ { name: "a", steps: { kick: [ "x---", "----" ] }, subdivision: "4n" } ] } } }`, &arena)
+	testing.expect_value(t, len(s.notes), 3)
+	// pickup C4 (1m) tied across bar 1 of "a" (1m) = 4.0s; E4 in bar 2 = 2.0s; kick tied across 2 bars = 4.0s
+	testing.expectf(t, abs(s.notes.duration[0] - 4.0) < 1e-6, "lead pickup tie duration %f, want 4.0", s.notes.duration[0])
+	testing.expectf(t, abs(s.notes.duration[1] - 2.0) < 1e-6, "lead second note duration %f, want 2.0", s.notes.duration[1])
+	testing.expectf(t, abs(s.notes.duration[2] - 4.0) < 1e-6, "kick tied duration %f, want 4.0", s.notes.duration[2])
+}
+
+// A tie holds across a pattern's bars (test_cross_bar_ties), not around from
+// a cycle's end to its start: a pattern opening with "-" rests there.
+@(test)
+test_ties_stop_at_the_cycle :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	s := compose(t, `{ bpm: 120, sections: [ { name: "a", duration: "2m" } ],
+		parts: {
+			lead: { instrument: "Synth", play: [ { name: "a", notes: "- E4", subdivision: "2n" } ] },
+			perc: { instrument: "machines/909.json", play: [ { name: "a", steps: { kick: [ "--x-" ] }, subdivision: "4n" } ] } } }`, &arena)
+	testing.expect_value(t, len(s.notes), 4)
+	for i in 0 ..< len(s.notes) {
+		testing.expectf(t, abs(s.notes.duration[i] - 1.0) < 1e-6, "note %d duration %f, want 1.0", i, s.notes.duration[i])
+	}
+}
+
+// Declaring an automation lane on an SFZ node field preserves distinct
+// per-region Layer_Param values when checking control_moves.
+@(test)
+test_sfz_layer_params_preserved :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	_ = virtual.arena_init_growing(&arena)
+	defer virtual.arena_destroy(&arena)
+	context.allocator = virtual.arena_allocator(&arena)
+	sp: spec.Spec
+	findings := make(base.Findings)
+	testing.expect(t, spec.spec_from_json(`{ bpm: 120, sections: [ { name: "a", duration: "1m" } ],
+		automation: { "parts/p/src/tune": [ [ "a", 1 ] ] },
+		parts: { p: { instrument: "t.sfz", play: [ { name: "a", notes: "C4" } ] } } }`, &sp, &findings))
+	sfz_files := make(map[string]string)
+	sfz_files["t.sfz"] = "<region> sample=*sine lokey=0 hikey=59 tune=100\n<region> sample=*sine lokey=60 hikey=70 tune=-200\n<region> sample=*sine lokey=71 hikey=127 tune=300\n"
+	spec.spec_add_sfz(&sp, "t.sfz", sfz_files)
+	s: Song
+	testing.expect(t, song_from_spec(&sp, &s))
+	testing.expect(t, len(s.programs.control_targets) > 0) // the lane is there
+	prog := s.programs.programs[i32(s.params[s.tracks[0].instrument][.Program])]
+	testing.expect_value(t, int(prog.layers.count), 3)
+	// Region 0 holds 1 on the shared node; regions 1 and 2 keep -2 and 3 in layer_params.
+	l1 := s.programs.layers[prog.layers.first + 1]
+	l2 := s.programs.layers[prog.layers.first + 2]
+	testing.expect_value(t, int(l1.params.count), 1)
+	testing.expect_value(t, int(l2.params.count), 1)
+	testing.expectf(t, abs(s.programs.layer_params[l1.params.first].value - (-2)) < 1e-5, "region 1 tune = %g, want -2", s.programs.layer_params[l1.params.first].value)
+	testing.expectf(t, abs(s.programs.layer_params[l2.params.first].value - 3) < 1e-5, "region 2 tune = %g, want 3", s.programs.layer_params[l2.params.first].value)
+}

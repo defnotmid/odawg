@@ -2,6 +2,7 @@ package odawg_device
 
 import "core:math"
 import base "../base"
+import dsp "../dsp"
 
 // The effects that follow a level: Compressor, Gate and the Limiter (also
 // the master limiter). Each chunk runs in stages: the key's level, the gain
@@ -60,7 +61,7 @@ effect_compressor :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []
 			want := f64(v)
 			held = fx_flush(max(want, rel * held + (1 - rel) * want))
 			reduction = fx_flush(att * reduction + (1 - att) * held)
-			v = reduction == 0 ? 1 : f32(base.db_to_gain(base.Db(-reduction)))
+			v = reduction == 0 ? 1 : dsp.exp_decay(-f32(reduction) * 0.115129255)
 		}
 		c.held, c.reduction = held, reduction
 		for g, i in work {

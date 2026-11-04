@@ -34,7 +34,7 @@ Steps :: struct {
 }
 
 steps_init :: proc(s: ^Steps, rate: int, allocator := context.allocator) {
-	s^ = {step = rate / 10}
+	s^ = {step = max(rate / 10, 1)}
 	s.energy = make([dynamic]f64, allocator)
 	s.shelf, s.hp = k_coefficients(rate)
 }
@@ -120,13 +120,15 @@ meter_push :: proc(m: ^Meter, l, r: []f32) {
 			at := g - TAPS // the sample whose in-betweens are now known
 			if at >= TAPS - 1 {
 				win := h[pos + 1:][:2 * TAPS]
-				for ph in 0 ..< 3 {
-					sum: f32
-					for k in 0 ..< 2 * TAPS {
-						sum += win[k] * TRUE_PEAK_KERNEL[ph][k]
-					}
-					m.true_peak = max(m.true_peak, abs(sum))
+				s0, s1, s2: f32
+				k0, k1, k2 := &TRUE_PEAK_KERNEL[0], &TRUE_PEAK_KERNEL[1], &TRUE_PEAK_KERNEL[2]
+				for k in 0 ..< 2 * TAPS {
+					w := win[k]
+					s0 += w * k0[k]
+					s1 += w * k1[k]
+					s2 += w * k2[k]
 				}
+				m.true_peak = max(m.true_peak, abs(s0), abs(s1), abs(s2))
 			}
 		}
 		steps_take(&m.steps, e)

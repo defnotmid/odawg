@@ -82,7 +82,7 @@ declare_sfz :: proc(bank: ^device.Bank, ref: spec.Asset_Ref, d: ^Declaring) -> b
 			continue
 		}
 		sample, _ = strings.replace_all(sample, "\\", "/", context.temp_allocator)
-		p, _ := filepath.join({folder, s.default_path, sample}, context.temp_allocator)
+		p, _ := filepath.join({folder, s.regions[r].default_path, sample}, context.temp_allocator)
 		if inside != "" && !strings.has_prefix(p, inside) {
 			base.report(d.findings, "bad_value", .Error, key, "%s: sample %s is outside its source; not fetched", key, sample)
 			return false
@@ -103,16 +103,8 @@ declare_sfz :: proc(bank: ^device.Bank, ref: spec.Asset_Ref, d: ^Declaring) -> b
 	}
 	drafts := make([dynamic]Zone_Draft, context.temp_allocator)
 	for r, i in regions {
-		lo := sfz_region_key(&s, r, "lokey", 0)
-		hi := sfz_region_key(&s, r, "hikey", 127)
-		if v, has := spec.sfz_value(&s, r, "key"); has {
-			k := spec.sfz_key(&s, v, 60)
-			lo, hi = k, k
-		}
-		root := lo
-		if v, has := spec.sfz_value(&s, r, "pitch_keycenter"); has {
-			root = spec.sfz_key(&s, v, root)
-		}
+		lo, hi, center, center_set := spec.sfz_region_keys(&s, r)
+		root := center_set ? center : lo
 		append(&drafts, Zone_Draft{
 			file = bank_file_song(bank, d, files[i]),
 			lo = clamp(lo, 0, 127),
@@ -129,10 +121,4 @@ declare_sfz :: proc(bank: ^device.Bank, ref: spec.Asset_Ref, d: ^Declaring) -> b
 	}
 	append_set(bank, key, stamp, drafts[:]) // none: its regions are generators (*sine)
 	return true
-}
-
-@(private = "file")
-sfz_region_key :: proc(s: ^spec.Sfz, r: int, name: string, fallback: int) -> int {
-	v, has := spec.sfz_value(s, r, name)
-	return has ? spec.sfz_key(s, v, fallback) : fallback
 }

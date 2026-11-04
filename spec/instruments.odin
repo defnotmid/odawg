@@ -83,7 +83,7 @@ spec_add_sfz :: proc(s: ^Spec, path: string, texts: map[string]string) {
 	if s.sfz_files.allocator.procedure != nil {
 		context.allocator = s.sfz_files.allocator
 	}
-	kept := make(map[string]string)
+	kept := make(map[string]string, context.temp_allocator)
 	for p, t in texts {
 		if t != "" {
 			kept[strings.clone(p)] = strings.clone(t)

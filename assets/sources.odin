@@ -320,6 +320,7 @@ spec_read_files :: proc(s: ^spec.Spec, findings: ^base.Findings, host: ^Bank_Hos
 		d.root, _ = data_dir(context.temp_allocator)
 	}
 	scratch: device.Bank
+	defer device.bank_destroy(&scratch)
 	b := bank != nil ? bank : &scratch
 	ok := true
 	read :: proc(d: ^Declaring, b: ^device.Bank, s: ^spec.Spec, name: string) -> (string, bool) {

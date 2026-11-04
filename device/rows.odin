@@ -63,13 +63,11 @@ MEMORY_LOWEST_HZ :: 20
 // MEMORY_LOWEST_HZ.
 program_memory :: proc(progs: ^Programs, program: i32) -> f64 {
 	prog := progs.programs[program]
-	// the fields an option reaches, per node
+	// the fields an option or automation lane reaches, per node
 	moved := make([]u64, prog.nodes.count, context.temp_allocator)
-	for c in progs.controls[prog.controls.first:base.span_end(prog.controls)] {
-		for t in progs.control_targets[c.targets.first:base.span_end(c.targets)] {
-			if k := t.node - prog.nodes.first; t.mod < 0 && k >= 0 && k < prog.nodes.count {
-				moved[k] |= u64(1) << u64(t.slot)
-			}
+	for t in progs.control_targets {
+		if k := t.node - prog.nodes.first; t.mod < 0 && k >= 0 && k < prog.nodes.count {
+			moved[k] |= u64(1) << u64(t.slot)
 		}
 	}
 	total: f64

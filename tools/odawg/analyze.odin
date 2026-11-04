@@ -71,7 +71,7 @@ run_analyze :: proc(a: ^Args) -> bool {
 	if a.master != "" {
 		found: bool
 		if m, found = render.master_from_name(a.master); !found {
-			fmt.eprintfln("odawg analyze: master %q is not streaming, podcast, broadcast or none", a.master)
+			fmt.eprintfln("odawg analyze: master %q is not streaming, web, podcast, broadcast or none", a.master)
 			return false
 		}
 	}

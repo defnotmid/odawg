@@ -18,6 +18,9 @@ test_lengths :: proc(t: ^testing.T) {
 	}
 	_, ok := length_from_string("drop", 4)
 	testing.expect(t, !ok)
+	_, ok_plus := length_from_string("+", 4)
+	_, ok_minus := length_from_string("-", 4)
+	testing.expect(t, !ok_plus && !ok_minus)
 }
 
 // The ramp's closed form agrees with integrating the tempo, and seconds and
@@ -42,4 +45,15 @@ test_tempo_map :: proc(t: ^testing.T) {
 		testing.expectf(t, math.abs(beat_from_seconds(&m, s) - beat) < 1e-9, "beat %f -> %f s -> %f", beat, s, beat_from_seconds(&m, s))
 	}
 	testing.expect(t, math.abs(bpm_from_beat(&m, 24) - 94) < 1e-9)
+	tempo_push(&m, 0, 128, 140)
+	testing.expect(t, !math.is_nan(f64(seconds_from_beat(&m, 40))) && !math.is_nan(bpm_from_beat(&m, 40)))
+	// past a step of no beats: its end tempo, as past any ramp
+	z: Tempo_Map
+	defer delete(z.segments)
+	tempo_push(&z, 4, 100, 100)
+	tempo_push(&z, 0, 100, 200)
+	testing.expect(t, math.abs(bpm_from_beat(&z, 8) - 200) < 1e-9)
+	testing.expect(t, math.abs(f64(seconds_from_beat(&z, 8)) - 3.6) < 1e-9)
+	testing.expect(t, math.abs(beat_from_seconds(&z, 3.6) - 8) < 1e-9)
+	testing.expect(t, !math.is_nan(bpm_from_beat(&z, 4)) && !math.is_nan(f64(seconds_from_beat(&z, 4))))
 }

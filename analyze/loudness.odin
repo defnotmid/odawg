@@ -56,7 +56,7 @@ loudness_from_meter :: proc(m: ^Meter, allocator := context.allocator) -> (resul
 	}
 	// Integrated: 400 ms blocks every 100 ms, gated at -70 LUFS absolute and
 	// 10 LU below the ungated mean.
-	blocks := make([dynamic]Loudness_Block)
+	blocks := make([dynamic]Loudness_Block, context.temp_allocator)
 	defer delete(blocks)
 	momentary := make([dynamic]f32, allocator)
 	for s := 0; s + 4 <= steps; s += 1 {
@@ -75,7 +75,7 @@ loudness_from_meter :: proc(m: ^Meter, allocator := context.allocator) -> (resul
 
 	// Loudness range: 3 s blocks, -70 absolute and -20 relative gates,
 	// P95 - P10.
-	abs_gated := make([dynamic]f64)
+	abs_gated := make([dynamic]f64, context.temp_allocator)
 	defer delete(abs_gated)
 	sum: f64
 	for s := 29; s < steps; s += 1 {
@@ -87,7 +87,7 @@ loudness_from_meter :: proc(m: ^Meter, allocator := context.allocator) -> (resul
 	}
 	if len(abs_gated) > 0 {
 		rel := -0.691 + 10 * math.log10(sum / f64(len(abs_gated))) - 20
-		kept := make([dynamic]f64)
+		kept := make([dynamic]f64, context.temp_allocator)
 		defer delete(kept)
 		for v in abs_gated {
 			if v > rel {

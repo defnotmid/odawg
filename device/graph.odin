@@ -454,12 +454,13 @@ Lane :: struct {
 }
 
 Node_Call :: struct {
-	progs:  ^Programs,
-	env:    ^Voice_Env,
-	node:   ^Graph_Node,
-	local:  u16, // the node's index in its program
-	frames: int,
-	lanes:  []Lane,
+	progs:      ^Programs,
+	env:        ^Voice_Env,
+	node:       ^Graph_Node,
+	first_node: i32, // the program's first node in Programs.nodes
+	local:      u16, // the node's index in its program
+	frames:     int,
+	lanes:      []Lane,
 }
 
 lane_buf :: #force_inline proc "contextless" (lane: ^Lane, buf: u8, side: int, frames: int) -> []f32 {
@@ -626,12 +627,70 @@ node_curve :: proc(c: ^Node_Call, lane: ^Lane, slot: int, b: f32, out: []f32, si
 // first sample (a field read at the note's start).
 node_value :: proc(c: ^Node_Call, lane: ^Lane, slot: int) -> f32 {
 	b := node_values(c, lane)[slot]
-	if len(lane.bufs) == 0 { // a tail's question: no sources playing
+	if c.node.mod_slots & (u64(1) << u64(slot)) == 0 {
 		return b
+	}
+	if len(lane.bufs) == 0 { // a tail's question: steady sources at their upper bound
+		return node_value_tail(c, lane, slot, b)
 	}
 	one: [1]f32
 	varies, v := node_curve(c, lane, slot, b, one[:])
 	return varies ? one[0] : v
+}
+
+@(private = "file")
+tail_source_value :: proc(c: ^Node_Call, lane: ^Lane, node_idx: i16, buf: u8, sign: f32) -> f32 {
+	if node_idx < 0 {
+		switch buf {
+		case SOURCE_VELOCITY:
+			return lane.note.velocity
+		case SOURCE_ACCENT:
+			return lane.note.accent
+		case SOURCE_GATE:
+			return lane.gate > 0 ? 1 : 0
+		case SOURCE_KEY:
+			return f32(lane.note.pitch)
+		}
+		return sign
+	}
+	sn := &c.progs.nodes[c.first_node + i32(node_idx)]
+	if sn.kind == NODE_MAP && sn.inputs.count > 0 {
+		inp := c.progs.inputs[sn.inputs.first]
+		sc, off, lo, hi := sn.values[3], sn.values[4], sn.values[5], sn.values[6]
+		x := tail_source_value(c, lane, inp.node, inp.buf, sc >= 0 ? sign : -sign)
+		return clamp(x * sc + off, lo, hi)
+	}
+	return sign // the rest: at full scale, the way that lengthens
+}
+
+@(private = "file")
+node_value_tail :: proc(c: ^Node_Call, lane: ^Lane, slot: int, b: f32) -> f32 {
+	v := b
+	dir: f32 = c.node.kind == NODE_REGION && (slot == REGION_TUNE || slot == REGION_OFFSET || slot == REGION_RATE) ? -1 : 1
+	for &m in c.progs.mods[c.node.mods.first:base.span_end(c.node.mods)] {
+		if int(m.slot) != slot || !m.steady {
+			continue
+		}
+		k := m.scaled ? m.c1 * b : m.c1
+		sign: f32 = k >= 0 && m.op != .Cap ? dir : -dir // a cap takes off more the higher its source
+		x := tail_source_value(c, lane, m.node, m.source, sign)
+		if m.exponent != 1 {
+			x = x >= 0 ? math.pow(x, m.exponent) : -math.pow(-x, m.exponent)
+		}
+		switch m.op {
+		case .Add:
+			v += k * x
+		case .Mul:
+			v *= m.c0 + m.c1 * x
+		case .Octaves:
+			if x != 0 {
+				v *= dsp.exp2_fast(m.c1 * x)
+			}
+		case .Cap:
+			v += x * (min(v, m.c0) - v)
+		}
+	}
+	return v
 }
 
 // ---- playing a program -------------------------------------------------------------
@@ -753,6 +812,10 @@ tail_of :: proc(env: ^Voice_Env, play: i32, n: Note, key, pitch: f32, layer: i32
 	if prog.length > 0 {
 		return base.Seconds(prog.length)
 	}
+	n := n
+	if layer >= 0 && n.kind == .Release {
+		n.duration = 0
+	}
 	heard: [MAX_NODES]base.Seconds
 	if prog.one_shot {
 		// to its end whatever the gate: as long as it is heard with the gate held
@@ -778,7 +841,7 @@ tail_of :: proc(env: ^Voice_Env, play: i32, n: Note, key, pitch: f32, layer: i32
 graph_heard :: proc(env: ^Voice_Env, prog: ^Program, n: Note, key, pitch: f32, heard: ^[MAX_NODES]base.Seconds, layer: i32 = -1) {
 	lanes := [1]Lane{{note = n, key = key, hz = f64(base.midi_to_hz(base.Pitch(pitch))), gate = gate_sample(n), params = layer_params(env.programs, layer)}}
 	lanes[0].note.pitch = base.Pitch(pitch)
-	c := Node_Call{progs = env.programs, env = env, lanes = lanes[:]}
+	c := Node_Call{progs = env.programs, env = env, first_node = prog.nodes.first, lanes = lanes[:]}
 	progs := env.programs
 	nodes := progs.nodes[prog.nodes.first:base.span_end(prog.nodes)]
 	for &node, k in nodes {

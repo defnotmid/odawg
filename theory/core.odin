@@ -1,6 +1,7 @@
 // theory: notes, chords and keys as Tone and lead sheets write them.
 package odawg_theory
 
+import "core:math"
 import "core:strconv"
 import "core:strings"
 import base "../base"
@@ -47,8 +48,9 @@ pitch_from_string :: proc(s: string) -> (midi: base.Pitch, ok: bool) {
 // The name of a MIDI note ("A2"), sharps for black keys.
 string_from_pitch :: proc(midi: base.Pitch, allocator := context.temp_allocator) -> string {
 	NAMES := [12]string{"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"}
-	m := int(midi + 0.5)
-	return strings.concatenate({NAMES[(m % 12 + 12) % 12], strconv.write_int(make([]u8, 8, context.temp_allocator), i64(m / 12 - 1), 10)}, allocator)
+	m := int(math.floor(f64(midi) + 0.5))
+	oct := m >= 0 ? m / 12 - 1 : (m - 11) / 12 - 1
+	return strings.concatenate({NAMES[(m % 12 + 12) % 12], strconv.write_int(make([]u8, 8, context.temp_allocator), i64(oct), 10)}, allocator)
 }
 
 // ---- chords ----------------------------------------------------------------------
@@ -126,7 +128,11 @@ chord_from_string :: proc(s: string) -> (c: Chord, ok: bool) {
 		return {}, false
 	}
 	if slash >= 0 {
-		bass, _ := pitch_class_from_string(t[slash + 1:]) or_return
+		bass_str := t[slash + 1:]
+		bass, bn := pitch_class_from_string(bass_str) or_return
+		if bn != len(bass_str) {
+			return {}, false
+		}
 		c.bass = bass
 	}
 	return c, true

@@ -224,4 +224,8 @@ test_adsr_unstarted :: proc(t: ^testing.T) {
 		testing.expect_value(t, v, 0)
 	}
 	testing.expect(t, e.stage == .Idle)
+	for x in ([]f64{-2.0, -1.0, -1e-17, -0.25, 0.0, 0.75, 1.0}) {
+		w := wrap(x)
+		testing.expectf(t, w >= 0 && w < 1, "wrap(%e) = %e", x, w)
+	}
 }

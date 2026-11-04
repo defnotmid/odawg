@@ -32,6 +32,9 @@ curl_write :: proc "c" (data: [^]u8, size, count: c.size_t, user: rawptr) -> c.s
 // Streams `url` (redirects followed, HTTP errors are failures) into `sink`,
 // identifying itself to the server as `agent`.
 http_get :: proc(url: string, sink: ^Sink, agent := "odawg") -> Error {
+	if !strings.has_prefix(url, "https://") {
+		return fmt.tprintf("refusing non-HTTPS URL %s", url)
+	}
 	@(static) initialized: bool
 	if !initialized {
 		curl.global_init(curl.GLOBAL_DEFAULT)
@@ -45,6 +48,8 @@ http_get :: proc(url: string, sink: ^Sink, agent := "odawg") -> Error {
 
 	cs := Curl_Sink{ctx = context, sink = sink}
 	curl.easy_setopt(h, .URL, strings.clone_to_cstring(url, context.temp_allocator))
+	curl.easy_setopt(h, .PROTOCOLS_STR, cstring("https"))
+	curl.easy_setopt(h, .REDIR_PROTOCOLS_STR, cstring("https"))
 	curl.easy_setopt(h, .FOLLOWLOCATION, c.long(1))
 	curl.easy_setopt(h, .FAILONERROR, c.long(1))
 	curl.easy_setopt(h, .USERAGENT, strings.clone_to_cstring(agent, context.temp_allocator))

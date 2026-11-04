@@ -35,7 +35,7 @@ across genres (funk, a jazz waltz, a 6/8 ballad, boom bap, a Dorian groove,
 drum & bass).
 
 It builds against oicut (its audio decoding and WAV header) checked out beside it:
-`git clone -b v0.0.21 https://github.com/defnotmid/oicut ../oicut`.
+`git clone -b v0.0.25 https://github.com/defnotmid/oicut ../oicut`.
 
 ```sh
 make build                                     # build/odawg

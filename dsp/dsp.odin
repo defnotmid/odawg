@@ -70,12 +70,19 @@ wrap :: #force_inline proc "contextless" (t: f64) -> f64 {
 		}
 	case t < 0:
 		if t >= -1 {
-			return t + 1
+			r := t + 1
+			return r < 1 ? r : 0
 		}
 	case:
 		return t
 	}
-	return t - f64(i64(t)) + (t < 0 ? 1 : 0)
+	r := t - math.floor(t)
+	return r < 1 ? r : 0
+}
+
+// Flushes IEEE-754 f32 subnormal numbers to zero without branches or inline asm.
+flush_denormal :: #force_inline proc "contextless" (x: f32) -> f32 {
+	return (x + 1e-18) - 1e-18
 }
 
 // sin(2π t) for a phase in [0, 1): folded to a quarter cycle, odd

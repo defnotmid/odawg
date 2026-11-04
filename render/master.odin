@@ -289,8 +289,9 @@ wav_push :: proc(w: ^Wav_Writer, l, r: []f32) {
 		out := make([]i16, 2 * n, context.temp_allocator)
 		for i in 0 ..< n {
 			for v, c in ([2]f32{l[i], r[i]}) {
+				s := math.is_nan(v) || math.is_inf(v) ? 0 : f64(v)
 				dither := (base.rng_unit(&w.rng) - base.rng_unit(&w.rng)) / 32768
-				out[2 * i + c] = i16(clamp(math.round((f64(v) + dither) * 32767), -32768, 32767))
+				out[2 * i + c] = i16(clamp(math.round((s + dither) * 32767), -32768, 32767))
 			}
 		}
 		bytes = slice.to_bytes(out)

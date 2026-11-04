@@ -192,6 +192,7 @@ Program_Desc :: struct {
 Control_Target :: struct {
 	node:   i32, // into Programs.nodes
 	mod:    i32, // into Programs.mods (-1: the field itself)
+	param:  i32, // into Programs.layer_params (-1: the node's own)
 	slot:   u8,
 	field:  Mod_Field, // a modulator's
 	op:     Control_Op,
@@ -793,6 +794,12 @@ layer_within :: proc(outer, inner: Layer_Region) -> (r: Layer_Region, ok: bool) 
 desc_shape :: proc(d: ^Program_Desc) -> string {
 	b := strings.builder_make(context.temp_allocator)
 	strings.write_string(&b, d.out)
+	strings.write_byte(&b, '/')
+	strings.write_f64(&b, f64(d.length), 'g')
+	strings.write_byte(&b, '/')
+	strings.write_f64(&b, f64(d.portamento), 'g')
+	strings.write_byte(&b, '/')
+	strings.write_f64(&b, f64(d.note), 'g')
 	strings.write_byte(&b, d.one_shot ? 'o' : '-')
 	strings.write_byte(&b, d.velocity ? 'v' : '-')
 	strings.write_byte(&b, d.mono ? 'm' : '-')
@@ -806,11 +813,15 @@ desc_shape :: proc(d: ^Program_Desc) -> string {
 			strings.write_string(&b, x)
 		}
 		for m in n.mods {
-			strings.write_string(&b, "~")
+			strings.write_byte(&b, '~')
 			strings.write_int(&b, m.slot)
+			strings.write_byte(&b, ',')
 			strings.write_string(&b, m.source)
+			strings.write_byte(&b, ',')
 			strings.write_int(&b, int(m.kind))
+			strings.write_byte(&b, ',')
 			strings.write_f64(&b, f64(m.amount), 'g')
+			strings.write_byte(&b, ',')
 			strings.write_f64(&b, f64(m.exponent), 'g')
 		}
 		strings.write_byte(&b, desc_table(d, n.name) != nil ? 't' : '-')
@@ -818,7 +829,8 @@ desc_shape :: proc(d: ^Program_Desc) -> string {
 		strings.write_byte(&b, n.values[FIELD_PAN] != 0 ? 'p' : '-')
 		row := node_row(n.kind)
 		for f, i in row.fields {
-			if f.shapes {
+			if f.shapes || f.sync {
+				strings.write_byte(&b, ',')
 				strings.write_f64(&b, f64(n.values[row.slots[i]]), 'g')
 			}
 		}
@@ -906,10 +918,40 @@ glob_match :: proc(pattern, name: string) -> bool {
 	return pattern == name
 }
 
+// Appends a target and any Layer_Param overrides for the same node and slot
+// in layers of `root` that share program `id`.
+@(private = "file")
+append_target_with_layers :: proc(progs: ^Programs, root, id: i32, local_node: u16, x: Control_Target) -> int {
+	x := x
+	x.param = -1
+	x.base = control_target_value(progs, x)
+	append(&progs.control_targets, x)
+	count := 1
+	if x.mod < 0 && root >= 0 {
+		rp := progs.programs[root]
+		for pr in progs.layers[rp.layers.first:base.span_end(rp.layers)] {
+			if pr.program != id {
+				continue
+			}
+			for pi in pr.params.first ..< base.span_end(pr.params) {
+				if progs.layer_params[pi].node == local_node && progs.layer_params[pi].slot == x.slot {
+					y := x
+					y.param = pi
+					y.base = control_target_value(progs, y)
+					append(&progs.control_targets, y)
+					count += 1
+				}
+			}
+		}
+	}
+	return count
+}
+
 // The targets `parts` (a target's path, split) names in program `id`
 // (compiled from desc), appended; how many.
 @(private = "file")
-targets_add :: proc(progs: ^Programs, id: i32, desc: ^Program_Desc, parts: []string, t: Target_Desc) -> int {
+targets_add :: proc(progs: ^Programs, id: i32, desc: ^Program_Desc, parts: []string, t: Target_Desc, root: i32 = -1) -> int {
+	root := root >= 0 ? root : id
 	count := 0
 	prog := progs.programs[id]
 	if len(parts) >= 2 && parts[0] == "pads" && len(desc.pads) > 0 {
@@ -920,8 +962,26 @@ targets_add :: proc(progs: ^Programs, id: i32, desc: ^Program_Desc, parts: []str
 			pid := base.name_id(p.name)
 			for pr in progs.layers[prog.layers.first:base.span_end(prog.layers)] {
 				if progs.pads[pr.row].pad == pid && pr.program >= 0 {
-					count += targets_add(progs, pr.program, p.program, parts[2:], t)
+					count += targets_add(progs, pr.program, p.program, parts[2:], t, pr.program)
 				}
+			}
+		}
+		return count
+	}
+	if len(desc.layers) > 0 && len(desc.nodes) == 0 {
+		seen := make([dynamic]i32, context.temp_allocator)
+		flat: Flat_Layers
+		layers_flat(&flat, desc.layers, nil)
+		li := prog.layers.first
+		for &l in flat.out {
+			if l.program == nil || li >= base.span_end(prog.layers) {
+				continue
+			}
+			lp := progs.layers[li].program
+			li += 1
+			if lp >= 0 && !slice.contains(seen[:], lp) {
+				append(&seen, lp)
+				count += targets_add(progs, lp, l.program, parts, t, root)
 			}
 		}
 		return count
@@ -950,7 +1010,7 @@ targets_add :: proc(progs: ^Programs, id: i32, desc: ^Program_Desc, parts: []str
 			if g.name != id_name {
 				continue
 			}
-			x := Control_Target{node = prog.nodes.first + i32(j), mod = -1, slot = u8(slot), field = mf, op = t.op, scale = t.scale == 0 ? 1 : t.scale, offset = t.offset}
+			x := Control_Target{node = prog.nodes.first + i32(j), mod = -1, param = -1, slot = u8(slot), field = mf, op = t.op, scale = t.scale == 0 ? 1 : t.scale, offset = t.offset}
 			if mf != .None {
 				// a modulator's field: the first on that field
 				for mi in g.mods.first ..< base.span_end(g.mods) {
@@ -963,9 +1023,7 @@ targets_add :: proc(progs: ^Programs, id: i32, desc: ^Program_Desc, parts: []str
 					continue
 				}
 			}
-			x.base = control_target_value(progs, x)
-			append(&progs.control_targets, x)
-			count += 1
+			count += append_target_with_layers(progs, root, id, u16(j), x)
 		}
 	}
 	return count
@@ -974,6 +1032,9 @@ targets_add :: proc(progs: ^Programs, id: i32, desc: ^Program_Desc, parts: []str
 // A target's value now (a gain linear; a ratio as a ratio).
 @(private = "file")
 control_target_value :: proc(progs: ^Programs, t: Control_Target) -> f32 {
+	if t.param >= 0 {
+		return progs.layer_params[t.param].value
+	}
 	if t.mod < 0 {
 		return progs.nodes[t.node].values[t.slot]
 	}
@@ -1014,7 +1075,7 @@ compile_controls :: proc(progs: ^Programs, id: i32, desc: ^Program_Desc, finding
 			}
 		}
 		append(&progs.controls, row)
-		append(&progs.control_names, cd.name)
+		append(&progs.control_names, strings.clone(cd.name))
 		progs.programs[id].controls.count += 1
 	}
 	// the values given, then the rest read back (a knob another one moved
@@ -1075,6 +1136,23 @@ target_is_gain :: proc(progs: ^Programs, t: Control_Target) -> bool {
 	return f != nil && f.unit == .Gain
 }
 
+// Sets a single target's underlying storage directly to `v`.
+@(private = "file")
+control_target_set :: proc(progs: ^Programs, t: Control_Target, v: f32) {
+	if t.param >= 0 {
+		progs.layer_params[t.param].value = v
+		return
+	}
+	if t.mod < 0 {
+		progs.nodes[t.node].values[t.slot] = v
+		return
+	}
+	m := &progs.mods[t.mod]
+	d := Mod_Desc{kind = m.kind, amount = m.amount, exponent = m.exponent}
+	mod_field_set(&d, t.field, v)
+	m.kind, m.amount, m.exponent = d.kind, d.amount, d.exponent
+}
+
 // Sets every target of c from value (the program's values; what follows
 // from them is program_derive's).
 control_apply :: proc(progs: ^Programs, c: ^Control_Row, value: f32) {
@@ -1093,14 +1171,7 @@ control_apply :: proc(progs: ^Programs, c: ^Control_Row, value: f32) {
 		case .Octaves:
 			v = t.base * f32(math.pow(2, f64(x)))
 		}
-		if t.mod < 0 {
-			progs.nodes[t.node].values[t.slot] = v
-			continue
-		}
-		m := &progs.mods[t.mod]
-		d := Mod_Desc{kind = m.kind, amount = m.amount, exponent = m.exponent}
-		mod_field_set(&d, t.field, v)
-		m.kind, m.amount, m.exponent = d.kind, d.amount, d.exponent
+		control_target_set(progs, t, v)
 	}
 }
 
@@ -1127,9 +1198,17 @@ control_set :: proc(progs: ^Programs, program: i32, name: u32, value: f32) -> bo
 		return false
 	}
 	old := c.value
+	targets := progs.control_targets[c.targets.first:base.span_end(c.targets)]
+	saved := make([]f32, len(targets), context.temp_allocator)
+	for t, i in targets {
+		saved[i] = control_target_value(progs, t)
+	}
 	control_apply(progs, c, value)
 	if program_derive(progs, program) {
-		control_apply(progs, c, old)
+		c.value = old
+		for t, i in targets {
+			control_target_set(progs, t, saved[i])
+		}
 		program_derive(progs, program)
 		return false
 	}
@@ -1210,7 +1289,7 @@ control_from_path :: proc(progs: ^Programs, program: i32, path: string) -> i32 {
 			if g.name != name || !known || field.list > 0 {
 				continue
 			}
-			x := Control_Target{node = p.nodes.first + i32(j), mod = -1, slot = u8(slot), field = mf, op = .Set, scale = 1}
+			x := Control_Target{node = p.nodes.first + i32(j), mod = -1, param = -1, slot = u8(slot), field = mf, op = .Set, scale = 1}
 			if mf != .None {
 				for mi in g.mods.first ..< base.span_end(g.mods) {
 					if int(progs.mods[mi].slot) == slot {
@@ -1222,9 +1301,7 @@ control_from_path :: proc(progs: ^Programs, program: i32, path: string) -> i32 {
 					continue
 				}
 			}
-			x.base = control_target_value(progs, x)
-			append(&progs.control_targets, x)
-			row.targets.count += 1
+			row.targets.count += i32(append_target_with_layers(progs, program, pi, u16(j), x))
 		}
 	}
 	if row.targets.count == 0 {
@@ -1245,12 +1322,20 @@ control_moves :: proc(progs: ^Programs, program: i32, c: i32, lo, hi: f32) -> bo
 		return false
 	}
 	old := row.value
+	targets := progs.control_targets[row.targets.first:base.span_end(row.targets)]
+	saved := make([]f32, len(targets), context.temp_allocator)
+	for t, i in targets {
+		saved[i] = control_target_value(progs, t)
+	}
 	moves := true
 	for v in ([2]f32{lo, hi}) {
 		control_apply(progs, row, v)
 		moves &&= !program_derive(progs, program)
 	}
-	control_apply(progs, row, old)
+	row.value = old
+	for t, i in targets {
+		control_target_set(progs, t, saved[i])
+	}
 	program_derive(progs, program)
 	return moves
 }
@@ -1294,9 +1379,8 @@ node_field_set :: proc(progs: ^Programs, program: i32, node: u32, field: string,
 		return false
 	}
 	Old :: struct {
-		n: ^Graph_Node,
-		slot: int,
-		v: f32,
+		dst: ^f32,
+		v:   f32,
 	}
 	olds := make([dynamic]Old, context.temp_allocator)
 	set :: proc(progs: ^Programs, program: i32, node: u32, field: string, value: f32, olds: ^[dynamic]Old) {
@@ -1306,13 +1390,24 @@ node_field_set :: proc(progs: ^Programs, program: i32, node: u32, field: string,
 				continue
 			}
 			if f, slot, known := node_field_from_name(n.kind, field); known && f.list == 0 {
-				append(olds, Old{&n, slot, n.values[slot]})
+				append(olds, Old{&n.values[slot], n.values[slot]})
 				n.values[slot] = f.unit == .Gain ? f32(base.db_to_gain(base.Db(value))) : value
 			}
 		}
 		for pr in progs.layers[p.layers.first:base.span_end(p.layers)] {
 			if pr.program >= 0 && pr.program != program {
 				set(progs, pr.program, node, field, value, olds)
+				lp := progs.programs[pr.program]
+				for &lp_param in progs.layer_params[pr.params.first:base.span_end(pr.params)] {
+					gn := progs.nodes[lp.nodes.first + i32(lp_param.node)]
+					if gn.name != node {
+						continue
+					}
+					if f, slot, known := node_field_from_name(gn.kind, field); known && f.list == 0 && int(lp_param.slot) == slot {
+						append(olds, Old{&lp_param.value, lp_param.value})
+						lp_param.value = f.unit == .Gain ? f32(base.db_to_gain(base.Db(value))) : value
+					}
+				}
 			}
 		}
 	}
@@ -1322,7 +1417,7 @@ node_field_set :: proc(progs: ^Programs, program: i32, node: u32, field: string,
 	}
 	if program_derive(progs, program) {
 		#reverse for o in olds {
-			o.n.values[o.slot] = o.v
+			o.dst^ = o.v
 		}
 		program_derive(progs, program)
 		return false
@@ -1460,8 +1555,19 @@ program_derive :: proc(progs: ^Programs, program: i32) -> (reshaped: bool) {
 	for g in nodes {
 		prog.jump &&= node_row(g.kind).jump
 	}
-	for pr in progs.layers[prog.layers.first:base.span_end(prog.layers)] {
-		if pr.program >= 0 && pr.program != program {
+	layers := progs.layers[prog.layers.first:base.span_end(prog.layers)]
+	for pr, i in layers {
+		if pr.program < 0 || pr.program == program {
+			continue
+		}
+		seen := false
+		for prev in layers[:i] {
+			if prev.program == pr.program {
+				seen = true
+				break
+			}
+		}
+		if !seen {
 			reshaped ||= program_derive(progs, pr.program)
 		}
 	}

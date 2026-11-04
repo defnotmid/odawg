@@ -1,5 +1,6 @@
 package odawg_song
 
+import "core:math"
 import base "../base"
 import device "../device"
 
@@ -41,7 +42,7 @@ track_polyphony :: proc(s: ^Song, ti: int, g: Voice_Group = {of = 1}) -> int {
 	if device.voice_mono(&p, &env) || t.notes.count == 0 {
 		return 1
 	}
-	ends := make([dynamic]base.Seconds, context.temp_allocator)
+	ends := make([dynamic]i64, context.temp_allocator)
 	most := 0
 	program := i32(p[.Program])
 	layered := program >= 0 && s.programs.programs[program].layer_mode == .All
@@ -50,8 +51,9 @@ track_polyphony :: proc(s: ^Song, ti: int, g: Voice_Group = {of = 1}) -> int {
 			continue
 		}
 		n := note_of(s, int(i))
+		start := base.samples_from_seconds(n.time)
 		#reverse for end, k in ends {
-			if end <= n.time {
+			if end <= start {
 				unordered_remove(&ends, k)
 			}
 		}
@@ -60,8 +62,9 @@ track_polyphony :: proc(s: ^Song, ti: int, g: Voice_Group = {of = 1}) -> int {
 			layers: [device.MAX_LAYERS]i32
 			voices = device.graph_layers(&s.programs, program, n, -1, layers[:])
 		}
+		tail := i64(math.ceil(f64(device.note_tail(&p, n, &env)) * base.RATE))
 		for _ in 0 ..< voices {
-			append(&ends, n.time + device.note_tail(&p, n, &env))
+			append(&ends, start + tail)
 		}
 		most = max(most, len(ends))
 	}

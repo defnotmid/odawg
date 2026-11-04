@@ -877,3 +877,41 @@ test_mastering_release :: proc(t: ^testing.T) {
 	testing.expect_value(t, a.stats.reduction_db, b.stats.reduction_db)
 	testing.expect(t, a.stats.reduction_db < -1)
 }
+
+// A note's tail covers what plays: a voice ends near silence however a steady
+// source moves its decay, never cut off while it still sounds.
+@(test)
+test_tail_covers_a_moved_decay :: proc(t: ^testing.T) {
+	TIMES := []string {
+		`{ base: 0.5, by: "velocity", octaves: 2 }`, // longer than its base
+		`{ base: 1, by: "vel", depth: 1 }`, // a source the tail can't read
+		`{ base: 1, by: "rnd", at_most: 0.1 }`, // a cap: longest at its source's lowest
+	}
+	for time in TIMES {
+		arena: virtual.Arena
+		defer virtual.arena_destroy(&arena)
+		text := strings.concatenate({`{ bpm: 120, gain_db: 0, seed: 1, sections: [ { name: "a", duration: "8m" } ],
+			parts: { p: { gain_db: 0, instrument: { note: 60, out: "tone", nodes: {
+				vel: { class: "Mix", inputs: [ "velocity" ] },
+				rnd: { class: "Random" },
+				env: { class: "Decay", time: `, time, ` },
+				tone: { class: "Osc", wave: "sine", amp: "env" } } },
+			play: [ { name: "a", events: [ { time: 0, note: "C4", duration: 0.05, velocity: 1 } ] } ] } } }`}, context.temp_allocator)
+		s := compose_with(t, text, &arena)
+		context.allocator = virtual.arena_allocator(&arena)
+		out := output_from_song(s, {})
+		peak: f32
+		last := -1
+		for v, i in out.left {
+			peak = max(peak, abs(v))
+			if abs(v) > 1e-6 {
+				last = i
+			}
+		}
+		end: f32
+		for v in out.left[max(last - 480, 0):last + 1] {
+			end = max(end, abs(v))
+		}
+		testing.expectf(t, peak > 0 && end < 0.01 * peak, "%s: cut off at sample %d, at %f of its peak", time, last, end / peak)
+	}
+}

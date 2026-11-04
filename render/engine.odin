@@ -167,13 +167,15 @@ Edit :: struct {
 	muted:    bool,
 	params:   device.Params,
 	pads:     []song.Pad_Gain,
-	program:  device.Program,
-	nodes:    []device.Graph_Node,
-	mods:     []device.Mod, // from mods_at in Programs.mods
-	mods_at:  i32,
-	inputs:   []device.Graph_Input, // from inputs_at
-	inputs_at: i32,
-	controls: []device.Control_Row,
+	program:         device.Program,
+	nodes:           []device.Graph_Node,
+	mods:            []device.Mod, // from mods_at in Programs.mods
+	mods_at:         i32,
+	inputs:          []device.Graph_Input, // from inputs_at
+	inputs_at:       i32,
+	controls:        []device.Control_Row,
+	layer_params:    []device.Layer_Param,
+	layer_params_at: i32,
 }
 
 // The song's automation rows (song.automation) by what reads them: an
@@ -524,6 +526,7 @@ mix_init :: proc(e: ^Engine) {
 	e.programs.mods = slice.clone_to_dynamic(s.programs.mods[:])
 	e.programs.inputs = slice.clone_to_dynamic(s.programs.inputs[:])
 	e.programs.controls = slice.clone_to_dynamic(s.programs.controls[:])
+	e.programs.layer_params = slice.clone_to_dynamic(s.programs.layer_params[:])
 	e.env.programs = &e.programs
 	e.edits.pending = make([dynamic]Edit, runtime.heap_allocator())
 	_ = virtual.arena_init_growing(&e.edits.arena)
@@ -619,6 +622,15 @@ program_edit :: proc(s: ^song.Song, pi: i32, carry: mem.Allocator) -> Edit {
 	if inputs_end > inputs_first {
 		x.inputs, x.inputs_at = slice.clone(s.programs.inputs[inputs_first:inputs_end], carry), inputs_first
 	}
+	lp_first, lp_end := i32(len(s.programs.layer_params)), i32(0)
+	for pr in s.programs.layers[p.layers.first:base.span_end(p.layers)] {
+		if pr.params.count > 0 {
+			lp_first, lp_end = min(lp_first, pr.params.first), max(lp_end, base.span_end(pr.params))
+		}
+	}
+	if lp_end > lp_first {
+		x.layer_params, x.layer_params_at = slice.clone(s.programs.layer_params[lp_first:lp_end], carry), lp_first
+	}
 	x.controls = slice.clone(s.programs.controls[p.controls.first:base.span_end(p.controls)], carry)
 	return x
 }
@@ -663,6 +675,7 @@ edits_apply :: proc(e: ^Engine) {
 			copy(progs.mods[x.mods_at:], x.mods)
 			copy(progs.inputs[x.inputs_at:], x.inputs)
 			copy(progs.controls[p.controls.first:], x.controls)
+			copy(progs.layer_params[x.layer_params_at:], x.layer_params)
 			for &g in e.groups {
 				g.lane_cell = -1 // a lane on it sets it again
 			}
@@ -778,7 +791,8 @@ track_lanes_apply :: proc(e: ^Engine, gi: int, at: i64) {
 		}
 	}
 	if moved {
-		device.program_derive(&e.programs, i32(s.params[s.tracks[ti].instrument][.Program]))
+		prog := i32(s.params[s.tracks[ti].instrument][.Program])
+		device.program_derive(&e.programs, prog)
 	}
 }
 
@@ -1772,7 +1786,8 @@ group_seek :: proc(e: ^Engine, w: ^Worker, gi: int, at: i64) {
 		e.note_end[i] = min(i64)
 		n := note_from_row(s, i)
 		start := base.samples_from_seconds(n.time)
-		over := f64(input - start) >= f64(device.note_tail(&p, n, &e.env)) * RATE && input - start > memory
+		tail := i64(math.ceil(f64(device.note_tail(&p, n, &e.env)) * RATE))
+		over := input - start >= tail && input - start > memory
 		if over && !group_sounding(e, gi) {
 			continue
 		}
@@ -2674,16 +2689,7 @@ duck :: proc(s: ^song.Song, sc: song.Sidechain, at: i64, l, r: []f32) {
 	from_t := base.seconds_from_samples(k0 * B) - window
 	to_t := base.seconds_from_samples((k1 + 1) * B)
 	// the first note at or after from_t, by the time index
-	lo, hi := 0, len(s.by_time)
-	for lo < hi {
-		mid := (lo + hi) / 2
-		if s.notes.time[s.by_time[mid]] < from_t {
-			lo = mid + 1
-		} else {
-			hi = mid
-		}
-	}
-	for idx in lo ..< len(s.by_time) {
+	for idx in song.first_note_at(s, from_t) ..< len(s.by_time) {
 		i := s.by_time[idx]
 		nt := s.notes.time[i]
 		if nt > to_t {

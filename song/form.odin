@@ -32,12 +32,11 @@ seconds_of :: proc(l: Laying) -> f64 {return f64(tempo.seconds_from_ramp(f64(l.b
 seconds_at :: proc(l: Laying, bars: int) -> f64 {return f64(tempo.seconds_from_ramp(f64(bars * l.bpb), l.bpm0, l.bpm1))}
 
 lay_out :: proc(s: ^spec.Spec, song: ^Song) -> bool {
-	if len(s.sections) == 0 {
-		append(&s.sections, spec.Section_Spec{name = "song", duration = {"4m", spec.UNSET_SECONDS}, start = spec.UNSET_SECONDS, energy = base.UNSET, flex = {{"", spec.UNSET_SECONDS}, {"", spec.UNSET_SECONDS}}})
-	}
-	lay := make([]Laying, len(s.sections), context.temp_allocator)
+	default_sections := [1]spec.Section_Spec{{name = "song", duration = {"4m", spec.UNSET_SECONDS}, start = spec.UNSET_SECONDS, energy = base.UNSET, flex = {{"", spec.UNSET_SECONDS}, {"", spec.UNSET_SECONDS}}}}
+	sections := len(s.sections) > 0 ? s.sections[:] : default_sections[:]
+	lay := make([]Laying, len(sections), context.temp_allocator)
 	bpm, bpb, bars := s.bpm, int(s.beats_per_bar), 4
-	for &ss, i in s.sections {
+	for &ss, i in sections {
 		l := &lay[i]
 		l.spec = &ss
 		path := base.path_join("sections", ss.name)
@@ -92,7 +91,7 @@ lay_out :: proc(s: ^spec.Spec, song: ^Song) -> bool {
 
 	// each section that must start at a time, then the song's end
 	from, from_seconds := 0, 0.0
-	for &ss, i in s.sections {
+	for &ss, i in sections {
 		if math.is_nan(f64(ss.start)) {
 			continue
 		}

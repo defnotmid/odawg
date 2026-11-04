@@ -8,7 +8,7 @@ import "core:math"
 
 // Bumped whenever the samples for the same spec change: a host's render
 // cache keys on it (like ottis's pocket.VERSION).
-VERSION :: 3
+VERSION :: 4
 
 // The rate everything renders at (onimite's mix rate).
 RATE :: 48000

@@ -194,6 +194,7 @@ ensure_pinned :: proc(path, url, sha256: string, size: i64, verify := false) -> 
 	}
 	os.remove(path)
 	if rerr := os.rename(part, path); rerr != nil {
+		os.remove(part)
 		return "", 0, fmt.tprintf("renaming %s: %v", part, rerr)
 	}
 	_ = os.write_entire_file(stamp_path(path), got)

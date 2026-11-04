@@ -137,3 +137,35 @@ test_sfz_dynamic :: proc(t: ^testing.T) {
 `)
 	testing.expectf(t, !strings.contains(got, "unsupported_opcode") && !strings.contains(got, "unknown_opcode"), "no finding:\n%s", got)
 }
+
+// One-sided keyswitches bound only the given key, release-triggered
+// generator regions aren't one-shots (those would ring to their cap), and LFO
+// overrides on the instrument row compile into the region.
+@(test)
+test_sfz_keyswitch_release_and_overrides :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	_ = virtual.arena_init_growing(&arena)
+	defer virtual.arena_destroy(&arena)
+	context.allocator = virtual.arena_allocator(&arena)
+	s: Sfz
+	sfz_read(&s, "t.sfz", `<global> sw_lokey=24
+<region> sample=*sine trigger=release ampeg_release=0.5 sw_lolast=24 lfo1_pitch=25
+`, nil)
+	findings := make(base.Findings)
+	overrides := make(map[string]f64)
+	overrides["lfo1_freq"] = 4
+	desc := sfz_program_desc(&s, 0, s.cc, "t.sfz", &findings, overrides)
+	testing.expect_value(t, desc.sw_lo, u8(25))
+	testing.expect_value(t, desc.sw_hi, u8(25))
+	testing.expect_value(t, len(desc.layers), 1)
+	testing.expect_value(t, desc.layers[0].region.sw_last_lo, u8(25))
+	testing.expect_value(t, desc.layers[0].region.sw_last_hi, u8(25))
+	testing.expect(t, !desc.layers[0].program.one_shot)
+	has_lfo1 := false
+	for n in desc.layers[0].program.nodes {
+		if n.name == "lfo1" {
+			has_lfo1 = true
+		}
+	}
+	testing.expect(t, has_lfo1)
+}

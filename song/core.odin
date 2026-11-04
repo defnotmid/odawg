@@ -430,7 +430,7 @@ pad_intern :: proc(s: ^Song, name: string) -> u32 {
 			return id
 		}
 	}
-	append(&s.pad_names, name)
+	append(&s.pad_names, strings.clone(name))
 	return id
 }
 

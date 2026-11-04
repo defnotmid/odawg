@@ -393,15 +393,16 @@ tables_build :: proc(s: ^song.Song, tables: []^Table, pool: ^common.Work_Pool = 
 		return
 	}
 	Build :: struct {
-		tables:     []^Table,
-		next:       []int, // the next row of each table to fill
-		span:       []int, // and the span it is in
+		tables:      []^Table,
+		next:        []int, // the next row of each table to fill
+		span:        []int, // and the span it is in
 		// What arrived and no row is done with: channels [mix l, mix r,
 		// then each part's l, r] from song sample `held_first`.
-		held:       [][dynamic]f32,
-		held_first: int,
-		received:   int,
-		frames:     int,
+		held:        [][dynamic]f32,
+		held_first:  int,
+		held_offset: int,
+		received:    int,
+		frames:      int,
 	}
 	b := Build{tables = tables, frames = frames_from_song(s)}
 	b.next = make([]int, len(tables), context.temp_allocator)
@@ -417,6 +418,7 @@ tables_build :: proc(s: ^song.Song, tables: []^Table, pool: ^common.Work_Pool = 
 	fill_rows :: proc(b: ^Build) {
 		frames := b.frames
 		low := b.received
+		from := b.held_first + b.held_offset
 		for t, k in b.tables {
 			row := TABLE_KINDS[t.kind]
 			w := row.window(t)
@@ -434,16 +436,20 @@ tables_build :: proc(s: ^song.Song, tables: []^Table, pool: ^common.Work_Pool = 
 					low = min(low, start)
 					break
 				}
-				fill_row(t, row, w, step, t.values[b.next[k] * t.width:][:t.width], b.held_first, b.held[src][:], b.held[src + 1][:])
+				fill_row(t, row, w, step, t.values[b.next[k] * t.width:][:t.width], from, b.held[src][b.held_offset:], b.held[src + 1][b.held_offset:])
 				b.next[k] += 1
 			}
 		}
 		// what no table reads any more goes
-		if drop := low - b.held_first; drop > 0 {
-			for &h in b.held {
-				remove_range(&h, 0, min(drop, len(h)))
+		if drop := low - from; drop > 0 {
+			b.held_offset += drop
+			if b.held_offset > 0 && b.held_offset * 2 >= len(b.held[0]) {
+				for &h in b.held {
+					remove_range(&h, 0, min(b.held_offset, len(h)))
+				}
+				b.held_first += b.held_offset
+				b.held_offset = 0
 			}
-			b.held_first = low
 		}
 	}
 	export_song(s, {to = base.seconds_from_samples(i64(b.frames)), pool = pool, stems = stems}, {&b, proc(data: rawptr, at: i64, l, r: []f32, stems: [][2][]f32) {

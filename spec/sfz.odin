@@ -254,9 +254,12 @@ Sfz_Opcode :: struct {
 }
 
 Sfz_Region :: struct {
-	opcodes: Span, // into Sfz.opcodes: inherited, then its own (the last of a name wins)
-	file:    string, // where it was written
-	line:    i32,
+	opcodes:       Span, // into Sfz.opcodes: inherited, then its own (the last of a name wins)
+	file:          string, // where it was written
+	line:          i32,
+	default_path:  string,
+	note_offset:   int,
+	octave_offset: int,
 }
 
 // A <curve>: 128 points (the vNNN given, straight between them).
@@ -466,29 +469,47 @@ sfz_strip_comments :: proc(r: ^Sfz_Reader, line: string) -> string {
 
 // `s` with every $NAME defined so far replaced (the longest name first).
 @(private = "file")
-sfz_defined :: proc(r: ^Sfz_Reader, s: string) -> string {
+sfz_defined :: proc(r: ^Sfz_Reader, s: string, active: []string = nil) -> string {
 	if strings.index_byte(s, '$') < 0 || len(r.defines) == 0 {
 		return s
 	}
-	out := s
-	for {
-		at := strings.index_byte(out, '$')
-		if at < 0 {
-			return out
+	b := strings.builder_make(context.temp_allocator)
+	i := 0
+	for i < len(s) {
+		rel := strings.index_byte(s[i:], '$')
+		if rel < 0 {
+			strings.write_string(&b, s[i:])
+			break
 		}
+		at := i + rel
+		strings.write_string(&b, s[i:at])
 		best := ""
 		for name in r.defines {
-			if len(name) > len(best) && strings.has_prefix(out[at:], name) {
-				best = name
+			if len(name) > len(best) && strings.has_prefix(s[at:], name) {
+				in_active := false
+				for a in active {
+					if a == name {
+						in_active = true
+						break
+					}
+				}
+				if !in_active {
+					best = name
+				}
 			}
 		}
 		if best == "" {
-			// not defined: left as written, the rest still replaced
-			rest := sfz_defined(r, out[at + 1:])
-			return strings.concatenate({out[:at + 1], rest}, context.temp_allocator)
+			strings.write_byte(&b, '$')
+			i = at + 1
+			continue
 		}
-		out = strings.concatenate({out[:at], r.defines[best], out[at + len(best):]}, context.temp_allocator)
+		next_active := make([]string, len(active) + 1, context.temp_allocator)
+		copy(next_active, active)
+		next_active[len(active)] = best
+		strings.write_string(&b, sfz_defined(r, r.defines[best], next_active))
+		i = at + len(best)
 	}
+	return strings.to_string(b)
 }
 
 // A line's headers and opcodes, in order. A value runs to the next name=
@@ -628,7 +649,8 @@ sfz_opcode :: proc(r: ^Sfz_Reader, file: string, line_no: i32, written, value: s
 sfz_control :: proc(r: ^Sfz_Reader, name, value: string) -> bool {
 	switch name {
 	case "default_path":
-		r.out.default_path, _ = strings.replace_all(value, "\\", "/")
+		replaced, _ := strings.replace_all(value, "\\", "/", context.temp_allocator)
+		r.out.default_path = strings.clone(replaced)
 		return true
 	case "note_offset":
 		r.out.note_offset, _ = strconv.parse_int(value)
@@ -662,11 +684,31 @@ sfz_close_region :: proc(r: ^Sfz_Reader) {
 		return
 	}
 	r.open = false
-	at := i32(len(r.out.opcodes))
+	merged := make([dynamic]Sfz_Opcode, context.temp_allocator)
 	for level in Sfz_Level {
-		append(&r.out.opcodes, ..r.levels[level][:])
+		append(&merged, ..r.levels[level][:])
 	}
-	append(&r.out.regions, Sfz_Region{opcodes = {at, i32(len(r.out.opcodes)) - at}, file = strings.clone(r.region_at.file), line = r.region_at.line})
+	at := i32(len(r.out.opcodes))
+	for op, i in merged {
+		later := false
+		for j in i + 1 ..< len(merged) {
+			if merged[j].name == op.name {
+				later = true
+				break
+			}
+		}
+		if !later {
+			append(&r.out.opcodes, op)
+		}
+	}
+	append(&r.out.regions, Sfz_Region{
+		opcodes       = {at, i32(len(r.out.opcodes)) - at},
+		file          = strings.clone(r.region_at.file),
+		line          = r.region_at.line,
+		default_path  = r.out.default_path,
+		note_offset   = r.out.note_offset,
+		octave_offset = r.out.octave_offset,
+	})
 }
 
 // A curve's points: those given, straight between them (0 and 1 at its
@@ -743,8 +785,8 @@ sfz_number :: proc(s: ^Sfz, region: int, name: string, fallback: f64) -> f64 {
 }
 
 // A key as a number or a note name (c4 is 60, as SFZ has it), moved by the
-// instrument's note and octave offsets.
-sfz_key :: proc(s: ^Sfz, v: string, fallback: int) -> int {
+// region's (or instrument's) note and octave offsets.
+sfz_key :: proc(s: ^Sfz, v: string, fallback: int, region := -1) -> int {
 	k := fallback
 	if n, ok := strconv.parse_int(v); ok {
 		k = n
@@ -758,7 +800,33 @@ sfz_key :: proc(s: ^Sfz, v: string, fallback: int) -> int {
 	} else {
 		return fallback
 	}
+	if region >= 0 && region < len(s.regions) {
+		return k + s.regions[region].note_offset + 12 * s.regions[region].octave_offset
+	}
 	return k + s.note_offset + 12 * s.octave_offset
+}
+
+// A region's key range and pitch_keycenter, applying key, lokey, hikey and
+// pitch_keycenter in the order written.
+sfz_region_keys :: proc(s: ^Sfz, region: int) -> (lo, hi, center: int, center_set: bool) {
+	lo, hi, center = 0, 127, 60
+	sp := s.regions[region].opcodes
+	for op in s.opcodes[sp.first:base.span_end(sp)] {
+		switch op.name {
+		case "key":
+			k := sfz_key(s, op.value, 60, region)
+			lo, hi, center = k, k, k
+			center_set = true
+		case "lokey":
+			lo = sfz_key(s, op.value, 0, region)
+		case "hikey":
+			hi = sfz_key(s, op.value, 127, region)
+		case "pitch_keycenter":
+			center = sfz_key(s, op.value, center, region)
+			center_set = true
+		}
+	}
+	return
 }
 
 // A curve by index (nil: none of that index).

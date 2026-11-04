@@ -25,6 +25,9 @@ length_from_string :: proc(text: string, beats_per_bar: int) -> (l: Length, ok: 
 	if s[0] == '-' || s[0] == '+' {
 		sign = s[0] == '-' ? -1 : 1
 		s = s[1:]
+		if s == "" {
+			return {}, false
+		}
 	}
 	if strings.has_suffix(s, "s") && !strings.has_suffix(s, "ms") {
 		v := strconv.parse_f64(s[:len(s) - 1]) or_return
@@ -209,7 +212,7 @@ segment_from_seconds :: proc(m: ^Tempo_Map, t: base.Seconds) -> Tempo_Segment {
 seconds_from_beat :: proc(m: ^Tempo_Map, beat: f64) -> base.Seconds {
 	g := segment_from_beat(m, beat)
 	d := beat - g.beat
-	if math.abs(g.bpm1 - g.bpm0) < 1e-9 || d > g.beats {
+	if math.abs(g.bpm1 - g.bpm0) < 1e-9 || d <= 0 || d > g.beats {
 		if d > g.beats { 	// past a ramp's end: the end tempo
 			return g.seconds + seconds_from_ramp(g.beats, g.bpm0, g.bpm1) + base.Seconds((d - g.beats) * 60 / g.bpm1)
 		}
@@ -223,7 +226,7 @@ seconds_from_beat :: proc(m: ^Tempo_Map, beat: f64) -> base.Seconds {
 beat_from_seconds :: proc(m: ^Tempo_Map, t: base.Seconds) -> f64 {
 	g := segment_from_seconds(m, t)
 	d := f64(t - g.seconds)
-	if math.abs(g.bpm1 - g.bpm0) < 1e-9 {
+	if math.abs(g.bpm1 - g.bpm0) < 1e-9 || d <= 0 {
 		return g.beat + d * g.bpm0 / 60
 	}
 	length := f64(seconds_from_ramp(g.beats, g.bpm0, g.bpm1))
@@ -237,7 +240,7 @@ beat_from_seconds :: proc(m: ^Tempo_Map, t: base.Seconds) -> f64 {
 // The tempo at a beat.
 bpm_from_beat :: proc(m: ^Tempo_Map, beat: f64) -> f64 {
 	g := segment_from_beat(m, beat)
-	if math.abs(g.bpm1 - g.bpm0) < 1e-9 {
+	if math.abs(g.bpm1 - g.bpm0) < 1e-9 || beat <= g.beat {
 		return g.bpm0
 	}
 	return g.bpm0 + (g.bpm1 - g.bpm0) * clamp((beat - g.beat) / g.beats, 0, 1)

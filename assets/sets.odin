@@ -236,18 +236,26 @@ Zone_Draft :: struct {
 append_set :: proc(bank: ^device.Bank, name: string, stamp: u64, drafts: []Zone_Draft) {
 	init_tables(bank)
 	first := i32(len(bank.zones))
-	same :: proc(a, b: Zone_Draft) -> bool {return a.lo == b.lo && a.hi == b.hi && a.lo_velocity == b.lo_velocity && a.hi_velocity == b.hi_velocity}
+	groups := make(map[[4]int][dynamic]int, context.temp_allocator)
+	for z, zi in drafts {
+		key := [4]int{z.lo, z.hi, z.lo_velocity, z.hi_velocity}
+		bucket, found := groups[key]
+		if !found {
+			bucket = make([dynamic]int, context.temp_allocator)
+		}
+		append(&bucket, zi)
+		groups[key] = bucket
+	}
 	for z, zi in drafts {
 		// a round robin: the zones answering the same keys and velocities, its
 		// group the first of them, each one's place by seq_position (then order)
-		group, sequence := u16(zi), u16(0)
-		for o, oi in drafts {
-			if oi == zi || !same(o, z) {
+		bucket := groups[[4]int{z.lo, z.hi, z.lo_velocity, z.hi_velocity}]
+		group, sequence := u16(bucket[0]), u16(0)
+		for oi in bucket {
+			if oi == zi {
 				continue
 			}
-			if oi < int(group) {
-				group = u16(oi)
-			}
+			o := drafts[oi]
 			if o.sequence < z.sequence || (o.sequence == z.sequence && oi < zi) {
 				sequence += 1
 			}

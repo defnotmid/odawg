@@ -35,8 +35,9 @@ append_song :: proc(m: ^Song, s: ^Song, at: base.Seconds, prefix: string, gain: 
 	send0, ret0, track0, note0 := i32(len(m.sends)), i32(len(m.returns)), i32(len(m.tracks)), i32(len(m.notes))
 	bus0, place0 := i32(len(m.buses)), i32(len(m.placements))
 	shift :: proc(sp: Span, by: i32) -> Span {return {sp.first + by, sp.count}}
-	for p in s.parts {
+	for p, i in s.parts {
 		append(&m.parts, strings.concatenate({prefix, "/", p}))
+		append(&m.roles, i < len(s.roles) ? s.roles[i] : Part_Role(0))
 	}
 	ctl0 := i32(len(m.programs.controls))
 	prog0 := programs_append(&m.programs, &s.programs)
@@ -211,6 +212,7 @@ CLIP_BEAT_SECONDS :: 0.5
 append_clip :: proc(m: ^Song, c: Clip) -> i32 {
 	part := i32(len(m.parts))
 	append(&m.parts, strings.clone(c.name))
+	append(&m.roles, Part_Role(0))
 	// a program of one node: the Clip, playing the set from its offset
 	node := device.Node_Desc{name = "clip", kind = device.NODE_CLIP, values = device.node_defaults(device.NODE_CLIP)}
 	node.values[device.CLIP_SET] = f32(c.set)
@@ -286,7 +288,7 @@ programs_append :: proc(to, from: ^device.Programs) -> i32 {
 	p0, n0, m0 := i32(len(to.programs)), i32(len(to.nodes)), i32(len(to.mods))
 	i0, pad0, c0 := i32(len(to.inputs)), i32(len(to.layers)), i32(len(to.chokes))
 	pads0, regions0 := i32(len(to.pads)), i32(len(to.regions))
-	ctl0, tgt0 := i32(len(to.controls)), i32(len(to.control_targets))
+	ctl0, tgt0, lp0 := i32(len(to.controls)), i32(len(to.control_targets)), i32(len(to.layer_params))
 	shift :: proc(sp: Span, by: i32) -> Span {return {sp.first + by, sp.count}}
 	for p in from.programs {
 		x := p
@@ -304,6 +306,9 @@ programs_append :: proc(to, from: ^device.Programs) -> i32 {
 		x.node += n0
 		if x.mod >= 0 {
 			x.mod += m0
+		}
+		if x.param >= 0 {
+			x.param += lp0
 		}
 		append(&to.control_targets, x)
 	}

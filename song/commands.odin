@@ -105,6 +105,7 @@ COMMAND_KINDS := [Command_Kind]Command_Kind_Row {
 	.Send_Set = {"send/gain_db", "a part's send to a return or a bus, dB (\"keys/sends/hall\")", .Part, proc(s: ^Song, row: Command_Row, tracks: []int) -> bool {
 		rows := command_rows(s, row)
 		g := base.db_to_gain(base.Db(row.value))
+		changed := false
 		for a in rows {
 			if a.kind != .Send {
 				continue
@@ -114,22 +115,25 @@ COMMAND_KINDS := [Command_Kind]Command_Kind_Row {
 				for &snd in s.sends[t.sends.first:base.span_end(t.sends)] {
 					if snd.ret == a.to.ref {
 						snd.gain = g
+						changed = true
 					}
 				}
 			}
 			for &rt in s.routes {
 				if rt.from == a.from && rt.to == a.to {
 					rt.gain = g
+					changed = true
 				}
 			}
 			from, to := node_index(s, a.from), node_index(s, a.to)
 			for &x in s.edges {
 				if x.from == from && x.to == to && x.kind == .Audio {
 					x.gain = g
+					changed = true
 				}
 			}
 		}
-		return len(rows) > 0
+		return changed
 	}},
 	.Effect_Param_Set = {"effect", "an effect's param, or an effect row's option, in its unit (\"keys/effects/Filter/frequency\", \"keys/effects/phaser/depth\", \"returns/hall/Reverb/wet\")", .Part, proc(s: ^Song, row: Command_Row, tracks: []int) -> bool {
 		rows := command_rows(s, row)

@@ -76,6 +76,9 @@ db_from_power :: #force_inline proc "contextless" (p: f64) -> f32 {
 // bins: BAND_BINS), from a Hann-windowed FFT of the window, as dBFS (a
 // full-scale sine: -3).
 fill_bands :: proc(t: ^Table, row: []f32, l, r: []f32) {
+	if len(row) < len(BAND_HZ) {
+		return
+	}
 	N :: BANDS_FFT
 	re, im: [N]f32
 	n := min(len(l), len(r), N)
@@ -98,6 +101,9 @@ fill_bands :: proc(t: ^Table, row: []f32, l, r: []f32) {
 // FLOOR_DB, wide is near 0) and the sides' correlation (1 mono, 0
 // unrelated, -1 out of phase; 0 when silent).
 fill_stereo :: proc(t: ^Table, row: []f32, l, r: []f32) {
+	if len(row) < 2 {
+		return
+	}
 	mid, side, ll, rr, lr: f64
 	for k in 0 ..< min(len(l), len(r)) {
 		a, b := f64(l[k]), f64(r[k])
@@ -114,6 +120,9 @@ fill_stereo :: proc(t: ^Table, row: []f32, l, r: []f32) {
 
 // A row of levels: the sample peak and the RMS of both sides, dBFS.
 fill_crest :: proc(t: ^Table, row: []f32, l, r: []f32) {
+	if len(row) < 2 {
+		return
+	}
 	peak: f32
 	power: f64
 	n := min(len(l), len(r))
@@ -184,9 +193,9 @@ analyzer_destroy :: proc(a: ^Analyzer, allocator := context.allocator) {
 // Starts again at song sample `at` (a seek): no rows, nothing held.
 analyzer_seek :: proc(a: ^Analyzer, at: i64) {
 	a.first, a.pos = at, at
-	// the first step whose window starts at or after `at`
+	// the first step whose window starts at or after `at` (from step 0 on)
 	t := &a.table
-	a.next = int((at * i64(t.step_den) + i64(t.step_num) - 1) / i64(t.step_num))
+	a.next = int((max(at, 0) * i64(t.step_den) + i64(t.step_num) - 1) / i64(t.step_num))
 	for &s in a.steps {
 		s = -1
 	}
@@ -298,18 +307,20 @@ measures_from_tables :: proc(bands, stereo, crest: ^Table, steps: [2]int, alloca
 	power, side, corr: f64
 	n, nb: int
 	for k in steps[0] ..< steps[1] {
-		if c := table_row(crest, k); c != nil && c[1] > FLOOR_DB + 1 {
+		c := table_row(crest, k)
+		sounds := c != nil && c[1] > FLOOR_DB + 1
+		if sounds {
 			peak = max(peak, f64(c[0]))
-			power += math.pow(10, f64(c[1]) / 10)
+			power += math.exp(f64(c[1]) * (math.LN10 / 10))
 			if st := table_row(stereo, k); st != nil {
-				side += math.pow(10, f64(st[0]) / 10)
+				side += math.exp(f64(st[0]) * (math.LN10 / 10))
 				corr += f64(st[1])
 			}
 			n += 1
 		}
-		if b := table_row(bands, k); b != nil {
+		if b := table_row(bands, k); b != nil && (crest == nil || sounds) {
 			for v, i in b {
-				band_power[i] += math.pow(10, f64(v) / 10)
+				band_power[i] += math.exp(f64(v) * (math.LN10 / 10))
 			}
 			nb += 1
 		}
@@ -354,9 +365,15 @@ onsets_from_song :: proc(s: ^song.Song, allocator := context.allocator) -> (r: a
 	r.onsets = make([dynamic]analyze.Onset, allocator)
 	loudest: f32
 	for i in s.by_time {
+		if s.notes.kind[i] != .Attack {
+			continue
+		}
 		loudest = max(loudest, s.notes.velocity[i])
 	}
 	for i in s.by_time {
+		if s.notes.kind[i] != .Attack {
+			continue
+		}
 		t := f32(s.notes.time[i])
 		v := s.notes.velocity[i] / max(loudest, 1e-6)
 		if n := len(r.onsets); n > 0 && abs(r.onsets[n - 1].time - t) < 0.5e-3 {

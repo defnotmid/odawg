@@ -82,6 +82,9 @@ sinc_init :: proc "contextless" () {
 // sample silent. The Sampler's, a Region's and a clip at a rate read so.
 @(private = "package")
 read_frame :: #force_inline proc "contextless" (data: []$T, ch, right, length, loop_from, loop_to: i64, pos: f64, cutoff: f32, taps: i64, gain: f32, exact: bool) -> (sl, sr: f32) {
+	if pos < 0 {
+		return
+	}
 	centre := i64(pos) // pos >= 0: truncation floors it
 	frac := pos - f64(centre)
 	if exact && frac == 0 && centre < length {
@@ -477,7 +480,7 @@ region_start :: proc(c: ^Node_Call, lane: ^Lane, st: ^Region_State) {
 	if st.loop_to > st.length || st.loop_to - st.loop_from < 2 {
 		st.loop_to = st.loop_from
 	}
-	random := f64(v[REGION_OFFSET_RANDOM]) * base.hash_unit(lane.seed ~ 0x0ff5e7)
+	random := len(lane.bufs) == 0 ? min(f64(v[REGION_OFFSET_RANDOM]), 0) : f64(v[REGION_OFFSET_RANDOM]) * base.hash_unit(lane.seed ~ 0x0ff5e7)
 	st.start = max(sample_frames(sm, f64(node_value(c, lane, REGION_OFFSET)) + math.floor(random)), 0)
 	st.pos = st.start
 	cents := (f64(lane.key) - f64(v[REGION_KEYCENTER])) * f64(v[REGION_KEYTRACK]) + f64(node_value(c, lane, REGION_TUNE))
@@ -531,14 +534,26 @@ region_run :: proc(st: ^Region_State, lane: ^Lane, data: []$T, channels: int, sc
 			continue
 		}
 		looped := st.loop_to > st.loop_from && (!st.sustain || lane.at + i64(i) < lane.gate)
-		pos := varies ? st.pos : st.start + f64(k) * st.step * f64(factor)
+		pos: f64
+		if varies {
+			pos = st.pos
+		} else if !looped && st.sustain && st.loop_to > st.loop_from {
+			k_gate := max(lane.gate - st.delay, 0)
+			pos = st.start + f64(k_gate) * st.step * f64(factor)
+			if pos >= f64(st.loop_to) {
+				pos = f64(st.loop_from) + math.mod(pos - f64(st.loop_from), f64(st.loop_to - st.loop_from))
+			}
+			pos += f64(k - k_gate) * st.step * f64(factor)
+		} else {
+			pos = st.start + f64(k) * st.step * f64(factor)
+		}
 		if looped && pos >= f64(st.loop_to) {
 			pos = f64(st.loop_from) + math.mod(pos - f64(st.loop_from), f64(st.loop_to - st.loop_from))
 		}
 		if varies {
 			st.pos = pos + st.step * f64(rate[i])
 		}
-		if pos >= f64(st.length) + f64(taps) {
+		if pos < -f64(taps) || pos >= f64(st.length) + f64(taps) {
 			st.over = true
 			return
 		}

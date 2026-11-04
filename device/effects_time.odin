@@ -308,7 +308,7 @@ effect_feedback_delay :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r
 			for &s, i in x {
 				t := f.pos + i64(i)
 				w := fx_read_linear(ring, mask, f64(t) - d)
-				ring[t & mask] = f32(f64(s) + fb * w)
+				ring[t & mask] = f32(fx_flush(f64(s) + fb * w))
 				s = f32(w)
 			}
 		}
@@ -337,8 +337,8 @@ effect_ping_pong_delay :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_
 			t := f.pos + i64(i)
 			wl := fx_read_linear(send_l, mask, f64(t) - d)
 			wr := fx_read_linear(send_r, mask, f64(t) - 2 * d)
-			send_l[t & mask] = f32(f64(l[i]) + fb * wr)
-			send_r[t & mask] = f32(f64(r[i]) + fb * wl)
+			send_l[t & mask] = f32(fx_flush(f64(l[i]) + fb * wr))
+			send_r[t & mask] = f32(fx_flush(f64(r[i]) + fb * wl))
 			l[i], r[i] = f32(wl), f32(wr)
 		}
 		f.pos += i64(len(l))
@@ -377,16 +377,18 @@ effect_chorus :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32,
 		dev := base * f64(p[.Depth])
 		w := math.TAU * f64(p[.Frequency]) / RATE
 		delay := scratch.d[:len(l)]
+		for &d, i in delay {
+			d = dev * math.sin(w * f64(f.pos + i64(i)))
+		}
+		hi := f64(ring_len - 4)
 		for x, c in ([2][]f32{l, r}) {
 			ring := fx_ring(state, Fx_Delay, ring_len, c)
-			phase := c == 0 ? 0.0 : math.PI
-			for &d, i in delay {
-				d = clamp(base + dev * math.sin(w * f64(f.pos + i64(i)) + phase), 2, f64(ring_len - 4))
-			}
+			sign := c == 0 ? 1.0 : -1.0
 			for &s, i in x {
 				t := f.pos + i64(i)
 				ring[t & mask] = s
-				s = f32(fx_read_cubic(ring, mask, f64(t) - delay[i]))
+				dl := clamp(base + sign * delay[i], 2, hi)
+				s = f32(fx_read_cubic(ring, mask, f64(t) - dl))
 			}
 		}
 		f.pos += i64(len(l))

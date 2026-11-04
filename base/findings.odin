@@ -28,7 +28,7 @@ report :: proc(findings: ^Findings, code: string, severity: Severity, path: stri
 	if findings == nil {
 		return
 	}
-	a := findings.allocator
+	a := findings.allocator.procedure != nil ? findings.allocator : context.allocator
 	append(findings, Finding{code, severity, strings.clone(path, a), fmt.aprintf(format, ..args, allocator = a)})
 }
 

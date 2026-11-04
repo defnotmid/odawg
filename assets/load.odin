@@ -107,7 +107,12 @@ resample :: proc(src: []f32, channels: int, rate: int, allocator := context.allo
 declare_set :: proc(bank: ^device.Bank, s: ^Set_Row) -> Error {
 	zones := set_zones(s)
 	first_zone := i32(len(bank.zones))
-	for &z in zones {
+	Group_Info :: struct {
+		group:    u16,
+		sequence: u16,
+	}
+	groups := make(map[[4]u8]Group_Info, context.temp_allocator)
+	for &z, zi in zones {
 		register, ok := file_index_from_path(s.source, z.path)
 		file := bank_file_register(bank, register)
 		if !ok {
@@ -115,14 +120,13 @@ declare_set :: proc(bank: ^device.Bank, s: ^Set_Row) -> Error {
 			resize(&bank.zone_file, int(first_zone))
 			return fmt.tprintf("%s: %s is not pinned", s.name, z.path)
 		}
-		group, sequence := u16(len(bank.zones)) - u16(first_zone), u16(0)
-		for &prior, i in bank.zones[first_zone:] {
-			if prior.lo_key == z.lo_key && prior.hi_key == z.hi_key && prior.lo_velocity == z.lo_velocity && prior.hi_velocity == z.hi_velocity {
-				if sequence == 0 {
-					group = u16(i)
-				}
-				sequence += 1
-			}
+		key := [4]u8{z.lo_key, z.hi_key, z.lo_velocity, z.hi_velocity}
+		group, sequence := u16(zi), u16(0)
+		if info, found := groups[key]; found {
+			group, sequence = info.group, info.sequence
+			groups[key] = {info.group, info.sequence + 1}
+		} else {
+			groups[key] = {group, 1}
 		}
 		append(&bank.zones, device.Zone {
 			sample = -1,
@@ -320,7 +324,10 @@ bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Ne
 			continue
 		}
 		if j.err != "" {
-			miss(&missing, w.set, j.err)
+			miss(&missing, w.set, strings.clone(j.err, context.temp_allocator))
+			if j.err != "out of memory" {
+				delete(j.err, runtime.heap_allocator())
+			}
 			ok = false
 			continue
 		}
@@ -444,7 +451,8 @@ decode_all :: proc(jobs: []Decode_Job, pool: ^common.Work_Pool) {
 		at := resample(samples, channels, rate, context.temp_allocator)
 		pcm := make([]i16, len(at), runtime.heap_allocator())
 		for v, i in at {
-			pcm[i] = i16(clamp(math.round(v * 32768), -32768, 32767))
+			s := math.is_nan(v) ? 0 : clamp(math.round(v * 32768), -32768, 32767)
+			pcm[i] = i16(s)
 		}
 		return pcm
 	}

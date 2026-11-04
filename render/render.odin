@@ -212,15 +212,19 @@ export_into :: proc(s: ^song.Song, opts: Options, mix: [2][]f32, parts: [][2][]f
 	}
 	return export_song(s, o, {&x, proc(data: rawptr, at: i64, l, r: []f32, stems: [][2][]f32) {
 		x := (^Into)(data)
-		if int(at) >= len(x.mix[0]) {
+		m := min(len(l), len(r), len(x.mix[0]) - int(at), len(x.mix[1]) - int(at))
+		if m <= 0 {
 			return
 		}
-		copy(x.mix[0][at:], l)
-		copy(x.mix[1][at:], r)
+		copy(x.mix[0][at:][:m], l[:m])
+		copy(x.mix[1][at:][:m], r[:m])
 		for st, p in stems {
-			if p < len(x.parts) && int(at) < len(x.parts[p][0]) {
-				copy(x.parts[p][0][at:], st[0])
-				copy(x.parts[p][1][at:], st[1])
+			if p < len(x.parts) {
+				sm := min(len(st[0]), len(st[1]), len(x.parts[p][0]) - int(at), len(x.parts[p][1]) - int(at))
+				if sm > 0 {
+					copy(x.parts[p][0][at:][:sm], st[0][:sm])
+					copy(x.parts[p][1][at:][:sm], st[1][:sm])
+				}
 			}
 		}
 	}})

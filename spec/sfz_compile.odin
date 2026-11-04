@@ -135,7 +135,7 @@ param :: proc(c: ^Sfz_Compile, region: int, name: string, fallback: f64) -> f64 
 key_of :: proc(c: ^Sfz_Compile, region: int, name: string, fallback: int) -> int {
 	mark(c, name)
 	v, found := sfz_value(c.s, region, name)
-	return found ? sfz_key(c.s, v, fallback) : fallback
+	return found ? sfz_key(c.s, v, fallback, region) : fallback
 }
 
 @(private = "file")
@@ -244,13 +244,15 @@ sfz_program_desc :: proc(s: ^Sfz, set: i32, cc: [128]f32, path: string, findings
 		}
 		// the instrument's keyswitch range
 		if v, found := text_of(&c, r, "sw_lokey"); found {
-			sw_lo = min(sw_lo, sfz_key(s, v, 0))
+			k := sfz_key(s, v, 0, r)
+			sw_lo, sw_hi = min(sw_lo, k), max(sw_hi, k)
 		}
 		if v, found := text_of(&c, r, "sw_hikey"); found {
-			sw_hi = max(sw_hi, sfz_key(s, v, 127))
+			k := sfz_key(s, v, 127, r)
+			sw_lo, sw_hi = min(sw_lo, k), max(sw_hi, k)
 		}
 		if v, found := text_of(&c, r, "sw_default"); found {
-			sw_default = sfz_key(s, v, -1)
+			sw_default = sfz_key(s, v, -1, r)
 		}
 		if !has_sample || !cc_conditions(&c, r) {
 			continue
@@ -260,13 +262,9 @@ sfz_program_desc :: proc(s: ^Sfz, set: i32, cc: [128]f32, path: string, findings
 			continue
 		}
 		_ = param(&c, r, "hiprog", 127)
-		l := device.Layer_Desc{path = strings.concatenate({s.regions[r].file, ":", int_text(int(s.regions[r].line))})}
+		l := device.Layer_Desc{path = strings.concatenate({s.regions[r].file, ":", int_text(int(s.regions[r].line))}, context.temp_allocator)}
 		row := &l.region
-		lo, hi := key_of(&c, r, "lokey", 0), key_of(&c, r, "hikey", 127)
-		if v, found := sfz_value(s, r, "key"); found {
-			k := sfz_key(s, v, 60)
-			lo, hi = k, k
-		}
+		lo, hi, _, _ := sfz_region_keys(s, r)
 		row^ = {
 			lo_key = u8(clamp(lo, 0, 127)), hi_key = u8(clamp(hi, 0, 127)),
 			lo_vel = u8(clamp(param(&c, r, "lovel", 0), 0, 127)), hi_vel = u8(clamp(param(&c, r, "hivel", 127), 0, 127)),
@@ -299,15 +297,19 @@ sfz_program_desc :: proc(s: ^Sfz, set: i32, cc: [128]f32, path: string, findings
 			}
 		}
 		if v, found := text_of(&c, r, "sw_last"); found {
-			k := u8(clamp(sfz_key(s, v, 0), 0, 127)) + 1
+			k := u8(clamp(sfz_key(s, v, 0, r), 0, 127)) + 1
 			row.sw_last_lo, row.sw_last_hi = k, k
 		}
 		if v, found := text_of(&c, r, "sw_lolast"); found {
-			row.sw_last_lo = u8(clamp(sfz_key(s, v, 0), 0, 127)) + 1
+			row.sw_last_lo = u8(clamp(sfz_key(s, v, 0, r), 0, 127)) + 1
 			row.sw_last_hi = max(row.sw_last_hi, row.sw_last_lo)
 		}
 		if v, found := text_of(&c, r, "sw_hilast"); found {
-			row.sw_last_hi = u8(clamp(sfz_key(s, v, 127), 0, 127)) + 1
+			row.sw_last_hi = u8(clamp(sfz_key(s, v, 127, r), 0, 127)) + 1
+			if row.sw_last_lo == 0 {
+				row.sw_last_lo = row.sw_last_hi
+			}
+			row.sw_last_hi = max(row.sw_last_hi, row.sw_last_lo)
 		}
 		l.program = sfz_region_desc(&c, r, set, this_zone, sample, row.trigger == .Release)
 		append(&layers, l)
@@ -408,10 +410,11 @@ sfz_region_desc :: proc(c: ^Sfz_Compile, r: int, set: i32, zone: int, sample: st
 			pitch_target = "frequency"
 		}
 	} else {
+		_, _, keycenter, _ := sfz_region_keys(s, r)
 		src = add(&nodes, "src", device.NODE_REGION)
 		set_field(src, "set", f64(set))
 		set_field(src, "zone", f64(zone))
-		set_field(src, "keycenter", f64(key_of(c, r, "pitch_keycenter", sfz_value_key(s, r, 60))))
+		set_field(src, "keycenter", f64(keycenter))
 		set_field(src, "keytrack", param(c, r, "pitch_keytrack", 100))
 		set_field(src, "tune", tune)
 		set_field(src, "offset", param(c, r, "offset", 0))
@@ -614,8 +617,18 @@ sfz_region_desc :: proc(c: ^Sfz_Compile, r: int, set: i32, zone: int, sample: st
 	if lf := lfo(c, &nodes, r, "amplfo", "amplfo_freq", "amplfo_delay", "amplfo_fade"); lf != "" {
 		mod(find(&nodes, "out"), "amp", lf, .Octaves, param(c, r, "amplfo_depth", 0) / 6.0206)
 	}
+	has_lfo, has_eg := false, false
+	sp_ops := s.regions[r].opcodes
+	for op in s.opcodes[sp_ops.first:base.span_end(sp_ops)] {
+		has_lfo ||= strings.has_prefix(op.name, "lfo")
+		has_eg ||= strings.has_prefix(op.name, "eg")
+	}
+	for k in c.overrides {
+		has_lfo ||= strings.has_prefix(k, "lfo")
+		has_eg ||= strings.has_prefix(k, "eg")
+	}
 	// SFZ v2's LFOs, each moving what its opcodes name
-	for k in 1 ..= 8 {
+	for k in 1 ..= (has_lfo ? 8 : 0) {
 		ks := int_text(k)
 		pre := strings.concatenate({"lfo", ks, "_"}, context.temp_allocator)
 		f := param(c, r, strings.concatenate({pre, "freq"}, context.temp_allocator), 0)
@@ -637,7 +650,7 @@ sfz_region_desc :: proc(c: ^Sfz_Compile, r: int, set: i32, zone: int, sample: st
 		mod_targets(c, r, &nodes, LFO_TARGETS, pre, name, pitch_target)
 	}
 	// SFZ v2's flex envelopes: points, a sustain, and what each moves
-	for k in 1 ..= 8 {
+	for k in 1 ..= (has_eg ? 8 : 0) {
 		pre := strings.concatenate({"eg", int_text(k), "_"}, context.temp_allocator)
 		has := false
 		for x in 0 ..< device.SEGMENT_POINTS {
@@ -739,15 +752,6 @@ find :: proc(nodes: ^[dynamic]device.Node_Desc, name: string) -> ^device.Node_De
 	return nil
 }
 
-// A region's key center when it gives none: its key=, else 60.
-@(private = "file")
-sfz_value_key :: proc(s: ^Sfz, r: int, fallback: int) -> int {
-	if v, found := sfz_value(s, r, "key"); found {
-		return sfz_key(s, v, fallback)
-	}
-	return fallback
-}
-
 // The gain the region's CC crossfades give at the CCs' values.
 @(private = "file")
 cc_crossfade :: proc(c: ^Sfz_Compile, r: int) -> f64 {
@@ -757,31 +761,51 @@ cc_crossfade :: proc(c: ^Sfz_Compile, r: int) -> f64 {
 		power = v != "gain"
 	}
 	sp := c.s.regions[r].opcodes
+	in_ccs, out_ccs: bit_set[0 ..< 128;u128]
 	for op in c.s.opcodes[sp.first:base.span_end(sp)] {
-		// xfin_locc64 (and its xfin_hicc64), or xfout's
-		fade_out := op.read.row == c.patterns[.Xfout_Locc]
-		if !fade_out && op.read.row != c.patterns[.Xfin_Locc] {
-			continue
-		}
 		cc := op.read.numbers[0]
 		if cc < 0 || cc >= 128 {
 			continue
 		}
+		switch op.read.row {
+		case c.patterns[.Xfin_Locc], c.patterns[.Xfin_Hicc]:
+			in_ccs += {cc}
+		case c.patterns[.Xfout_Locc], c.patterns[.Xfout_Hicc]:
+			out_ccs += {cc}
+		}
+	}
+	for fade_out in ([2]bool{false, true}) {
+		ccs := fade_out ? out_ccs : in_ccs
+		if ccs == {} {
+			continue
+		}
+		lo_row := c.patterns[fade_out ? .Xfout_Locc : .Xfin_Locc]
 		hi_row := c.patterns[fade_out ? .Xfout_Hicc : .Xfin_Hicc]
-		c.rows_read[op.read.row], c.rows_read[hi_row] = true, true
-		lo, _ := strconv.parse_f64(op.value)
-		hi := lo
-		if v, found := sfz_value_of(c.s, r, Sfz_Name{row = hi_row, base = -1, numbers = {cc, 0, 0, 0}, count = 1}); found {
-			if h, ok := strconv.parse_f64(v); ok {
-				hi = h
+		c.rows_read[lo_row], c.rows_read[hi_row] = true, true
+		def := fade_out ? 127.0 : 0.0
+		for cc in 0 ..< 128 {
+			if cc not_in ccs {
+				continue
 			}
+			lo, has_lo := def, false
+			if v, found := sfz_value_of(c.s, r, Sfz_Name{row = lo_row, base = -1, numbers = {cc, 0, 0, 0}, count = 1}); found {
+				if l, ok := strconv.parse_f64(v); ok {
+					lo, has_lo = l, true
+				}
+			}
+			hi := has_lo ? lo : def
+			if v, found := sfz_value_of(c.s, r, Sfz_Name{row = hi_row, base = -1, numbers = {cc, 0, 0, 0}, count = 1}); found {
+				if h, ok := strconv.parse_f64(v); ok {
+					hi = h
+				}
+			}
+			x := f64(c.cc[cc])
+			t := hi > lo ? clamp((x - lo) / (hi - lo), 0, 1) : (x >= hi ? 1 : 0)
+			if fade_out {
+				t = 1 - t
+			}
+			g *= power ? math.sqrt(t) : t
 		}
-		x := f64(c.cc[cc])
-		t := hi > lo ? clamp((x - lo) / (hi - lo), 0, 1) : (x >= hi ? 1 : 0)
-		if fade_out {
-			t = 1 - t
-		}
-		g *= power ? math.sqrt(t) : t
 	}
 	return g
 }
@@ -860,8 +884,8 @@ velocity_table :: proc(c: ^Sfz_Compile, r: int) -> (table: []f32, plain: bool) {
 @(private = "file")
 key_table :: proc(c: ^Sfz_Compile, r: int) -> (table: []f32, plain: bool) {
 	table = make([]f32, device.CURVE_POINTS, context.temp_allocator)
-	lo_in, hi_in := param(c, r, "xfin_lokey", 0), param(c, r, "xfin_hikey", 0)
-	lo_out, hi_out := param(c, r, "xfout_lokey", 127), param(c, r, "xfout_hikey", 127)
+	lo_in, hi_in := f64(key_of(c, r, "xfin_lokey", 0)), f64(key_of(c, r, "xfin_hikey", 0))
+	lo_out, hi_out := f64(key_of(c, r, "xfout_lokey", 127)), f64(key_of(c, r, "xfout_hikey", 127))
 	power := true
 	if v, found := text_of(c, r, "xf_keycurve"); found {
 		power = v != "gain"

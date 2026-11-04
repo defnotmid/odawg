@@ -212,11 +212,14 @@ arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 					base.report(&song.findings, "bad_range", .Error, base.path_join(base.path_join("parts", name), "mute"), "parts/%s/mute: %q is not a range of the song", name, m)
 					continue
 				}
-				#reverse for p, k in pending {
-					if p.beat >= b0 - 1e-9 && p.beat < b1 - 1e-9 {
-						ordered_remove(&pending, k)
+				kept := 0
+				for p in pending {
+					if !(p.beat >= b0 - 1e-9 && p.beat < b1 - 1e-9) {
+						pending[kept] = p
+						kept += 1
 					}
 				}
+				resize(&pending, kept)
 			}
 		}
 		// its regions: the triggers that still play a note (mutes take some),
@@ -722,7 +725,11 @@ expand_steps :: proc(x: ^Expand) {
 			continue
 		}
 		bar := 0
+		held := false
 		for start := x.from; start < x.to - 1e-9; bar += 1 {
+			if bar % len(bars) == 0 {
+				held = false
+			}
 			bpb := bpb_at(x.song, start)
 			cells := make([dynamic]u8, context.temp_allocator)
 			for c in transmute([]u8)bars[bar % len(bars)] {
@@ -731,7 +738,6 @@ expand_steps :: proc(x: ^Expand) {
 				}
 			}
 			step := f64(bpb) / f64(max(len(cells), 1))
-			held := false
 			for c, i in cells {
 				b := start + f64(i) * step
 				vel: f64
@@ -806,6 +812,7 @@ expand_sequence :: proc(x: ^Expand) {
 	varies := spec_.varies[x.play.vary.first:base.span_end(x.play.vary)]
 	slides := make([dynamic]int, context.temp_allocator) // notes whose gate runs into the next
 	cells := make([dynamic]Cell, context.temp_allocator)
+	held := false
 	// the pickup: its notes ending where the range starts
 	if x.play.pickup.count > 0 {
 		from := x.from - x.play.pickup_slots * l.value
@@ -820,19 +827,22 @@ expand_sequence :: proc(x: ^Expand) {
 			}
 			if cells_from_tokens(x, spec_.tokens[x.play.pickup.first:base.span_end(x.play.pickup)], from, l.value, &cells) {
 				x.lo = from
-				emit_cells(x, cells[:], from, l.value, &slides)
+				emit_cells(x, cells[:], from, l.value, &slides, &held)
 				x.lo = x.from
 			}
 		}
 	}
 	for c, k := x.from, 0; c < x.to - 1e-9; c, k = c + cycle, k + 1 {
+		if k > 0 {
+			held = false
+		}
 		if !cells_from_tokens(x, tokens, c, l.value, &cells) {
 			return
 		}
 		if len(varies) > 0 {
 			vary_cells(x, varies[k % len(varies)], k, cells[:])
 		}
-		emit_cells(x, cells[:], c, l.value, &slides)
+		emit_cells(x, cells[:], c, l.value, &slides, &held)
 	}
 	// a sliding note's gate runs to where the next note really starts
 	// (swung, humanized), and a little past
@@ -969,8 +979,7 @@ vary_cells :: proc(x: ^Expand, v: spec.Vary_Spec, k: int, cells: []Cell) {
 // A cycle's cells from beat c played: a note emitted (swung, humanized), a
 // hold extending the note before, a rest ending it.
 @(private = "file")
-emit_cells :: proc(x: ^Expand, cells: []Cell, c, slot: f64, slides: ^[dynamic]int) {
-	held := false
+emit_cells :: proc(x: ^Expand, cells: []Cell, c, slot: f64, slides: ^[dynamic]int, held: ^bool) {
 	for cell in cells {
 		b := c + cell.at * slot
 		if b >= x.to - 1e-9 {
@@ -978,16 +987,16 @@ emit_cells :: proc(x: ^Expand, cells: []Cell, c, slot: f64, slides: ^[dynamic]in
 		}
 		switch cell.kind {
 		case .Rest:
-			held = false
+			held^ = false
 		case .Hold:
-			if held {
+			if held^ {
 				extend_last(x, cell.length * slot)
 			}
 		case .Note:
 			before := len(x.out)
 			emit(x, b, hit_length(x, cell.length * slot, b), cell.pitch, cell.velocity, 0, cell.accent)
-			held = len(x.out) > before
-			if held && cell.slide {
+			held^ = len(x.out) > before
+			if held^ && cell.slide {
 				append(slides, len(x.out) - 1)
 			}
 		}
@@ -1338,7 +1347,7 @@ layered_notes :: proc(song: ^Song, work: ^Work) {
 		releases := make([dynamic]Note_Row, context.temp_allocator)
 		for &n in notes {
 			key := int(math.round(f32(n.pitch)))
-			if prog.sw_lo != 0 && key + 1 >= int(prog.sw_lo) && key + 1 <= int(prog.sw_hi) {
+			if n.pad == 0 && n.kind == .Attack && prog.sw_lo != 0 && key + 1 >= int(prog.sw_lo) && key + 1 <= int(prog.sw_hi) {
 				n.kind = .Keyswitch
 				last = u8(key + 1)
 				continue

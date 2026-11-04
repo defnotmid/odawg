@@ -17,8 +17,8 @@ Window :: enum u8 {
 
 WINDOW_TABLE := [Window]proc(k, n: int) -> f32 {
 	.None    = proc(k, n: int) -> f32 {return 1},
-	.Hann    = proc(k, n: int) -> f32 {return 0.5 * (1 - math.cos(2 * math.PI * f32(k) / f32(n)))},
-	.Hamming = proc(k, n: int) -> f32 {return 0.54 - 0.46 * math.cos(2 * math.PI * f32(k) / f32(n - 1))},
+	.Hann    = proc(k, n: int) -> f32 {return n > 0 ? 0.5 * (1 - math.cos(2 * math.PI * f32(k) / f32(n))) : 1},
+	.Hamming = proc(k, n: int) -> f32 {return n > 1 ? 0.54 - 0.46 * math.cos(2 * math.PI * f32(k) / f32(n - 1)) : 1},
 }
 
 // The largest spectrum: 2048 samples, 1024 magnitudes.
@@ -60,6 +60,12 @@ init_spectrum_tables :: proc "contextless" () {
 // `2 * len(out)` is a power of two up to SPECTRUM_MAX.
 spectrum_from_samples :: proc(l, r: []f32, at: int, window: Window, out: []f32) {
 	n := 2 * len(out)
+	if n <= 0 || n > SPECTRUM_MAX || (n & (n - 1)) != 0 {
+		for &v in out {
+			v = 0
+		}
+		return
+	}
 	re_buf, im_buf: [SPECTRUM_MAX]f32
 	re, im := re_buf[:n], im_buf[:n]
 	if at >= 0 && at + n <= min(len(l), len(r)) {

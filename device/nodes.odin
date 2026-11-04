@@ -311,9 +311,16 @@ process_osc :: proc(c: ^Node_Call) {
 		base_hz := s.hz > 0 ? s.hz : lane.hz * s.mult
 		switch {
 		case lane.glide != nil && s.hz == 0:
-			ratio(c, &lane, hz[:n], moved[:n])
-			for i in 0 ..< n {
-				hz[i] *= lane.glide[i] * s.mult
+			if c.node.mod_slots & (u64(1) << OSC_FREQUENCY) == 0 {
+				for i in 0 ..< n {
+					hz[i] = lane.glide[i] * s.mult
+				}
+			} else {
+				varies, v := node_curve(c, &lane, OSC_FREQUENCY, f32(base_hz), moved[:n])
+				scale := base_hz > 0 ? 1 / base_hz : 0
+				for i in 0 ..< n {
+					hz[i] = f64(varies ? moved[i] : v) * scale * lane.glide[i] * s.mult
+				}
 			}
 		case c.node.mod_slots & (u64(1) << OSC_FREQUENCY) == 0:
 			for i in 0 ..< n {
@@ -707,13 +714,9 @@ process_filter :: proc(c: ^Node_Call) {
 				hz[i] = cutoff
 			}
 		}
-		if !resonant {
-			for i in 0 ..< n {
-				q[i] = res
-			}
-		}
+		s.chain.q, s.chain.gain = res, v[FILTER_GAIN]
 		coefficients: [NODE_CHUNK]dsp.Svf = ---
-		if resonant || res != s.chain.q {
+		if resonant {
 			for i in 0 ..< n {
 				coefficients[i] = dsp.svf_coefficients(s.chain.type, hz[i], q[i], s.chain.gain)
 			}
@@ -741,13 +744,14 @@ memory_filter_node :: proc(values: ^[MAX_FIELDS]f32, slots: []int) -> f64 {
 @(private = "file")
 filter_split :: proc(c: ^Node_Call, lane: ^Lane, s: ^Filter_State, v: ^[MAX_FIELDS]f32, l, r: []f32) {
 	n := len(l)
+	s.chain.gain = v[FILTER_GAIN]
 	coefficients: [2][NODE_CHUNK]dsp.Svf = ---
 	for side in 0 ..< 2 {
 		hz, q: [NODE_CHUNK]f32 = ---, ---
 		swept, cutoff := node_curve(c, lane, FILTER_FREQUENCY, v[FILTER_FREQUENCY], hz[:n], side)
 		resonant, res := node_curve(c, lane, FILTER_Q, v[FILTER_Q], q[:n], side)
 		for i in 0 ..< n {
-			coefficients[side][i] = dsp.svf_coefficients(s.chain.type, swept ? hz[i] : cutoff, resonant ? q[i] : res, v[FILTER_GAIN])
+			coefficients[side][i] = dsp.svf_coefficients(s.chain.type, swept ? hz[i] : cutoff, resonant ? q[i] : res, s.chain.gain)
 		}
 	}
 	dsp.filter_chain_run_split(&s.chain, coefficients[0][:n], coefficients[1][:n], l, r)
@@ -864,7 +868,7 @@ process_one_pole :: proc(c: ^Node_Call) {
 				x, out := side == 0 ? il : ir, side == 0 ? l : r
 				swept, cutoff := node_curve(c, &lane, ONE_POLE_FREQUENCY, base_hz, hz[:n], side)
 				for i in 0 ..< n {
-					ks[i] = 1 - dsp.exp_decay(-math.TAU * min(swept ? hz[i] : cutoff, 0.49 * RATE) / RATE)
+					ks[i] = 1 - dsp.exp_decay(-math.TAU * clamp(swept ? hz[i] : cutoff, 0, 0.49 * RATE) / RATE)
 				}
 				y := s.y[side]
 				for i in 0 ..< n {
@@ -878,11 +882,11 @@ process_one_pole :: proc(c: ^Node_Call) {
 		swept, cutoff := node_curve(c, &lane, ONE_POLE_FREQUENCY, base_hz, hz[:n])
 		if swept {
 			for i in 0 ..< n {
-				ks[i] = 1 - dsp.exp_decay(-math.TAU * min(hz[i], 0.49 * RATE) / RATE)
+				ks[i] = 1 - dsp.exp_decay(-math.TAU * clamp(hz[i], 0, 0.49 * RATE) / RATE)
 			}
 		} else if cutoff != s.hz {
 			// a steady modulator's, or a lane moved its base
-			s.k = 1 - dsp.exp_decay(-math.TAU * min(cutoff, 0.49 * RATE) / RATE)
+			s.k = 1 - dsp.exp_decay(-math.TAU * clamp(cutoff, 0, 0.49 * RATE) / RATE)
 			s.hz = cutoff
 		}
 		for side in 0 ..< (c.node.stereo ? 2 : 1) {
@@ -951,7 +955,7 @@ tanh_ladder :: #force_inline proc "contextless" (x: f32) -> f32 {
 ladder :: proc(y: ^[4]f32, x_last: ^f32, x: []f32, hz: []f32, q: []f32) {
 	for i in 0 ..< len(x) {
 		res := clamp(q[i], 0, 11) / 10
-		g := 1 - dsp.exp_decay(-math.TAU * min(hz[i], 18000) / (2 * RATE))
+		g := 1 - dsp.exp_decay(-math.TAU * clamp(hz[i], 0, 18000) / (2 * RATE))
 		xi := x[i]
 		out: f32
 		for step in 0 ..< 2 {
@@ -1171,11 +1175,12 @@ COMB_RELEASE :: 6
 
 @(private = "file")
 Comb_State :: struct {
-	line:  [2][COMB_LINE]f32, // a side each (the second when it reads two sides)
-	write: int,
-	lp:    [2]f32,
-	k:     f32, // the low-pass's (1: none)
-	delay: f64, // samples (a note's period: shortened by the low-pass's own delay there, so it is in tune)
+	line:     [2][COMB_LINE]f32, // a side each (the second when it reads two sides)
+	write:    int,
+	lp:       [2]f32,
+	k:        f32, // the low-pass's (1: none)
+	lp_delay: f64, // samples the low-pass adds at the note's pitch
+	delay:    f64, // samples (a note's period: shortened by the low-pass's own delay there, so it is in tune)
 }
 
 @(private = "file")
@@ -1183,12 +1188,12 @@ comb_start :: proc(c: ^Node_Call, lane: ^Lane, s: ^Comb_State) {
 	damp := f64(node_value(c, lane, COMB_DAMP))
 	k := damp > 0 ? dsp.one_pole_k(damp) : 1
 	s.k = f32(k)
+	f := max(lane.hz, RATE / f64(COMB_LINE - 2))
+	w := math.TAU * f / RATE
+	s.lp_delay = k < 1 ? math.atan2((1 - k) * math.sin(w), 1 - (1 - k) * math.cos(w)) / w : 0
 	d := f64(node_values(c, lane)[COMB_DELAY]) * RATE // its base: what moves it moves it per sample
 	if d <= 0 {
-		f := max(lane.hz, RATE / f64(COMB_LINE - 2))
-		w := math.TAU * f / RATE
-		lp_delay := k < 1 ? math.atan2((1 - k) * math.sin(w), 1 - (1 - k) * math.cos(w)) / w : 0
-		d = RATE / f - lp_delay
+		d = RATE / f - s.lp_delay
 	}
 	s.delay = clamp(d, 1, COMB_LINE - 2)
 }
@@ -1213,6 +1218,7 @@ process_comb :: proc(c: ^Node_Call) {
 		s := node_state(c, &lane, Comb_State)
 		fb := node_value(c, &lane, COMB_FEEDBACK)
 		release := f64(node_value(c, &lane, COMB_RELEASE)) * RATE
+		pitched := node_values(c, &lane)[COMB_DELAY] <= 0
 		// its delay over the chunk: once, or a side each where a modulator
 		// of two sides moves it (it splits)
 		delays: [2][NODE_CHUNK]f32 = ---
@@ -1235,6 +1241,9 @@ process_comb :: proc(c: ^Node_Call) {
 		ins := [2][]f32{il, ir}
 		outs := [2][]f32{l, r}
 		for i in 0 ..< n {
+			if pitched && lane.glide != nil {
+				s.delay = clamp(RATE / max(lane.glide[i], RATE / f64(COMB_LINE - 2)) - s.lp_delay, 1, COMB_LINE - 2)
+			}
 			t := lane.at + i64(i)
 			fade := f32(1)
 			if release > 0 && t >= lane.gate {
@@ -1252,11 +1261,14 @@ process_comb :: proc(c: ^Node_Call) {
 				line := &s.line[side]
 				delayed := line[i0 & (COMB_LINE - 1)] * (1 - fr) + line[(i0 + 1) & (COMB_LINE - 1)] * fr
 				s.lp[side] += s.k * (delayed - s.lp[side])
-				y := ins[side][i] + fb * fade * s.lp[side]
+				y := dsp.flush_denormal(ins[side][i] + fb * fade * s.lp[side])
 				line[s.write] = y
 				outs[side][i] = y
 			}
 			s.write = (s.write + 1) & (COMB_LINE - 1)
+		}
+		for side in 0 ..< sides {
+			s.lp[side] = dsp.flush_denormal(s.lp[side])
 		}
 	}
 }
@@ -1490,13 +1502,14 @@ process_segments :: proc(c: ^Node_Call) {
 		}
 		held := int(clamp(lane.gate - lane.at, 0, i64(len(l))))
 		for i in 0 ..< held {
-			l[i] = segments_level(&w, min(f64(lane.at + i64(i)) / RATE, w.at[sustain]))
+			t := f64(lane.at + i64(i)) / RATE
+			l[i] = t >= w.at[sustain] ? v[SEGMENTS_LEVELS + sustain] : segments_level(&w, t)
 		}
 		if held == len(l) {
 			continue
 		}
 		gate := f64(lane.gate) / RATE
-		from := segments_level(&w, min(gate, w.at[sustain]))
+		from := gate >= w.at[sustain] ? v[SEGMENTS_LEVELS + sustain] : segments_level(&w, gate)
 		if sustain + 1 >= w.points {
 			for i in held ..< len(l) {
 				l[i] = from
@@ -1513,6 +1526,7 @@ process_segments :: proc(c: ^Node_Call) {
 			}
 			l[i] = from + (to - from) * f32(r / first)
 		}
+		w.k = sustain + 1
 		for ; i < len(l); i += 1 {
 			r := f64(lane.at + i64(i)) / RATE - gate
 			l[i] = segments_level(&w, w.at[sustain + 1] + (r - first))

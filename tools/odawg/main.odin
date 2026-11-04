@@ -113,7 +113,11 @@ main :: proc() {
 				continue args
 			}
 			i += 1
-			value := argv[i] if i < len(argv) else ""
+			if i >= len(argv) {
+				fmt.eprintfln("odawg: %s takes a value", argv[i - 1])
+				os.exit(2)
+			}
+			value := argv[i]
 			if row.kind == .Number {
 				(^int)(field)^ = int(f64_from(value))
 			} else {

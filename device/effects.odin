@@ -177,15 +177,16 @@ FX_FORGET :: 9.21
 // by 80 dB: FX_FORGET of their slower pole's time constants (an overdamped
 // stage's slow pole is slower than its cutoff), and one more a stage.
 @(private = "file")
-fx_svf_memory :: proc(hz, q: f64, stages: int) -> f64 {
-	d := 1 / (2 * max(q, 0.01))
+fx_svf_memory :: proc(type: dsp.Filter_Type, hz, q, gain: f64, stages: int) -> f64 {
+	shape := dsp.SVF_SHAPES[type](q, gain)
+	d := shape.k / 2
 	sigma := 2 * math.PI * max(hz, 1) * (d - math.sqrt(max(d * d - 1, 0)))
-	return (FX_FORGET + f64(max(stages, 1) - 1)) / sigma
+	return (FX_FORGET + f64(max(stages, 1) - 1)) / max(sigma, 1e-3)
 }
 
 @(private)
 memory_filter :: proc(p: ^Params) -> Effect_Memory {
-	t := fx_svf_memory(f64(p[.Frequency]), f64(p[.Q]), dsp.rolloff_stages(p[.Rolloff]))
+	t := fx_svf_memory(fx_filter_type(p[.Type]), f64(p[.Frequency]), f64(p[.Q]), f64(p[.Gain]), dsp.rolloff_stages(p[.Rolloff]))
 	return {t, t}
 }
 
@@ -193,14 +194,14 @@ memory_filter :: proc(p: ^Params) -> Effect_Memory {
 // .Low_Frequency, then the high crossover's allpass.
 @(private)
 memory_crossover :: proc(p: ^Params) -> Effect_Memory {
-	t := fx_svf_memory(f64(p[.Low_Frequency]), math.SQRT_TWO / 2, 3)
+	t := fx_svf_memory(.Lowpass, f64(p[.Low_Frequency]), -20 * math.log10(f64(math.SQRT_TWO)), 0, 3)
 	return {t, t}
 }
 
 // At its lowest cutoff, .Base_Frequency, where it rings longest.
 @(private)
 memory_swept_filter :: proc(p: ^Params) -> Effect_Memory {
-	t := fx_svf_memory(f64(p[.Base_Frequency]), f64(p[.Filter_Q]), dsp.rolloff_stages(p[.Filter_Rolloff]))
+	t := fx_svf_memory(fx_filter_type(p[.Filter_Type]), f64(p[.Base_Frequency]), f64(p[.Filter_Q]), 0, dsp.rolloff_stages(p[.Filter_Rolloff]))
 	return {t, t}
 }
 
