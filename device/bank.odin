@@ -157,12 +157,12 @@ sample_f32 :: proc(b: ^Bank, s: Sample) -> []f32 {return b.f32s[s.chunk][s.at:][
 
 sample_i16 :: proc(b: ^Bank, s: Sample) -> []i16 {return b.i16s[s.chunk][s.at:][:s.frames * i64(s.channels)]}
 
-// A new chunk of `n` 16-bit values the bank owns.
-bank_chunk_i16 :: proc(b: ^Bank, n: int) -> (i32, []i16) {
-	c := make([]i16, n, b.sets.allocator)
-	append(&b.i16s, c)
+// `values` as a chunk the bank owns: made with its allocator (b.sets's), and
+// freed with it.
+bank_chunk_i16 :: proc(b: ^Bank, values: []i16) -> i32 {
+	append(&b.i16s, values)
 	append(&b.owned, Chunk{.I16, i32(len(b.i16s) - 1)})
-	return i32(len(b.i16s) - 1), c
+	return i32(len(b.i16s) - 1)
 }
 
 bank_destroy :: proc(b: ^Bank) {

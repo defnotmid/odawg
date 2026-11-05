@@ -5,6 +5,7 @@ import base "../base"
 import device "../device"
 import "core:fmt"
 import "core:math"
+import "core:mem"
 import "core:mem/virtual"
 import "core:os"
 import "core:strings"
@@ -300,11 +301,13 @@ bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Ne
 		}
 	}
 	// each file read once and decoded, side by side, into PCM at RATE (a
-	// recording at another rate resampled once, here), then each a chunk of
-	// the bank, in order
+	// recording at another rate resampled once, here) in the bank's memory,
+	// then each a chunk of the bank, in order
+	chunks: mem.Mutex_Allocator
+	mem.mutex_allocator_init(&chunks, bank.sets.allocator)
 	jobs := make([]Decode_Job, len(wanted), context.temp_allocator)
 	for w, k in wanted {
-		jobs[k] = {file = -1, host = host}
+		jobs[k] = {file = -1, host = host, chunks = mem.mutex_allocator(&chunks)}
 		if w.file < 0 {
 			continue
 		}
@@ -338,10 +341,8 @@ bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Ne
 			append(&bank.f32s, j.lent)
 			append(&bank.samples, device.Sample{chunk = i32(len(bank.f32s) - 1), frames = i64(len(j.lent) / j.channels), channels = u8(min(j.channels, 255)), format = .F32, rate = i32(j.rate)})
 		} else {
-			chunk, values := device.bank_chunk_i16(bank, len(j.pcm))
-			copy(values, j.pcm)
-			delete(j.pcm, runtime.heap_allocator())
-			append(&bank.samples, device.Sample{chunk = chunk, frames = i64(len(values) / j.channels), channels = u8(j.channels), format = .I16, rate = i32(j.rate)})
+			chunk := device.bank_chunk_i16(bank, j.pcm)
+			append(&bank.samples, device.Sample{chunk = chunk, frames = i64(len(j.pcm) / j.channels), channels = u8(j.channels), format = .I16, rate = i32(j.rate)})
 		}
 		// every zone playing the file has it (one an earlier load didn't reach too)
 		for zi in 0 ..< len(bank.zones) {
@@ -363,7 +364,7 @@ bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Ne
 }
 
 // One file to decode: what it is, and what came of it (16-bit PCM in at
-// most two channels on the heap, at its own rate, its loop; or why not).
+// most two channels, at its own rate, its loop; or why not).
 @(private = "file")
 Decode_Job :: struct {
 	file:                i32, // into the bank's files (-1: not to decode)
@@ -371,6 +372,7 @@ Decode_Job :: struct {
 	name:                string, // what a finding calls it
 	host:                ^Bank_Host,
 	hosted:              bool, // the host decodes it (lent)
+	chunks:              runtime.Allocator, // the bank's, a thread at a time: what its PCM is made with
 	pcm:                 []i16,
 	lent:                []f32,
 	channels, rate:      int,
@@ -378,21 +380,19 @@ Decode_Job :: struct {
 	err:                 string,
 }
 
-// Decodes the jobs on every core (a scratch arena each for the file).
+// What a thread keeps of a file's scratch for its next file (address space
+// until a file uses it; what a bigger file uses beyond it goes with that file).
+@(private)
+SCRATCH_KEPT :: 16 * mem.Megabyte
+
+// Decodes the jobs on every core (a scratch arena each thread, reused from
+// file to file, gone when the files are).
 @(private = "file")
 decode_all :: proc(jobs: []Decode_Job, pool: ^common.Work_Pool) {
 	run :: proc(j: ^Decode_Job) {
 		if j.file < 0 {
 			return
 		}
-		scratch: virtual.Arena
-		if virtual.arena_init_growing(&scratch) != nil {
-			j.err = "out of memory"
-			return
-		}
-		defer virtual.arena_destroy(&scratch)
-		context.allocator = virtual.arena_allocator(&scratch)
-		context.temp_allocator = virtual.arena_allocator(&scratch)
 		if j.hosted {
 			got, result := j.host.read(j.host.data, j.name)
 			switch {
@@ -410,7 +410,7 @@ decode_all :: proc(jobs: []Decode_Job, pool: ^common.Work_Pool) {
 				}
 				// at another rate: ours, at RATE
 				j.hosted = false
-				j.pcm = pcm_at_rate(got.samples, got.channels, j.rate)
+				j.pcm = pcm_at_rate(got.samples, got.channels, j.rate, j.chunks)
 				at_rate(j)
 				return
 			}
@@ -430,12 +430,12 @@ decode_all :: proc(jobs: []Decode_Job, pool: ^common.Work_Pool) {
 		d: Decoded
 		derr: Error
 		if info.rate == device.RATE || info.rate <= 0 {
-			j.pcm, d, derr = decode_i16(data, 2, runtime.heap_allocator())
+			j.pcm, d, derr = decode_i16(data, 2, j.chunks)
 		} else {
 			samples: []f32
 			samples, d, derr = decode_f32(data, 2)
 			if derr == nil {
-				j.pcm = pcm_at_rate(samples, d.channels, d.rate)
+				j.pcm = pcm_at_rate(samples, d.channels, d.rate, j.chunks)
 			}
 		}
 		if derr != nil {
@@ -447,10 +447,10 @@ decode_all :: proc(jobs: []Decode_Job, pool: ^common.Work_Pool) {
 		j.loop_from, j.loop_to = d.loop_from, d.loop_to
 		at_rate(j)
 	}
-	// `samples` (`channels` interleaved, at `rate`) at RATE, in 16 bits on the heap
-	pcm_at_rate :: proc(samples: []f32, channels, rate: int) -> []i16 {
+	// `samples` (`channels` interleaved, at `rate`) at RATE, in 16 bits
+	pcm_at_rate :: proc(samples: []f32, channels, rate: int, allocator: runtime.Allocator) -> []i16 {
 		at := resample(samples, channels, rate, context.temp_allocator)
-		pcm := make([]i16, len(at), runtime.heap_allocator())
+		pcm := make([]i16, len(at), allocator)
 		for v, i in at {
 			s := math.is_nan(v) ? 0 : clamp(math.round(v * 32768), -32768, 32767)
 			pcm[i] = i16(s)
@@ -473,12 +473,24 @@ decode_all :: proc(jobs: []Decode_Job, pool: ^common.Work_Pool) {
 	decodes := Decodes{jobs, 0, run}
 	each :: proc(data: rawptr, first, end: int) {
 		d := (^Decodes)(data)
-		for {
-			i := sync.atomic_add(&d.next, 1)
-			if i >= len(d.jobs) {
-				return
+		// a pool may call this for many ranges: the first on a thread takes
+		// files until they run out, and what finds none left makes nothing
+		i := sync.atomic_add(&d.next, 1)
+		if i >= len(d.jobs) {
+			return
+		}
+		scratch: virtual.Arena
+		made := virtual.arena_init_growing(&scratch, SCRATCH_KEPT)
+		defer virtual.arena_destroy(&scratch)
+		context.allocator = virtual.arena_allocator(&scratch)
+		context.temp_allocator = context.allocator
+		for ; i < len(d.jobs); i = sync.atomic_add(&d.next, 1) {
+			if made != nil {
+				d.jobs[i].err = "out of memory"
+				continue
 			}
 			d.run(&d.jobs[i])
+			virtual.arena_free_all(&scratch)
 		}
 	}
 	if pool == nil || len(jobs) <= 1 {

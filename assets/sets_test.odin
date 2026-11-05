@@ -1,6 +1,7 @@
 package odawg_assets
 
 import "core:fmt"
+import "core:hash"
 import "core:math"
 import "core:mem/virtual"
 import "core:os"
@@ -14,6 +15,7 @@ import render "../render"
 import song "../song"
 import spec "../spec"
 import wav "deps:oicut/audio/wav"
+import common "deps:oicut/common"
 
 // A mono 16-bit WAV at `rate` of `frames` frames of a sine at `hz`.
 @(private = "file")
@@ -590,4 +592,125 @@ test_style_source_for_song_part :: proc(t: ^testing.T) {
 	s := new(song.Song)
 	testing.expect(t, song.song_from_spec(sp, s, &bank))
 	testing.expectf(t, song.part_index(s, "own") >= 0 && s.tracks[0].instrument >= 0, "%v", s.findings[:])
+}
+
+// A set's samples are the same loaded side by side as one at a time, by every
+// way they reach the bank: decoded at RATE, resampled, cut short, a host's
+// lent as they are, a host's at another rate. What is decoded is the bank's
+// chunk, freed with it. A file whose scratch passes what a thread keeps leaves
+// nothing in what follows it.
+@(test)
+test_load_on_a_pool :: proc(t: ^testing.T) {
+	root := scratch_root("pool")
+	defer os.remove_all(root)
+	whole := sine_wav(48000, 9600, 220)
+	write(t, root, "at_rate.wav", whole)
+	write(t, root, "other.wav", sine_wav(44100, 4410, 330))
+	write(t, root, "cut.wav", whole[:len(whole) / 2])
+	write(t, root, "lent.wav", whole)
+	write(t, root, "host_other.wav", whole)
+	// the file, its floats, then those at RATE: over 10 bytes a frame in scratch
+	BIG_FRAMES :: SCRATCH_KEPT / 8
+	#assert(BIG_FRAMES * 10 > SCRATCH_KEPT)
+	write(t, root, "big.wav", sine_wav(44100, BIG_FRAMES, 110))
+	Result :: struct {
+		frames:   i64,
+		channels: u8,
+		format:   device.Sample_Format,
+		values:   u64,
+	}
+	Host_Audio :: struct {
+		lent, other: []f32,
+	}
+	audio := Host_Audio{make([]f32, 4800), make([]f32, 2205)}
+	defer delete(audio.lent)
+	defer delete(audio.other)
+	for i in 0 ..< len(audio.lent) {
+		audio.lent[i] = f32(i % 100) / 200
+	}
+	for i in 0 ..< len(audio.other) {
+		audio.other[i] = f32(i % 50) / 100
+	}
+	load :: proc(t: ^testing.T, root: string, audio: ^Host_Audio, threads: int, big: bool) -> []Result {
+		// the bank on this test's allocator, which sees any free it didn't make
+		bank: device.Bank
+		init_tables(&bank)
+		defer device.bank_destroy(&bank)
+		arena: virtual.Arena
+		_ = virtual.arena_init_growing(&arena)
+		defer virtual.arena_destroy(&arena)
+		out := make([]Result, big ? 6 : 5)
+		context.allocator = virtual.arena_allocator(&arena)
+		findings := make(base.Findings)
+		sp := new(spec.Spec)
+		text := strings.concatenate({`{ bpm: 120, chords: "C", sections: [ { name: "a", duration: "1m" } ],
+			sets: { tones: { zones: [ `, big ? `{ file: "big.wav", root: "C1" }, ` : "", `{ file: "at_rate.wav", root: "C2" }, { file: "other.wav", root: "C3" }, { file: "cut.wav", root: "C4" },
+			                          { file: "lent.wav", root: "C5" }, { file: "host_other.wav", root: "C6" } ] } },
+			parts: { p: { instrument: { name: "Sampler", set: "tones" }, play: [ { name: "a", notes: "C4" } ] } } }`})
+		testing.expect(t, spec.spec_from_json(text, sp, &findings))
+		host := Bank_Host {
+			root = root,
+			data = audio,
+			read = proc(data: rawptr, path: string) -> (Host_Samples, Host_Read) {
+				a := (^Host_Audio)(data)
+				switch path {
+				case "lent.wav":
+					return {samples = a.lent, channels = 1, rate = device.RATE}, .Read
+				case "host_other.wav":
+					return {samples = a.other, channels = 1, rate = 22050}, .Read
+				}
+				return {}, .Declined
+			},
+		}
+		pool: common.Static_Pool
+		if threads > 0 {
+			common.init_static_pool(&pool, threads)
+			host.pool = &pool.work_pool
+		}
+		defer if threads > 0 {
+			common.destroy_static_pool(&pool)
+		}
+		testing.expect(t, bank_declare_spec(&bank, sp, &findings, &host))
+		set, found := device.bank_set_from_name(&bank, spec.asset_key(sp, "tones"))
+		testing.expect(t, found)
+		testing.expect(t, bank_load(&bank, {{set = set, keys = ~bit_set[0 ..< 128;u128]{}}}, &findings, nil, &host))
+		testing.expectf(t, !has_code(findings, "asset_unavailable"), "%v", findings)
+		zs := set_row(&bank, set).zones
+		testing.expect_value(t, int(zs.count), len(out))
+		for i in 0 ..< min(int(zs.count), len(out)) {
+			z := bank.zones[int(zs.first) + i]
+			testing.expect(t, z.sample >= 0)
+			sm := bank.samples[z.sample]
+			h: u64
+			switch sm.format {
+			case .I16:
+				h = hash.fnv64a(slice.to_bytes(device.sample_i16(&bank, sm)))
+			case .F32:
+				h = hash.fnv64a(slice.to_bytes(device.sample_f32(&bank, sm)))
+			}
+			out[i] = {sm.frames, sm.channels, sm.format, h}
+		}
+		// all but the host's lent one are the bank's own
+		testing.expect_value(t, len(bank.owned), len(out) - 1)
+		return out
+	}
+	serial := load(t, root, &audio, 0, false)
+	defer delete(serial)
+	pooled := load(t, root, &audio, 4, false)
+	defer delete(pooled)
+	testing.expect(t, slice.equal(serial, pooled), "the same samples on a pool")
+	testing.expect_value(t, serial[0].frames, i64(9600))
+	testing.expect_value(t, serial[1].frames, i64(4800)) // 0.1 s at 44100
+	testing.expect(t, serial[2].frames > 0 && serial[2].frames < 9600)
+	testing.expect_value(t, serial[3].format, device.Sample_Format.F32)
+	testing.expect_value(t, serial[3].frames, i64(4800))
+	testing.expect_value(t, serial[4].frames, i64(4800)) // 0.1 s at 22050
+	// the big file first: on one thread the rest follow it on the same arena
+	after_big := load(t, root, &audio, 0, true)
+	defer delete(after_big)
+	after_big_pooled := load(t, root, &audio, 4, true)
+	defer delete(after_big_pooled)
+	testing.expect(t, slice.equal(after_big, after_big_pooled), "the same samples on a pool, with the big file")
+	testing.expect(t, slice.equal(after_big[1:], serial), "what follows the big file is as if it weren't there")
+	testing.expect(t, abs(after_big[0].frames - i64(BIG_FRAMES) * 48000 / 44100) <= 1)
 }
