@@ -278,14 +278,14 @@ append_set :: proc(bank: ^device.Bank, name: string, stamp: u64, drafts: []Zone_
 		})
 		append(&bank.zone_file, z.file)
 	}
-	append(&bank.sets, device.Sample_Set{name = bank_text(bank, name), zones = {first, i32(len(bank.zones)) - first}, stamp = stamp})
+	device.bank_set_append(bank, bank_text(bank, name), {first, i32(len(bank.zones)) - first}, stamp)
 }
 
 // Whether a set named `name` is in the bank at `stamp` already.
 @(private)
 declared_at :: proc(bank: ^device.Bank, name: string, stamp: u64) -> bool {
 	set, found := device.bank_set_from_name(bank, name)
-	return found && bank.sets[set].stamp == stamp
+	return found && bank.sets[device.bank_set_row(bank, set)].stamp == stamp
 }
 
 // Keys split between roots: each zone without a range answers from midway

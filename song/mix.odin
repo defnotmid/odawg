@@ -35,9 +35,11 @@ append_song :: proc(m: ^Song, s: ^Song, at: base.Seconds, prefix: string, gain: 
 	send0, ret0, track0, note0 := i32(len(m.sends)), i32(len(m.returns)), i32(len(m.tracks)), i32(len(m.notes))
 	bus0, place0 := i32(len(m.buses)), i32(len(m.placements))
 	shift :: proc(sp: Span, by: i32) -> Span {return {sp.first + by, sp.count}}
+	under :: proc(prefix, id: string) -> string {return id != "" ? strings.concatenate({prefix, "/", id}) : ""}
 	for p, i in s.parts {
 		append(&m.parts, strings.concatenate({prefix, "/", p}))
 		append(&m.roles, i < len(s.roles) ? s.roles[i] : Part_Role(0))
+		append(&m.part_given_ids, under(prefix, i < len(s.part_given_ids) ? s.part_given_ids[i] : ""))
 	}
 	ctl0 := i32(len(m.programs.controls))
 	prog0 := programs_append(&m.programs, &s.programs)
@@ -46,6 +48,7 @@ append_song :: proc(m: ^Song, s: ^Song, at: base.Seconds, prefix: string, gain: 
 	}
 	append(&m.devices, ..s.devices[:])
 	append(&m.labels, ..s.labels[:])
+	append(&m.device_given_ids, ..s.device_given_ids[:])
 	for p, i in s.params {
 		x := p
 		if device.DEVICE_TABLE[s.devices[i]].program {
@@ -60,7 +63,7 @@ append_song :: proc(m: ^Song, s: ^Song, at: base.Seconds, prefix: string, gain: 
 		append(&m.sends, Send{snd.ret + ret0, snd.gain})
 	}
 	for r in s.returns {
-		append(&m.returns, Return{strings.concatenate({prefix, "/", r.name}), shift(r.chain, chain0)})
+		append(&m.returns, Return{strings.concatenate({prefix, "/", r.name}), under(prefix, r.id), shift(r.chain, chain0)})
 	}
 	for t in s.tracks {
 		x := t
@@ -89,6 +92,7 @@ append_song :: proc(m: ^Song, s: ^Song, at: base.Seconds, prefix: string, gain: 
 		n.time += at
 		n.track += u16(track0)
 		append_soa(&m.notes, n)
+		append(&m.note_ids, s.note_ids[i])
 	}
 	for r in s.regions {
 		append(&m.regions, Region{r.part + part0, r.start + at, r.stop + at, r.source})
@@ -97,7 +101,7 @@ append_song :: proc(m: ^Song, s: ^Song, at: base.Seconds, prefix: string, gain: 
 	// past what is there; what went to its master goes to its placement's
 	// node (graph_build)
 	for b in s.buses {
-		append(&m.buses, Bus{strings.concatenate({prefix, "/", b.name}), shift(b.chain, chain0)})
+		append(&m.buses, Bus{strings.concatenate({prefix, "/", b.name}), under(prefix, b.id), shift(b.chain, chain0)})
 	}
 	moved :: proc(n: Node, part0, ret0, bus0: i32) -> Node {
 		#partial switch n.kind {
@@ -183,7 +187,8 @@ append_song :: proc(m: ^Song, s: ^Song, at: base.Seconds, prefix: string, gain: 
 // `rate`, mix time t plays the set at offset + (t - start) * rate.
 Clip :: struct {
 	name:     string, // its part ("music.mp3", "intro")
-	set:      i32, // into bank.sets
+	id:       string, // what its nodes' ids are made from ("": its name; of several of one name, each its own: else the nth of a name is what names it)
+	set:      device.Set_Id,
 	start:    base.Seconds,
 	stop:     base.Seconds,
 	offset:   base.Seconds,
@@ -213,6 +218,7 @@ append_clip :: proc(m: ^Song, c: Clip) -> i32 {
 	part := i32(len(m.parts))
 	append(&m.parts, strings.clone(c.name))
 	append(&m.roles, Part_Role(0))
+	append(&m.part_given_ids, strings.clone(c.id))
 	// a program of one node: the Clip, playing the set from its offset
 	node := device.Node_Desc{name = "clip", kind = device.NODE_CLIP, values = device.node_defaults(device.NODE_CLIP)}
 	node.values[device.CLIP_SET] = f32(c.set)
@@ -227,6 +233,7 @@ append_clip :: proc(m: ^Song, c: Clip) -> i32 {
 	p[.Program] = f32(device.compile_program(&m.programs, &desc, &m.findings))
 	append(&m.devices, device.Device_Kind.Voice)
 	append(&m.labels, "Player")
+	append(&m.device_given_ids, "")
 	append(&m.params, p)
 	t := Track{part = part, style = -1, instrument = i32(len(m.devices) - 1), gain = c.gain.? or_else 1, room = 1, pan = c.pan, pan_law = .Balance, notes = {i32(len(m.notes)), 1}}
 	if c.effects != nil {
@@ -244,6 +251,7 @@ append_clip :: proc(m: ^Song, c: Clip) -> i32 {
 	track := i32(len(m.tracks))
 	append(&m.tracks, t)
 	append_soa(&m.notes, Note_Row{time = c.start, duration = c.stop - c.start, velocity = 1, track = u16(track)})
+	append(&m.note_ids, 0)
 	if c.voice {
 		append(&m.voices, [2]base.Seconds{c.start, c.stop}) // speech: what a spans sidechain ducks under
 	}
@@ -266,6 +274,7 @@ duck_under_voice :: proc(floor: Maybe(base.Gain), attack, hold, release, merge: 
 mix_end :: proc(m: ^Song) {
 	sort_regions(m)
 	graph_build(m)
+	ids_build(m, true)
 	notes_by_time(m)
 	slice.sort_by(m.voices[:], proc(a, b: [2]base.Seconds) -> bool {return a[0] < b[0]})
 }

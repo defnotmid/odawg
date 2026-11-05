@@ -33,11 +33,12 @@ test_tables :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	defer virtual.arena_destroy(&arena)
 	s := compose(t, &arena)
-	drums := i32(song.part_index(s, "drums"))
-	testing.expect(t, drums >= 0)
+	drums_row := song.part_index(s, "drums")
+	testing.expect(t, drums_row >= 0)
+	drums := song.part_id(s, drums_row)
 	energy, spectrum, peaks: Table
-	table_init(&energy, s, .Energy, -1, RATE, 30)
-	table_init(&spectrum, s, .Spectrum, -1, RATE, 30, 512, .Hann)
+	table_init(&energy, s, .Energy, 0, RATE, 30)
+	table_init(&spectrum, s, .Spectrum, 0, RATE, 30, 512, .Hann)
 	table_init(&peaks, s, .Peaks, drums, 256, 1)
 	defer table_destroy(&energy)
 	defer table_destroy(&spectrum)
@@ -75,7 +76,7 @@ test_tables :: proc(t: ^testing.T) {
 			worst = max(worst, abs(v - bins[k]))
 		}
 	}
-	st := whole.stems[drums]
+	st := whole.stems[drums_row]
 	for i in 0 ..< (n + 255) / 256 {
 		at := row_start(&peaks, i)
 		lo, hi: f32
@@ -101,11 +102,11 @@ test_commands :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	defer virtual.arena_destroy(&arena)
 	s := compose(t, &arena)
-	drums := i32(song.part_index(s, "drums"))
-	bass := i32(song.part_index(s, "bass"))
-	testing.expect(t, drums >= 0 && bass >= 0)
+	drums_row, bass_row := song.part_index(s, "drums"), song.part_index(s, "bass")
+	testing.expect(t, drums_row >= 0 && bass_row >= 0)
+	drums, bass := song.part_id(s, drums_row), song.part_id(s, bass_row)
 	mix, kick, low: Table
-	table_init(&mix, s, .Peaks, -1, 256, 1)
+	table_init(&mix, s, .Peaks, 0, 256, 1)
 	table_init(&kick, s, .Peaks, drums, 256, 1)
 	table_init(&low, s, .Peaks, bass, 256, 1)
 	defer table_destroy(&mix)
@@ -150,14 +151,14 @@ test_tables_shape :: proc(t: ^testing.T) {
 	s := new(song.Song)
 	testing.expect(t, song.song_from_spec(sp, s))
 	lead: Table
-	table_init(&lead, s, .Peaks, i32(song.part_index(s, "lead")), 256, 1, allocator = context.temp_allocator)
+	table_init(&lead, s, .Peaks, song.part_id(s, song.part_index(s, "lead")), 256, 1, allocator = context.temp_allocator)
 	testing.expect_value(t, len(lead.spans), 2)
 	full := (frames_from_song(s) + 255) / 256
 	testing.expectf(t, lead.rows < full * 3 / 4, "lead has %d rows of %d", lead.rows, full)
 	testing.expect(t, table_row(&lead, 5 * RATE / 256) == nil) // section b: silent
 	// with the mix's table too, both its spans are the render's
 	mix: Table
-	table_init(&mix, s, .Peaks, -1, 256, 1, allocator = context.temp_allocator)
+	table_init(&mix, s, .Peaks, 0, 256, 1, allocator = context.temp_allocator)
 	tp12 := test_pool(3)
 	defer test_pool_free(tp12)
 	tables_build(s, {&lead, &mix}, &tp12.work_pool)
@@ -188,8 +189,8 @@ test_tables_shape :: proc(t: ^testing.T) {
 	testing.expect_value(t, rows, lead.rows)
 	// filled from the caller's buffers instead: the same rows
 	lead2, mix2: Table
-	table_init(&lead2, s, .Peaks, lead.stem, 256, 1, allocator = context.temp_allocator)
-	table_init(&mix2, s, .Peaks, -1, 256, 1, allocator = context.temp_allocator)
+	table_init(&lead2, s, .Peaks, lead.source, 256, 1, allocator = context.temp_allocator)
+	table_init(&mix2, s, .Peaks, 0, 256, 1, allocator = context.temp_allocator)
 	testing.expect(t, table_stale(s, &lead2))
 	// the samples into the caller's own buffers: the same as Output's
 	buf := make([]f32, 2 * whole.frames * (1 + len(s.parts)), context.temp_allocator)
@@ -231,11 +232,11 @@ test_table_fill_steps :: proc(t: ^testing.T) {
 	defer virtual.arena_destroy(&arena)
 	s := compose(t, &arena)
 	context.allocator = virtual.arena_allocator(&arena)
-	drums := i32(song.part_index(s, "drums"))
-	init :: proc(s: ^song.Song, drums: i32, set: ^[4]Table) {
-		table_init(&set[0], s, .Energy, -1, RATE, 30)
-		table_init(&set[1], s, .Spectrum, -1, RATE, 30, 512, .Hann)
-		table_init(&set[2], s, .Bands, -1, 4096, 1)
+	drums := song.part_id(s, song.part_index(s, "drums"))
+	init :: proc(s: ^song.Song, drums: song.Node_Id, set: ^[4]Table) {
+		table_init(&set[0], s, .Energy, 0, RATE, 30)
+		table_init(&set[1], s, .Spectrum, 0, RATE, 30, 512, .Hann)
+		table_init(&set[2], s, .Bands, 0, 4096, 1)
 		table_init(&set[3], s, .Peaks, drums, 256, 1)
 	}
 	built, held: [4]Table
@@ -247,8 +248,8 @@ test_table_fill_steps :: proc(t: ^testing.T) {
 	SEGMENT :: 4 * RATE
 	for &tb in held {
 		src := [2][]f32{whole.left, whole.right}
-		if tb.stem >= 0 {
-			src = whole.stems[tb.stem]
+		if stem := stem_from_id(s, tb.source); stem >= 0 {
+			src = whole.stems[stem]
 		}
 		w := table_window(&tb)
 		steps := (n * tb.step_den + tb.step_num - 1) / tb.step_num
@@ -269,4 +270,40 @@ test_table_fill_steps :: proc(t: ^testing.T) {
 	for k in 0 ..< 4 {
 		testing.expectf(t, slice.equal(built[k].values, held[k].values), "%v a segment at a time differs from tables_build", built[k].kind)
 	}
+}
+
+// A table names what it measures by id: every stem's id comes back to it, the
+// mix is none, and a node the song hasn't gives a table with no rows, which a
+// build leaves alone beside one that has them.
+@(test)
+test_table_source :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	s := compose(t, &arena)
+	context.allocator = virtual.arena_allocator(&arena)
+	testing.expect_value(t, stem_from_id(s, 0), i32(STEM_MIX))
+	for stem in 0 ..< stem_count(s) {
+		testing.expect_value(t, stem_from_id(s, stem_id(s, stem)), i32(stem))
+	}
+	testing.expect_value(t, stem_from_id(s, song.Node_Id(base.name_id("part nothing"))), i32(STEM_NONE))
+	// a track is a node and no stem
+	testing.expect_value(t, stem_from_id(s, s.node_ids[0]), i32(STEM_NONE))
+	drums := song.part_index(s, "drums")
+	gone, good: Table
+	table_init(&gone, s, .Peaks, song.Node_Id(base.name_id("part nothing")), 256, 1)
+	table_init(&good, s, .Peaks, song.part_id(s, drums), 256, 1)
+	testing.expect_value(t, gone.rows, 0)
+	testing.expect(t, good.rows > 0)
+	testing.expect(t, !table_stale(s, &gone))
+	testing.expect(t, table_stale(s, &good))
+	tables_build(s, {&gone, &good})
+	testing.expect(t, !table_stale(s, &good))
+	whole := output_from_song(s, {to = base.seconds_from_samples(i64(good.frames)), stems = true})
+	st := whole.stems[drums]
+	loudest: f32
+	for v in good.values {
+		loudest = max(loudest, abs(v))
+	}
+	testing.expect(t, loudest > 0.001)
+	testing.expect(t, loudest <= peak_from_samples(st[0], st[1]) + 1e-5)
 }

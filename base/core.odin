@@ -44,6 +44,22 @@ name_id :: proc "contextless" (name: string) -> u32 {
 	return h == 0 ? 1 : h
 }
 
+// What names a row from outside a build: the id of what it is called, so
+// every build and every machine gives the same one, and the nth of one name
+// (a section repeated, a file placed twice) an id of its own. `seen`: the
+// table's, over one pass in row order. Never 0.
+row_id :: proc(seen: ^map[u32]u32, name: string) -> u32 {
+	return row_id_from_hash(seen, name_id(name))
+}
+
+// The same from a row's hash, where more than a name makes it.
+row_id_from_hash :: proc(seen: ^map[u32]u32, hash: u32) -> u32 {
+	id := max(hash, 1)
+	n := seen^[id]
+	seen^[id] = n + 1
+	return n == 0 ? id : u32(hash_combine(u64(id), u64(n))) | 1
+}
+
 // 0..1 from a hash.
 hash_unit :: proc "contextless" (x: u64) -> f64 {return f64(hash64(x) >> 11) / f64(u64(1) << 53)}
 

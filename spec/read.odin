@@ -142,6 +142,7 @@ SPEC_FIELDS := []Field_Row {
 }
 
 SECTION_FIELDS := []Field_Row {
+	{"id", .String, offset_of(Section_Spec, id)},
 	{"name", .String, offset_of(Section_Spec, name)},
 	{"duration", .Time, offset_of(Section_Spec, duration)},
 	{"start", .Number, offset_of(Section_Spec, start)},
@@ -159,6 +160,7 @@ SECTION_FIELDS := []Field_Row {
 }
 
 PART_FIELDS := []Field_Row {
+	{"id", .String, offset_of(Part_Spec, id)},
 	{"instrument", .Device, offset_of(Part_Spec, instrument)},
 	{"gain_db", .Number, offset_of(Part_Spec, gain_db)},
 	{"pan", .Number, offset_of(Part_Spec, pan)},
@@ -225,6 +227,7 @@ EVENT_FIELDS := []Field_Row {
 }
 
 MARKER_FIELDS := []Field_Row {
+	{"id", .String, offset_of(Marker_Spec, id)},
 	{"name", .String, offset_of(Marker_Spec, name)},
 	{"at", .Time, offset_of(Marker_Spec, at)},
 }
@@ -261,6 +264,7 @@ SOURCE_FIELDS := []Field_Row {
 }
 
 BUS_FIELDS := []Field_Row {
+	{"id", .String, offset_of(Bus_Spec, id)},
 	{"effects", .Chain, offset_of(Bus_Spec, chain)},
 	{"to", .String, offset_of(Bus_Spec, to)},
 	{"key", .String, offset_of(Bus_Spec, key)},
@@ -308,7 +312,7 @@ spec_init :: proc(s: ^Spec, allocator := context.allocator) {
 	s.values.allocator, s.chain.allocator, s.sends.allocator = allocator, allocator, allocator
 	s.returns.allocator, s.markers.allocator, s.room.allocator = allocator, allocator, allocator
 	s.automation.allocator, s.automation_points.allocator = allocator, allocator
-	s.strings.allocator, s.styles.allocator, s.buses.allocator = allocator, allocator, allocator
+	s.styles.allocator, s.buses.allocator = allocator, allocator
 	s.sets.allocator, s.set_zones.allocator, s.sources.allocator = allocator, allocator, allocator
 	s.instruments.allocator, s.instrument_includes.allocator, s.instrument_files.allocator = allocator, allocator, allocator
 	s.effects.allocator, s.effect_includes.allocator = allocator, allocator
@@ -908,7 +912,15 @@ read_returns_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr)
 		return
 	}
 	for name in names {
-		append(&r.spec.returns, Return_Spec{strings.clone(name), chain_from_value(r, o[name], base.path_join(path, name))})
+		at, chain, id := base.path_join(path, name), o[name], ""
+		// { id = "h1", effects = { ... } }: its id, and its chain under a key
+		if x, is_object := chain.(json.Object); is_object {
+			if fx, has := x["effects"]; has {
+				s, _ := x["id"].(json.String)
+				at, chain, id = base.path_join(at, "effects"), fx, strings.clone(s)
+			}
+		}
+		append(&r.spec.returns, Return_Spec{strings.clone(name), id, chain_from_value(r, chain, at)})
 	}
 }
 
@@ -1256,7 +1268,7 @@ read_room_field :: proc(r: ^Reader, v: json.Value, path: string, dst: rawptr) {
 // written, read into a program where the chain is placed, its name looked
 // up in the `effects` tables then).
 device_from_value :: proc(r: ^Reader, v: json.Value, path: string) -> i32 {
-	name: string
+	name, id: string
 	o: json.Object
 	#partial switch x in v {
 	case json.String:
@@ -1268,16 +1280,19 @@ device_from_value :: proc(r: ^Reader, v: json.Value, path: string) -> i32 {
 		} else if s, ok := x["class"].(json.String); ok {
 			name = s
 		}
+		if s, ok := x["id"].(json.String); ok {
+			id = strings.clone(s)
+		}
 	case:
 		bad(r, path, "an effect: a name, { name, options }, or a row ({ nodes = { ... } })")
 		return -1
 	}
 	kind, known := device.device_from_name(name)
 	if !known {
-		append(&r.spec.devices, Device_Spec{kind = .Row, path = strings.clone(path), row = json.clone_value(v)})
+		append(&r.spec.devices, Device_Spec{kind = .Row, id = id, path = strings.clone(path), row = json.clone_value(v)})
 		return i32(len(r.spec.devices) - 1)
 	}
-	d := Device_Spec{kind = kind, values = {i32(len(r.spec.values)), 0}, path = strings.clone(path)}
+	d := Device_Spec{kind = kind, id = id, values = {i32(len(r.spec.values)), 0}, path = strings.clone(path)}
 	if o != nil {
 		read_options(r, o, "", path, &d)
 	}
@@ -1291,7 +1306,7 @@ read_options :: proc(r: ^Reader, o: json.Object, prefix, path: string, d: ^Devic
 	keys := sorted_keys(o)
 	reads := device.DEVICE_TABLE[d.kind].reads
 	for k in keys {
-		if prefix == "" && (k == "name" || k == "class") {
+		if prefix == "" && (k == "name" || k == "class" || k == "id") {
 			continue
 		}
 		key := prefix == "" ? k : strings.concatenate({prefix, "/", k}, context.temp_allocator)
@@ -1339,20 +1354,15 @@ set_option :: proc(r: ^Reader, d: ^Device_Spec, p: device.Param, v: json.Value, 
 		}
 		value = f32(n)
 	} else if s, is_string := v.(json.String); is_string {
-		if row.unit == .Asset {
-			value = f32(len(r.spec.strings))
-			append(&r.spec.strings, strings.clone(s))
-		} else {
-			beats, ok: bool
-			expect: string
-			value, beats, expect, ok = unit_from_text(row.unit, row.choices, s)
-			if !ok {
-				bad(r, path, expect)
-				return
-			}
-			if beats {
-				d.beats += {p} // the composer turns beats (cycles a beat) into seconds (Hz)
-			}
+		beats, ok: bool
+		expect: string
+		value, beats, expect, ok = unit_from_text(row.unit, row.choices, s)
+		if !ok {
+			bad(r, path, expect)
+			return
+		}
+		if beats {
+			d.beats += {p} // the composer turns beats (cycles a beat) into seconds (Hz)
 		}
 	} else {
 		bad(r, path, "a number or a string")

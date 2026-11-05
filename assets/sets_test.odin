@@ -5,6 +5,7 @@ import "core:math"
 import "core:mem/virtual"
 import "core:os"
 import "core:path/filepath"
+import "core:slice"
 import "core:strings"
 import "core:testing"
 import base "../base"
@@ -23,6 +24,11 @@ sine_wav :: proc(rate, frames: int, hz: f64) -> []u8 {
 	}
 	data, _ := wav.encode(samples, rate, 1, .S16, context.temp_allocator)
 	return data
+}
+
+@(private = "file")
+set_row :: proc(b: ^device.Bank, id: device.Set_Id) -> device.Sample_Set {
+	return b.sets[device.bank_set_row(b, id)]
 }
 
 @(private = "file")
@@ -84,12 +90,12 @@ test_inline_set :: proc(t: ^testing.T) {
 	testing.expect(t, bank_declare_spec(&bank, sp, &findings, &host, &files))
 	testing.expect_value(t, len(files), 3)
 	keys, found := device.bank_set_from_name(&bank, spec.asset_key(sp, "keys"))
-	testing.expect(t, found && strings.has_prefix(bank.sets[keys].name, "keys#"))
-	zs := bank.sets[keys].zones
+	testing.expect(t, found && strings.has_prefix(set_row(&bank, keys).name, "keys#"))
+	zs := set_row(&bank, keys).zones
 	lo, hi := bank.zones[zs.first], bank.zones[zs.first + 1]
 	testing.expectf(t, lo.lo_key == 0 && lo.hi_key == 54 && hi.lo_key == 55 && hi.hi_key == 127, "split: %d..%d, %d..%d", lo.lo_key, lo.hi_key, hi.lo_key, hi.hi_key)
 	kit, _ := device.bank_set_from_name(&bank, spec.asset_key(sp, "kit"))
-	kick := bank.zones[bank.sets[kit].zones.first]
+	kick := bank.zones[set_row(&bank, kit).zones.first]
 	testing.expect(t, kick.lo_key == 36 && kick.hi_key == 36 && kick.one_shot)
 	s := new(song.Song)
 	testing.expect(t, song.song_from_spec(sp, s, &bank))
@@ -107,7 +113,25 @@ test_inline_set :: proc(t: ^testing.T) {
 	write(t, root, "keys/c4.wav", sine_wav(44100, 11025, 261.63))
 	testing.expect(t, bank_declare_spec(&bank, sp, &findings, &host))
 	newer, _ := device.bank_set_from_name(&bank, spec.asset_key(sp, "keys"))
-	testing.expect(t, int(newer) > int(keys) && bank.sets[newer].stamp != bank.sets[keys].stamp)
+	testing.expect(t, int(newer) > int(keys) && set_row(&bank, newer).stamp != set_row(&bank, keys).stamp)
+	// the song still names the old one, so it stays until its song goes
+	live := make([dynamic]device.Set_Id)
+	song.sets_of_song(s, &live)
+	testing.expect(t, device.bank_collect(&bank, live[:]) == 1) // only the new one: no song names it
+	testing.expect(t, device.bank_set_row(&bank, keys) >= 0 && device.bank_set_row(&bank, newer) < 0)
+	again := render.output_from_song(s, {})
+	testing.expect_value(t, again.frames, out.frames)
+	testing.expect(t, slice.equal(again.left, out.left), "the song plays the same after its bank is collected")
+	// composed again, the song names what the file is now; the old set goes
+	testing.expect(t, bank_declare_spec(&bank, sp, &findings, &host))
+	newest, _ := device.bank_set_from_name(&bank, spec.asset_key(sp, "keys"))
+	s2 := new(song.Song)
+	testing.expect(t, song.song_from_spec(sp, s2, &bank))
+	clear(&live)
+	song.sets_of_song(s2, &live)
+	testing.expect(t, device.bank_collect(&bank, live[:]) == 1)
+	testing.expect(t, device.bank_set_row(&bank, keys) < 0 && device.bank_set_row(&bank, newest) >= 0)
+	testing.expect(t, device.bank_set_row(&bank, kit) >= 0, "a set unchanged keeps its id")
 }
 
 // A host that decodes its own files lends them: the bank plays its floats
@@ -156,7 +180,7 @@ test_host_read :: proc(t: ^testing.T) {
 	set, _ := device.bank_set_from_name(&bank, spec.asset_key(sp, "tone"))
 	testing.expect(t, bank_load(&bank, {{set = set, keys = ~bit_set[0 ..< 128;u128]{}}}, &findings, nil, &host))
 	testing.expect_value(t, mine.reads, 2)
-	zs := bank.sets[set].zones
+	zs := set_row(&bank, set).zones
 	smp := bank.samples[bank.zones[zs.first].sample]
 	testing.expect(t, smp.format == .F32 && smp.rate == device.RATE && smp.channels == 2)
 	testing.expect(t, raw_data(device.sample_f32(&bank, smp)) == raw_data(mine.samples)) // lent, not copied
@@ -199,14 +223,14 @@ test_sfz :: proc(t: ^testing.T) {
 	// a zone per region with a sample, in the file's order (the release
 	// region's too): what each region's Region node plays, by index; how it
 	// plays (its tune, level, loop, round robin) is its program's
-	zs := bank.zones[bank.sets[set].zones.first:][:bank.sets[set].zones.count]
+	zs := bank.zones[set_row(&bank, set).zones.first:][:set_row(&bank, set).zones.count]
 	testing.expect_value(t, len(zs), 5)
 	soft := zs[0]
 	testing.expect(t, soft.lo_key == 60 && soft.hi_key == 66 && soft.hi_velocity == 63)
 	testing.expect(t, zs[1].lo_velocity == 64 && zs[2].lo_velocity == 64)
-	testing.expect(t, bank.files[bank.zone_file[bank.sets[set].zones.first + 1]].path == "inst/samples/c4_loud_1.wav")
+	testing.expect(t, bank.files[bank.zone_file[set_row(&bank, set).zones.first + 1]].path == "inst/samples/c4_loud_1.wav")
 	testing.expectf(t, zs[3].lo_key == 67 && zs[3].root == 67, "g4: key %d root %f", zs[3].lo_key, zs[3].root)
-	testing.expect(t, bank.files[bank.zone_file[bank.sets[set].zones.first + 4]].path == "inst/samples/rel.wav")
+	testing.expect(t, bank.files[bank.zone_file[set_row(&bank, set).zones.first + 4]].path == "inst/samples/rel.wav")
 	testing.expect(t, bank_load(&bank, {{set = set, keys = ~bit_set[0 ..< 128;u128]{}}}, &findings, nil, &host))
 	testing.expect(t, !has_code(findings, "asset_unavailable"))
 }
@@ -328,7 +352,7 @@ test_source_pins :: proc(t: ^testing.T) {
 	testing.expect(t, len(files) == 1 && files[0] == "lib.pins") // the fetched files aren't the song's own
 	set, found := device.bank_set_from_name(&bank, "lib/lib.sfz")
 	testing.expect(t, found)
-	zs := bank.sets[set].zones
+	zs := set_row(&bank, set).zones
 	s := new(song.Song)
 	testing.expect(t, song.song_from_spec(sp, s, &bank))
 	needs := make([dynamic]device.Sample_Need)
@@ -405,7 +429,7 @@ test_pad_list :: proc(t: ^testing.T) {
 	host := Bank_Host{root = root}
 	testing.expect(t, bank_declare_spec(&bank, sp, &findings, &host))
 	set, _ := device.bank_set_from_name(&bank, spec.asset_key(sp, "perc"))
-	zs := bank.zones[bank.sets[set].zones.first:][:bank.sets[set].zones.count]
+	zs := bank.zones[set_row(&bank, set).zones.first:][:set_row(&bank, set).zones.count]
 	testing.expect_value(t, len(zs), 4)
 	claps, tambs := 0, 0
 	for z in zs {

@@ -143,7 +143,7 @@ declare_set :: proc(bank: ^device.Bank, s: ^Set_Row) -> Error {
 		})
 		append(&bank.zone_file, file)
 	}
-	append(&bank.sets, device.Sample_Set{name = s.name, zones = {first_zone, i32(len(bank.zones)) - first_zone}})
+	device.bank_set_append(bank, s.name, {first_zone, i32(len(bank.zones)) - first_zone})
 	return nil
 }
 
@@ -196,16 +196,17 @@ bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Ne
 	// the files the needs reach, once each (a finding names the set)
 	Wanted :: struct {
 		file: i32,
-		set:  i32,
+		set:  device.Set_Id,
 	}
 	wanted := make([dynamic]Wanted, context.temp_allocator)
 	for need in needs {
-		if need.set < 0 || int(need.set) >= len(bank.sets) {
+		row := device.bank_set_row(bank, need.set)
+		if row < 0 {
 			continue
 		}
 		// the zones a Sampler would pick for each key and velocity played (of
 		// a round robin, all of them)
-		zs := bank.sets[need.set].zones
+		zs := bank.sets[row].zones
 		reached := make([]bool, zs.count, context.temp_allocator)
 		for key in need.keys {
 			velocities := need.velocities[key]
@@ -213,7 +214,7 @@ bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Ne
 				velocities = ~bit_set[0 ..< 128;u128]{}
 			}
 			for v in velocities {
-				best_key, best_vel, _ := device.zone_nearest(bank, int(need.set), key, v)
+				best_key, best_vel, _ := device.zone_nearest(bank, row, key, v)
 				for zi in zs.first ..< base.span_end(zs) {
 					reached[zi - zs.first] ||= device.zone_is_nearest(&bank.zones[zi], key, v, best_key, best_vel)
 				}
@@ -244,12 +245,12 @@ bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Ne
 	ok := true
 	// what can't be had is one finding per set: how many of its files, and why
 	Missing :: struct {
-		set:   i32,
+		set:   device.Set_Id,
 		count: int,
 		why:   string,
 	}
 	missing := make([dynamic]Missing, context.temp_allocator)
-	miss :: proc(missing: ^[dynamic]Missing, set: i32, why: string) {
+	miss :: proc(missing: ^[dynamic]Missing, set: device.Set_Id, why: string) {
 		for &m in missing {
 			if m.set == set {
 				m.count += 1
@@ -259,7 +260,7 @@ bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Ne
 		append(missing, Missing{set, 1, why})
 	}
 	defer for m in missing {
-		name := bank.sets[m.set].name
+		name := bank.sets[device.bank_set_row(bank, m.set)].name
 		base.report(findings, "asset_unavailable", .Error, name, "%s: %d of its files can't be had (%s); they play once they can be", name, m.count, m.why)
 	}
 	// the register's fetched first where they aren't on disk (on first use)

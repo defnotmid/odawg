@@ -314,7 +314,7 @@ test_load_set :: proc(t: ^testing.T) {
 	findings := make(base.Findings, context.temp_allocator)
 	err := declare_set(&bank, s)
 	testing.expectf(t, err == nil, "%v", err)
-	testing.expect(t, bank_load_at(&bank, root, {{set = 0, keys = ~bit_set[0 ..< 128;u128]{}}}, &findings, trust_disk = true))
+	testing.expect(t, bank_load_at(&bank, root, {{set = bank.sets[0].id, keys = ~bit_set[0 ..< 128;u128]{}}}, &findings, trust_disk = true))
 	testing.expect_value(t, len(bank.sets), 1)
 	testing.expect_value(t, int(bank.sets[0].zones.count), int(s.zones.count))
 	testing.expect_value(t, len(bank.samples), int(s.zones.count)) // a file each
@@ -350,7 +350,7 @@ test_load_set :: proc(t: ^testing.T) {
 	// the sampler plays it
 	set, found := device.bank_set_from_name(&bank, "karoryfer/growlybass")
 	testing.expect(t, found)
-	testing.expect(t, device.zone_for(&bank, int(set), 40, 100, 3) >= 0)
+	testing.expect(t, device.zone_for(&bank, set, 40, 100, 3) >= 0)
 }
 
 // Offline (no proxy answers): a set not on disk is declared (a song can

@@ -46,22 +46,52 @@ needs_of_program :: proc(s: ^Song, play: i32, layer: i32, key: f32, velocity: f3
 			// a Region plays one zone of its set (its layer's), whatever the key
 			set := device.layer_value(&s.programs, layer, play, j, device.REGION_SET)
 			zone := device.layer_value(&s.programs, layer, play, j, device.REGION_ZONE)
-			add_zone_need(out, i32(set), i32(zone))
+			add_zone_need(out, device.Set_Id(set), i32(zone))
 			continue
 		}
 		// a sample set a node plays: a field of its kind's that is one
 		row := device.node_row(node.kind)
 		for f, fi in row.fields {
 			if f.unit == .Asset {
-				add_need(out, i32(node.values[row.slots[fi]]), key, velocity)
+				add_need(out, device.Set_Id(node.values[row.slots[fi]]), key, velocity)
+			}
+		}
+	}
+}
+
+// The sets a song names, whether or not it reaches them or they are loaded:
+// what a host keeps for it when it collects the bank (device.bank_collect).
+sets_of_song :: proc(s: ^Song, out: ^[dynamic]device.Set_Id) {
+	add :: proc(out: ^[dynamic]device.Set_Id, v: f32) {
+		if set := device.Set_Id(v); set != 0 && !slice.contains(out[:], set) {
+			append(out, set)
+		}
+	}
+	for node in s.programs.nodes {
+		row := device.node_row(node.kind)
+		for f, fi in row.fields {
+			if f.unit == .Asset {
+				add(out, node.values[row.slots[fi]])
+			}
+		}
+	}
+	// a layer's own: an SFZ's regions over one program, a set a layer
+	for pr in s.programs.layers {
+		if pr.program < 0 {
+			continue
+		}
+		first := s.programs.programs[pr.program].nodes.first
+		for p in s.programs.layer_params[pr.params.first:base.span_end(pr.params)] {
+			if s.programs.nodes[first + i32(p.node)].kind == device.NODE_REGION && int(p.slot) == device.REGION_SET {
+				add(out, p.value)
 			}
 		}
 	}
 }
 
 @(private = "file")
-add_zone_need :: proc(out: ^[dynamic]device.Sample_Need, set: i32, zone: i32) {
-	if set < 0 || zone < 0 {
+add_zone_need :: proc(out: ^[dynamic]device.Sample_Need, set: device.Set_Id, zone: i32) {
+	if set == 0 || zone < 0 {
 		return
 	}
 	for &x in out {
@@ -79,8 +109,8 @@ add_zone_need :: proc(out: ^[dynamic]device.Sample_Need, set: i32, zone: i32) {
 }
 
 @(private = "file")
-add_need :: proc(out: ^[dynamic]device.Sample_Need, set: i32, key: f32, velocity: f32) {
-	if set < 0 {
+add_need :: proc(out: ^[dynamic]device.Sample_Need, set: device.Set_Id, key: f32, velocity: f32) {
+	if set == 0 {
 		return
 	}
 	need: ^device.Sample_Need

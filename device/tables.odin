@@ -22,7 +22,7 @@ Unit :: enum u8 {
 	Db,
 	Cents,
 	Choice, // one of the row's choices, stored as its index
-	Asset, // a sample set by name ("vcsl/upright_piano"), stored as its index in the Bank
+	Asset, // a sample set by name ("vcsl/upright_piano"), stored as its id (0: none)
 	Table, // a table of CURVE_POINTS (a Curve's), stored as its index in Programs.tables
 	Gain, // a level written in dB, kept linear (a node's gain_db)
 }

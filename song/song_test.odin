@@ -3,9 +3,11 @@ package odawg_song
 import "core:fmt"
 import "core:math"
 import "core:mem/virtual"
+import "core:slice"
 import "core:strings"
 import "core:testing"
 import base "../base"
+import device "../device"
 import spec "../spec"
 
 // The example files (examples/): styles, instruments and machines, at the
@@ -816,4 +818,273 @@ test_sfz_layer_params_preserved :: proc(t: ^testing.T) {
 	testing.expect_value(t, int(l2.params.count), 1)
 	testing.expectf(t, abs(s.programs.layer_params[l1.params.first].value - (-2)) < 1e-5, "region 1 tune = %g, want -2", s.programs.layer_params[l1.params.first].value)
 	testing.expectf(t, abs(s.programs.layer_params[l2.params.first].value - 3) < 1e-5, "region 2 tune = %g, want 3", s.programs.layer_params[l2.params.first].value)
+}
+
+@(private = "file")
+IDS_FIRST :: `{ bpm: 120, chords: "C", sections: [ { name: "a", duration: "1m" } ],
+	returns: { hall: { id: "room", effects: [ { name: "Reverb" } ] } },
+	buses: { glue: { effects: [ { name: "Compressor" } ] } },
+	parts: { lead: { instrument: { name: "Synth" }, to: "glue", play: [ { name: "a", notes: "C4" } ] },
+	         pad: { id: "p1", instrument: { name: "Synth" }, sends: { hall: -12 }, play: [ { name: "a", notes: "E4" } ] } } }`
+
+// A part added before them, a pad renamed, a return renamed: the rows move
+// and what names them doesn't.
+@(private = "file")
+IDS_SECOND :: `{ bpm: 120, chords: "C", sections: [ { name: "a", duration: "1m" } ],
+	returns: { plate: { id: "room", effects: [ { name: "Reverb" } ] } },
+	buses: { glue: { effects: [ { name: "Compressor" } ] } },
+	parts: { aa: { instrument: { name: "Synth" }, play: [ { name: "a", notes: "G4" } ] },
+	         lead: { instrument: { name: "Synth" }, to: "glue", play: [ { name: "a", notes: "C4" } ] },
+	         solo: { id: "p1", instrument: { name: "Synth" }, sends: { plate: -12 }, play: [ { name: "a", notes: "E4" } ] } } }`
+
+// A node's id is the same on every build of its song, wherever its row goes,
+// and renaming what has an id of its own keeps it.
+@(test)
+test_node_ids :: proc(t: ^testing.T) {
+	a1, a2, a3: virtual.Arena
+	defer virtual.arena_destroy(&a1)
+	defer virtual.arena_destroy(&a2)
+	defer virtual.arena_destroy(&a3)
+	first := compose(t, IDS_FIRST, &a1)
+	second := compose(t, IDS_SECOND, &a2)
+	again := compose(t, IDS_FIRST, &a3)
+	testing.expect(t, part_index(first, "lead") != part_index(second, "lead"), "the part moved")
+	lead := part_id(first, part_index(first, "lead"))
+	testing.expect(t, lead == part_id(second, part_index(second, "lead")))
+	testing.expect_value(t, node_from_id(second, lead), part_node(second, part_index(second, "lead")))
+	testing.expect(t, part_id(first, part_index(first, "pad")) == part_id(second, part_index(second, "solo")), "renamed, with an id")
+	testing.expect_value(t, first.node_ids[return_node(first, 0)], second.node_ids[return_node(second, 0)])
+	testing.expect_value(t, first.node_ids[bus_node(first, 0)], second.node_ids[bus_node(second, 0)])
+	testing.expect_value(t, first.node_ids[master_node(first)], second.node_ids[master_node(second)])
+	// a track follows its part
+	track_of :: proc(s: ^Song, part: string) -> Node_Id {
+		for tr, ti in s.tracks {
+			if s.parts[tr.part] == part {
+				return s.node_ids[ti]
+			}
+		}
+		return 0
+	}
+	testing.expect(t, track_of(first, "pad") == track_of(second, "solo") && track_of(first, "pad") != 0)
+	// what this build doesn't have, nothing, and no two alike
+	testing.expect_value(t, node_from_id(first, part_id(second, part_index(second, "aa"))), -1)
+	testing.expect_value(t, node_from_id(first, 0), -1)
+	testing.expect_value(t, len(first.node_ids), len(first.nodes))
+	for id, k in first.node_ids {
+		testing.expect(t, id != 0)
+		testing.expect_value(t, again.node_ids[k], id)
+		for other in first.node_ids[:k] {
+			testing.expect(t, other != id)
+		}
+	}
+}
+
+// Two parts given one id is a mistake the song says, not one it hides.
+@(test)
+test_part_id_twice :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	s := compose(t, `{ bpm: 120, chords: "C", sections: [ { name: "a", duration: "1m" } ],
+		parts: { x: { id: "same", instrument: { name: "Synth" }, play: [ { name: "a", notes: "C4" } ] },
+		         y: { id: "same", instrument: { name: "Synth" }, play: [ { name: "a", notes: "E4" } ] } } }`, &arena)
+	testing.expect(t, has(s, "bad_value"))
+	testing.expect(t, part_id(s, 0) != part_id(s, 1))
+}
+
+// A section repeated is the nth of its name; an id keeps one through a rename
+// and a section added before it. Markers the same.
+@(test)
+test_section_marker_ids :: proc(t: ^testing.T) {
+	a1, a2: virtual.Arena
+	defer virtual.arena_destroy(&a1)
+	defer virtual.arena_destroy(&a2)
+	first := compose(t, `{ bpm: 120, chords: "C",
+		sections: [ { name: "verse", duration: "1m" }, { name: "chorus", id: "c1", duration: "1m" }, { name: "verse", duration: "1m" } ],
+		markers: [ { name: "hit", id: "m1", at: "1m" }, { name: "end", at: "2m" } ] }`, &a1)
+	second := compose(t, `{ bpm: 120, chords: "C",
+		sections: [ { name: "intro", duration: "1m" }, { name: "verse", duration: "1m" }, { name: "hook", id: "c1", duration: "1m" }, { name: "verse", duration: "1m" } ],
+		markers: [ { name: "start", at: "1m" }, { name: "drop", id: "m1", at: "1m" }, { name: "end", at: "2m" } ] }`, &a2)
+	testing.expect(t, first.sections[0].id != 0 && first.sections[0].id != first.sections[2].id, "a repeat is its own")
+	testing.expect_value(t, first.sections[0].id, second.sections[1].id)
+	testing.expect_value(t, first.sections[2].id, second.sections[3].id)
+	testing.expect_value(t, first.sections[1].id, second.sections[2].id)
+	testing.expect_value(t, row_from_ref(second, {.Section, u32(first.sections[1].id)}), 2)
+	testing.expect_value(t, row_from_ref(first, {.Section, u32(second.sections[0].id)}), -1)
+	testing.expect_value(t, first.markers[0].id, second.markers[1].id)
+	testing.expect_value(t, first.markers[1].id, second.markers[2].id)
+	testing.expect_value(t, row_from_ref(second, {.Marker, u32(first.markers[0].id)}), 1)
+	testing.expect_value(t, row_from_ref(first, {.Marker, u32(second.markers[0].id)}), -1)
+}
+
+// An effect with an id is named by it, whichever of its kind it is in the
+// chain: a Filter added before it leaves the path on it.
+@(test)
+test_effect_id :: proc(t: ^testing.T) {
+	check :: proc(t: ^testing.T, effects: string, tone: int) {
+		arena: virtual.Arena
+		defer virtual.arena_destroy(&arena)
+		s := compose(t, strings.concatenate({`{ bpm: 120, chords: "C", sections: [ { name: "a", duration: "1m" } ],
+			parts: { p: { instrument: { name: "Synth" }, effects: `, effects, `, play: [ { name: "a", notes: "C4" } ] } } }`}, context.temp_allocator), &arena)
+		context.allocator = virtual.arena_allocator(&arena)
+		testing.expect(t, !has(s, "unknown_key"))
+		testing.expect(t, !has(s, "bad_value"))
+		testing.expect(t, command_apply(s, {.Effect_Param_Set, "p/effects/tone/frequency", 1234}))
+		chain := s.chain[s.tracks[0].chain.first:base.span_end(s.tracks[0].chain)]
+		for d, i in chain {
+			testing.expectf(t, (s.params[d][device.Param.Frequency] == 1234) == (i == tone), "effect %d of %d: %v", i, len(chain), s.params[d][device.Param.Frequency])
+		}
+	}
+	check(t, `[ { name: "Filter", id: "tone", frequency: 500 }, { name: "Filter", frequency: 900 } ]`, 0)
+	check(t, `[ { name: "Filter", frequency: 900 }, { name: "Filter", id: "tone", frequency: 500 } ]`, 1)
+}
+
+// Clips: an id of its own follows a clip wherever it is placed; of several of
+// one name without one, each is the nth of the name. A placed song's parts
+// keep theirs under its name, whatever came before it.
+@(test)
+test_clip_and_placed_ids :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	_ = virtual.arena_init_growing(&arena)
+	context.allocator = virtual.arena_allocator(&arena)
+	a, b: Song
+	mix_init(&a)
+	append_clip(&a, {name = "take.wav", id = "one", start = 0, stop = 1})
+	append_clip(&a, {name = "take.wav", id = "two", start = 1, stop = 2})
+	append_clip(&a, {name = "bed.wav", start = 0, stop = 2})
+	append_clip(&a, {name = "bed.wav", start = 2, stop = 4})
+	mix_end(&a)
+	mix_init(&b)
+	append_clip(&b, {name = "take.wav", id = "two", start = 1, stop = 2})
+	append_clip(&b, {name = "bed.wav", start = 0, stop = 2})
+	append_clip(&b, {name = "take.wav", id = "one", start = 0, stop = 1})
+	append_clip(&b, {name = "bed.wav", start = 2, stop = 4})
+	mix_end(&b)
+	testing.expect_value(t, part_id(&a, 0), part_id(&b, 2))
+	testing.expect_value(t, part_id(&a, 1), part_id(&b, 0))
+	testing.expect(t, part_id(&a, 0) != part_id(&a, 1), "one name, two ids")
+	testing.expect(t, part_id(&a, 2) != part_id(&a, 3), "the nth of a name")
+	testing.expect_value(t, part_id(&a, 2), part_id(&b, 1))
+	testing.expect_value(t, part_id(&a, 3), part_id(&b, 3))
+	placed :: proc(t: ^testing.T, first_a_clip: bool, spec_text: string, part: string) -> Node_Id {
+		arena := new(virtual.Arena)
+		defer virtual.arena_destroy(arena)
+		g := compose(t, spec_text, arena)
+		m: Song
+		mix_init(&m)
+		if first_a_clip {
+			append_clip(&m, {name = "bed.wav", start = 0, stop = 2})
+		}
+		append_song(&m, g, 0, "score")
+		mix_end(&m)
+		return part_id(&m, part_index(&m, strings.concatenate({"score/", part}, context.temp_allocator)))
+	}
+	testing.expect_value(t, placed(t, false, IDS_FIRST, "lead"), placed(t, true, IDS_SECOND, "lead"))
+	testing.expect_value(t, placed(t, false, IDS_FIRST, "pad"), placed(t, true, IDS_SECOND, "solo"))
+}
+
+@(private = "file")
+note_ids_of :: proc(s: ^Song, part: string) -> []Note_Id {
+	out := make([dynamic]Note_Id, context.temp_allocator)
+	for tr in s.tracks {
+		if s.parts[tr.part] == part {
+			for i in tr.notes.first ..< base.span_end(tr.notes) {
+				append(&out, s.note_ids[i])
+			}
+		}
+	}
+	slice.sort(out[:])
+	return out[:]
+}
+
+// A note's id: parts moving, the tempo and a section before it leave it;
+// another pitch is another note; two alike are each their own.
+@(test)
+test_note_ids :: proc(t: ^testing.T) {
+	a1, a2, a3: virtual.Arena
+	defer virtual.arena_destroy(&a1)
+	defer virtual.arena_destroy(&a2)
+	defer virtual.arena_destroy(&a3)
+	first := compose(t, `{ bpm: 120, chords: "C", sections: [ { name: "v", id: "v1", duration: "1m" } ],
+		parts: { lead: { instrument: { name: "Synth" }, play: [ { name: "v", notes: "C4 E4 C4 E4" } ] } } }`, &a1)
+	moved := compose(t, `{ bpm: 97, chords: "C", sections: [ { name: "in", duration: "2m" }, { name: "v", id: "v1", duration: "1m" } ],
+		parts: { aa: { instrument: { name: "Synth" }, play: [ { name: "in", notes: "G4" } ] },
+		         lead: { instrument: { name: "Synth" }, play: [ { name: "v", notes: "C4 E4 C4 E4" } ] } } }`, &a2)
+	changed := compose(t, `{ bpm: 120, chords: "C", sections: [ { name: "v", id: "v1", duration: "1m" } ],
+		parts: { lead: { instrument: { name: "Synth" }, play: [ { name: "v", notes: "C4 E4 D4 E4" } ] } } }`, &a3)
+	before := note_ids_of(first, "lead")
+	testing.expect(t, len(before) > 0)
+	testing.expect_value(t, len(first.note_ids), len(first.notes))
+	testing.expect(t, slice.equal(before, note_ids_of(moved, "lead")), "the part, the tempo and a section moved")
+	for id, i in before {
+		testing.expect(t, id != 0)
+		if i > 0 {
+			testing.expect(t, id != before[i - 1], "each its own")
+		}
+	}
+	after := note_ids_of(changed, "lead")
+	same := 0
+	for id in before {
+		same += slice.contains(after, id) ? 1 : 0
+	}
+	testing.expect(t, same > 0 && same < len(before), "only the changed notes are new")
+}
+
+// Every table a host can show counts its rows and gives each an id of its own,
+// and the id comes back to its row; a row's ref means nothing once it's gone.
+@(test)
+test_row_kinds :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	s := compose(t, `{ key: "A minor", seed: 3,
+		sections: [ { name: "a", duration: "2m", bpm: 110, style: "styles/house.json", energy: 0.8, chords: "Am F" } ],
+		markers: [ { name: "m", at: "1m" } ],
+		automation: { "parts/lead/gain_db": [ [ "a", 0 ] ] },
+		returns: { hall: [ { name: "Reverb" } ] },
+		parts: { lead: { instrument: { name: "Synth" }, effects: [ { name: "Filter" }, { name: "Filter" } ], sends: { hall: -9 }, play: [ { name: "a", notes: "C4 E4" } ] } } }`, &arena)
+	for kind in Row_Kind {
+		k := ROW_KINDS[kind]
+		n := k.count(s)
+		if kind != .None {
+			testing.expectf(t, n > 0, "%s has rows", k.name)
+		}
+		seen := make(map[u32]bool, n, context.temp_allocator)
+		for row in 0 ..< n {
+			ref := row_ref(s, kind, row)
+			testing.expectf(t, ref.id != 0, "%s %d has an id", k.name, row)
+			testing.expectf(t, !seen[ref.id], "%s %d has its own", k.name, row)
+			seen[ref.id] = true
+			testing.expect_value(t, row_from_ref(s, ref), row)
+		}
+		testing.expect_value(t, row_from_ref(s, {kind, 0}), -1)
+	}
+	// parallel to what they name
+	testing.expect_value(t, len(s.device_ids), len(s.devices))
+	testing.expect_value(t, len(s.edge_ids), len(s.edges))
+	testing.expect_value(t, len(s.region_ids), len(s.regions))
+	testing.expect_value(t, len(s.lane_ids), len(s.automation))
+}
+
+// A placed song's notes keep their ids whatever came before it in the mix.
+@(test)
+test_placed_note_ids :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	g := compose(t, IDS_FIRST, &arena)
+	context.allocator = virtual.arena_allocator(&arena)
+	a, b: Song
+	mix_init(&a)
+	append_song(&a, g, 0, "score")
+	mix_end(&a)
+	mix_init(&b)
+	append_clip(&b, {name = "bed.wav", start = 0, stop = 2})
+	append_song(&b, g, 3, "score")
+	append_song(&b, g, 9, "again")
+	mix_end(&b)
+	testing.expect_value(t, len(a.note_ids), len(a.notes))
+	testing.expect_value(t, len(b.note_ids), len(b.notes))
+	ids := note_ids_of(&a, "score/lead")
+	testing.expect(t, len(ids) > 0)
+	testing.expect(t, slice.equal(ids, note_ids_of(&b, "score/lead")))
+	testing.expect(t, !slice.equal(ids, note_ids_of(&b, "again/lead")), "another placement's are its own")
 }

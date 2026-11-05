@@ -52,7 +52,7 @@ Analysis_Report :: struct {
 	reference:         Maybe(Reference_Report) `json:"reference,omitempty"`,
 }
 
-// The tables of one source (the mix: -1, or a stem) and its meters, one per
+// The tables of one source (the mix, or a stem) and its meters, one per
 // section and one for the whole.
 @(private = "file")
 Source :: struct {
@@ -79,10 +79,10 @@ run_analyze :: proc(a: ^Args) -> bool {
 	frames := render.frames_from_song(s)
 	sources := make([]Source, 1 + stems)
 	for &src, k in sources {
-		part := i32(k - 1)
-		render.table_init(&src.bands, s, .Bands, part, ANALYSIS_STEP, 1)
-		render.table_init(&src.stereo, s, .Stereo, part, ANALYSIS_STEP, 1)
-		render.table_init(&src.crest, s, .Crest, part, ANALYSIS_STEP, 1)
+		source := k > 0 ? render.stem_id(s, k - 1) : 0
+		render.table_init(&src.bands, s, .Bands, source, ANALYSIS_STEP, 1)
+		render.table_init(&src.stereo, s, .Stereo, source, ANALYSIS_STEP, 1)
+		render.table_init(&src.crest, s, .Crest, source, ANALYSIS_STEP, 1)
 		src.meters = make([]analyze.Meter, len(s.sections) + 1)
 		for &mt in src.meters {
 			analyze.meter_init(&mt, render.RATE)

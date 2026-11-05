@@ -55,7 +55,6 @@ Spec :: struct {
 	automation_points: [dynamic]Automation_Point_Spec,
 	room:              [dynamic][2]base.Seconds, // spans (outside clock) another sound needs room in
 	room_from:         string, // or a sound the host places, by name ("voice"): its spans
-	strings:           [dynamic]string, // an `.Asset` param's name ("vcsl/upright_piano"): its value is the index here
 	styles:            [dynamic]Style_Spec, // the song's own (and style files the host read)
 	instruments:       [dynamic]Instrument_Spec, // rows its parts can name
 	instrument_includes: [dynamic]string, // files of rows its parts can name too (`instruments = "classic.json"`)
@@ -106,6 +105,7 @@ Instrument_Spec :: struct {
 
 Section_Spec :: struct {
 	name:          string,
+	id:            string, // what names it across builds ("": its name)
 	duration:      Time_Spec, // a Tone length, or at least so many seconds
 	start:         base.Seconds, // exactly here on the outside clock (UNSET: anywhere)
 	bpm:           [2]f64, // from, to (0: carry over; equal: steady)
@@ -123,6 +123,7 @@ Section_Spec :: struct {
 
 Part_Spec :: struct {
 	name:       string,
+	id:         string, // what names it across builds, which renaming it keeps ("": its name)
 	instrument: i32, // a device (a Voice: its row); -1: the style's (none: the part doesn't play)
 	gain_db:    base.Db,
 	pan:        f64,
@@ -296,6 +297,7 @@ source_refs :: proc(s: ^Spec, out: ^[dynamic]Source_Ref) {
 // what its effects' sidechains hear (a part, return or bus; "": itself).
 Bus_Spec :: struct {
 	name:  string,
+	id:    string, // what names it across builds ("": its name)
 	chain: Span,
 	to:    string,
 	key:   string,
@@ -314,11 +316,13 @@ Send_Spec :: struct {
 
 Return_Spec :: struct {
 	name:  string,
+	id:    string, // what names it across builds ("": its name)
 	chain: Span,
 }
 
 Marker_Spec :: struct {
 	name: string,
+	id:   string, // what names it across builds ("": its name)
 	at:   Time_Spec,
 }
 
@@ -432,6 +436,7 @@ Event_Spec :: struct {
 // composer turns them into seconds at the part's tempo).
 Device_Spec :: struct {
 	kind:   device.Device_Kind,
+	id:     string, // an effect's: what a path can name it by, wherever it is in its chain
 	values: Span, // into values
 	beats:  device.Param_Set,
 	path:   string,
@@ -463,21 +468,6 @@ asset_refs :: proc(s: ^Spec, out: ^[dynamic]Asset_Ref, drafts: ^Drafts = nil) {
 	for d, i in s.devices {
 		if d.kind == .Voice {
 			instrument_sets(s, i32(i), out, drafts)
-			continue
-		}
-		for v in s.values[d.values.first:base.span_end(d.values)] {
-			if device.PARAM_TABLE[v.param].unit != .Asset {
-				continue
-			}
-			name := s.strings[int(v.value)]
-			_, owner := set_from_name(s, name)
-			found := false
-			for x in out {
-				found ||= x.name == name && x.owner == owner
-			}
-			if !found {
-				append(out, Asset_Ref{name, owner, s})
-			}
 		}
 	}
 }
@@ -573,18 +563,12 @@ spec_add_style_text :: proc(s: ^Spec, name, text: string, findings: ^base.Findin
 }
 
 // The device's values: its kind's defaults, then what the spec set, a
-// length in beats taking `beat_seconds` a beat, a sample set's name as its
-// index in `bank` (-1 when the bank lacks it; ok is then false).
-params_from_device :: proc(s: ^Spec, d: i32, beat_seconds: f64, bank: ^device.Bank = nil) -> (p: device.Params, ok: bool) {
+// length in beats taking `beat_seconds` a beat.
+params_from_device :: proc(s: ^Spec, d: i32, beat_seconds: f64) -> (p: device.Params) {
 	dev := s.devices[d]
 	p = device.params_from_kind(dev.kind)
-	ok = true
 	for v in s.values[dev.values.first:base.span_end(dev.values)] {
 		switch {
-		case device.PARAM_TABLE[v.param].unit == .Asset:
-			set, found := device.bank_set_from_name(bank, asset_key(s, s.strings[int(v.value)]))
-			p[v.param] = f32(set)
-			ok &&= found
 		case v.param not_in dev.beats:
 			p[v.param] = v.value
 		case device.PARAM_TABLE[v.param].unit == .Hz:

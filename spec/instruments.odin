@@ -621,7 +621,7 @@ draft_apply :: proc(c: ^Ctx, d: ^Draft, o: json.Object, path: string, owner: ^Sp
 		v := o[k]
 		at := base.path_join(path, k)
 		switch k {
-		case "name", "class", "description":
+		case "name", "class", "description", "id":
 		case "nodes":
 			d.path = path
 			nodes, ok := v.(json.Object)
@@ -1457,9 +1457,8 @@ sfz_desc :: proc(c: ^Ctx, d: ^Draft, written: string) -> ^device.Program_Desc {
 	set, found_set := device.bank_set_from_name(c.bank, key)
 	if !found_set {
 		report(c, "asset_unavailable", .Error, written, "%s: SFZ %q's samples are not declared (offline, or not read)", written, d.sfz_name)
-		set = -1
 	}
-	desc := sfz_program_desc(s, i32(set), cc, written, c.findings, d.sfz_overrides)
+	desc := sfz_program_desc(s, set, cc, written, c.findings, d.sfz_overrides)
 	if len(desc.layers) == 0 {
 		report(c, "sfz_silent", .Warning, written, "%s: no region of %s plays at its CCs' values (set them: cc64 = 127, or by their labels)", written, d.sfz_name)
 		return nil

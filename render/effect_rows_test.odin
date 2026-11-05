@@ -237,7 +237,7 @@ test_effect_row_findings :: proc(t: ^testing.T) {
 			parts: { p: { instrument: "Synth", play: [ { name: "a", notes: "C4" } ] } } }`},
 		{"unknown_effect", "parts/p/effects/1", `parts: { p: { instrument: "Synth", effects: [ "phazer" ], play: [ { name: "a", notes: "C4" } ] } } }`},
 		{"", "", `effects: "instruments/effects.json", parts: { p: { instrument: "Synth", effects: [ "phaser" ], play: [ { name: "a", notes: "C4" } ] } },
-			automation: { "parts/p/effects/phaser/depth": [ [ "a", 0.5 ], [ "end", 2 ] ], "parts/p/effects/1/mix": [ [ "a", 1 ], [ "end", 0.2 ] ], "parts/p/effects/phaser/ap2/q": [ [ "a", 1 ], [ "end", 3 ] ] } }`},
+			automation: { "parts/p/effects/phaser/depth": [ [ "a", 0.5 ], [ "end", 2 ] ], "parts/p/effects/phaser/mix": [ [ "a", 1 ], [ "end", 0.2 ] ], "parts/p/effects/phaser/ap2/q": [ [ "a", 1 ], [ "end", 3 ] ] } }`},
 	}
 	for c in cases {
 		arena: virtual.Arena
@@ -342,7 +342,7 @@ test_effect_row_host_clip :: proc(t: ^testing.T) {
 	testing.expect(t, spec.spec_from_json(`{ effects: "instruments/effects.json" }`, rows, &findings))
 	add_examples(rows, &findings)
 	effects, _ := spec.json_parse(`[ { name: "tremolo", rate: 2, depth: 1 } ]`)
-	play :: proc(rows: ^spec.Spec, bank: ^device.Bank, set: i32, effects: spec.json_value) -> (^song.Song, Output) {
+	play :: proc(rows: ^spec.Spec, bank: ^device.Bank, set: device.Set_Id, effects: spec.json_value) -> (^song.Song, Output) {
 		m := new(song.Song)
 		song.mix_init(m)
 		m.bank = bank

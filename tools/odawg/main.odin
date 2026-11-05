@@ -196,7 +196,7 @@ load :: proc(a: ^Args, l: ^Loaded, pinning := false) -> bool {
 		return false
 	}
 	// the song's own files are from its folder: style files read in first,
-	// then its sample sets declared (names to indices: the register's, its
+	// then its sample sets declared (names to ids: the register's, its
 	// own, SFZ files), then only the zones the notes reach loaded (the
 	// register's fetched on first use)
 	host := assets.Bank_Host{root = filepath.dir(path), pinning = pinning, verify = a.verify, pool = a.pool}

@@ -418,7 +418,7 @@ test_clip_borrows_i16 :: proc(t: ^testing.T) {
 		whole[i] = i16((i * 37) % 65536 - 32768)
 		floats[i] = f32(whole[i]) / 32768
 	}
-	play :: proc(bank: ^device.Bank, set: i32) -> Output {
+	play :: proc(bank: ^device.Bank, set: device.Set_Id) -> Output {
 		m: song.Song
 		song.mix_init(&m)
 		m.bank = bank
@@ -786,7 +786,7 @@ test_duck_gain_at :: proc(t: ^testing.T) {
 	quiet := device.bank_borrow(&bank, "vo", make([]f32, 2 * frames))
 	duck := song.duck_under_voice(base.db_to_gain(-9), 0.05, 0.02, 0.1, 0)
 	// the bed clip or the song, ducked or not, and a silent voice
-	mix :: proc(s: ^song.Song, bank: ^device.Bank, bed, quiet: i32, duck: song.Sidechain, placed, ducked: bool) -> (m: ^song.Song, track: i32) {
+	mix :: proc(s: ^song.Song, bank: ^device.Bank, bed, quiet: device.Set_Id, duck: song.Sidechain, placed, ducked: bool) -> (m: ^song.Song, track: i32) {
 		m = new(song.Song)
 		song.mix_init(m)
 		m.bank = bank
@@ -843,7 +843,7 @@ test_mastering_release :: proc(t: ^testing.T) {
 	}
 	bank: device.Bank
 	set := device.bank_borrow(&bank, "bursts", audio)
-	mix :: proc(bank: ^device.Bank, set: i32) -> ^song.Song {
+	mix :: proc(bank: ^device.Bank, set: device.Set_Id) -> ^song.Song {
 		m := new(song.Song)
 		song.mix_init(m)
 		m.bank = bank

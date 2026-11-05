@@ -104,6 +104,7 @@ Edge :: struct {
 // A bus the spec names: its effects (where it goes is a route).
 Bus :: struct {
 	name:  string,
+	id:    string, // what its node's id is made from, where it isn't its name
 	chain: Span,
 }
 
@@ -261,12 +262,6 @@ graph_build :: proc(s: ^Song) {
 	}
 }
 
-// The node a name stands for (node_ref_from_name); -1: none.
-node_from_name :: proc(s: ^Song, name: string) -> i32 {
-	ref, ok := node_ref_from_name(s, name)
-	return ok ? node_index(s, ref) : -1
-}
-
 part_node :: proc(s: ^Song, part: int) -> i32 {return i32(len(s.tracks) + part)}
 return_node :: proc(s: ^Song, ret: int) -> i32 {return i32(len(s.tracks) + len(s.parts) + ret)}
 bus_node :: proc(s: ^Song, bus: int) -> i32 {return i32(len(s.tracks) + len(s.parts) + len(s.returns) + bus)}
@@ -380,25 +375,36 @@ closing_edge :: proc(s: ^Song, placed, dropped: []bool) -> int {
 // A node as the spec names it: "part drums", "return hall", "bus glue",
 // "track drums/house" (its part and the style it plays for), "master".
 node_name :: proc(s: ^Song, k: i32, allocator := context.temp_allocator) -> string {
+	return node_text(s, k, false, allocator)
+}
+
+// A node's name, or (`given`) what its id is made from: the same, with the
+// id a part, a return or a bus is given for its name.
+@(private)
+node_text :: proc(s: ^Song, k: i32, given: bool, allocator := context.temp_allocator) -> string {
+	either :: proc(name, id: string, given: bool) -> string {return given && id != "" ? id : name}
+	part :: proc(s: ^Song, p: i32, given: bool) -> string {
+		return either(s.parts[p], int(p) < len(s.part_given_ids) ? s.part_given_ids[p] : "", given)
+	}
 	nd := s.nodes[k]
 	switch nd.kind {
 	case .Track:
 		t := s.tracks[nd.ref]
 		if t.style < 0 {
-			return strings.concatenate({"track ", s.parts[t.part]}, allocator)
+			return strings.concatenate({"track ", part(s, t.part, given)}, allocator)
 		}
-		return strings.concatenate({"track ", s.parts[t.part], "/", style_name(s, t.style)}, allocator)
+		return strings.concatenate({"track ", part(s, t.part, given), "/", style_name(s, t.style)}, allocator)
 	case .Part:
-		return strings.concatenate({"part ", s.parts[nd.ref]}, allocator)
+		return strings.concatenate({"part ", part(s, nd.ref, given)}, allocator)
 	case .Return:
-		return strings.concatenate({"return ", s.returns[nd.ref].name}, allocator)
+		return strings.concatenate({"return ", either(s.returns[nd.ref].name, s.returns[nd.ref].id, given)}, allocator)
 	case .Bus:
-		return strings.concatenate({"bus ", s.buses[nd.ref].name}, allocator)
+		return strings.concatenate({"bus ", either(s.buses[nd.ref].name, s.buses[nd.ref].id, given)}, allocator)
 	case .Song:
 		return strings.concatenate({"song ", s.placements[nd.ref].name}, allocator)
 	case .Voices:
 		g := s.groups[nd.ref]
-		return fmt.aprintf("voices %d of %d of %s", g.index + 1, g.of, node_name(s, g.track, context.temp_allocator), allocator = allocator)
+		return fmt.aprintf("voices %d of %d of %s", g.index + 1, g.of, node_text(s, g.track, given), allocator = allocator)
 	case .Master:
 	}
 	return "master"

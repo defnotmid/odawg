@@ -29,6 +29,7 @@ Transition :: enum u8 {
 }
 
 Section :: struct {
+	id:            Section_Id,
 	name:          string,
 	beat, beats:   f64,
 	start, stop:   base.Seconds, // song seconds
@@ -43,6 +44,7 @@ Section :: struct {
 }
 
 Marker :: struct {
+	id:      Marker_Id,
 	name:    string,
 	beat:    f64,
 	seconds: base.Seconds,
@@ -130,6 +132,7 @@ Send :: struct {
 
 Return :: struct {
 	name:  string,
+	id:    string, // what its node's id is made from, where it isn't its name
 	chain: Span,
 }
 
@@ -256,10 +259,13 @@ Song :: struct {
 	markers:  [dynamic]Marker,
 	parts:    [dynamic]string, // names: the spec's and its styles', sorted
 	roles:    [dynamic]Part_Role, // each part's (parts' order): what it is for in the mix
+	part_given_ids: [dynamic]string, // each part's: what its node's id is made from, where it isn't its name ("": it is)
 	styles:   [dynamic]string, // the styles its sections play, by name ("styles/house.json")
 	tracks:   [dynamic]Track,
 	devices:  [dynamic]device.Device_Kind,
 	params:   [dynamic]device.Params, // parallel to devices: the resolved values
+	device_ids: [dynamic]Device_Id, // parallel to devices: what names one from outside this build (ids.odin)
+	device_given_ids: [dynamic]string, // parallel to devices: the id an effect is given, which a path can name it by ("": none)
 	labels:   [dynamic]string, // parallel to devices: an instrument's name as written ("MonoSynth", "machines/909.json"; a clip's "Player"), an effect's kind
 	programs: device.Programs, // the Voices' instruments (a Voice's `Program` param indexes them)
 	pad_names: [dynamic]string, // every pad a note or a question names (its id: base.name_id)
@@ -267,13 +273,17 @@ Song :: struct {
 	sends:    [dynamic]Send,
 	returns:  [dynamic]Return,
 	regions:  [dynamic]Region, // by part, then start
+	region_ids: [dynamic]Region_Id, // parallel to regions
 	// The routing (graph.odin): the spec's buses and routes, the nodes, the
 	// edges.
 	buses:    [dynamic]Bus,
 	routes:   [dynamic]Route,
 	nodes:    [dynamic]Node,
+	node_ids: [dynamic]Node_Id, // parallel to nodes: what names one from outside this build (ids.odin)
 	edges:    [dynamic]Edge, // by `to`, then `from`
+	edge_ids: [dynamic]Edge_Id, // parallel to edges
 	notes:    #soa[dynamic]Note_Row, // by track, then time
+	note_ids: [dynamic]Note_Id, // parallel to notes
 	by_time:  [dynamic]i32, // notes in time order
 	room:     [dynamic]Room_Span,
 	// Or where a sound the host places plays, by name ("voice"): a mix the
@@ -294,6 +304,7 @@ Song :: struct {
 	// Values moving over song time (automation.odin): a row per thing moved,
 	// each lane's points once.
 	automation:        [dynamic]Automation,
+	lane_ids:          [dynamic]Lane_Id, // parallel to automation
 	automation_points: [dynamic]Automation_Point,
 	// The master: its gain (1 as composed), then its chain (into chain; a
 	// mix's limiter).
@@ -336,6 +347,7 @@ song_from_spec :: proc(s: ^spec.Spec, out: ^Song, bank: ^device.Bank = nil) -> b
 	if !lay_out(s, out) {
 		return false
 	}
+	marker_seen := make(map[u32]u32, len(s.markers), context.temp_allocator)
 	for m in s.markers {
 		b: f64
 		ok: bool
@@ -348,7 +360,7 @@ song_from_spec :: proc(s: ^spec.Spec, out: ^Song, bank: ^device.Bank = nil) -> b
 			base.report(&out.findings, "bad_value", .Error, base.path_join("markers", m.name), "marker %s: %q is not a position in the song", m.name, m.at.text)
 			continue
 		}
-		append(&out.markers, Marker{m.name, b, tempo.seconds_from_beat(&out.tempo, b)})
+		append(&out.markers, Marker{Marker_Id(base.row_id(&marker_seen, m.id != "" ? m.id : m.name)), m.name, b, tempo.seconds_from_beat(&out.tempo, b)})
 	}
 	out.room_from = s.room_from
 	for span in s.room {
@@ -370,6 +382,7 @@ song_from_spec :: proc(s: ^spec.Spec, out: ^Song, bank: ^device.Bank = nil) -> b
 	})
 	append(&out.placement_tempo, out.tempo)
 	graph_build(out)
+	ids_build(out, false)
 	notes_reach(out)
 	tempo_fixed(out)
 	default_song(out)

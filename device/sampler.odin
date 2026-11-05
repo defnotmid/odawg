@@ -159,12 +159,13 @@ zone_is_nearest :: proc(z: ^Zone, key, velocity, best_key, best_vel: int) -> boo
 // The zone of `set` a note at `key` and `velocity` (MIDI) plays: those
 // answering both, else the nearest key, then the nearest velocity; among
 // several (a round-robin group), the one `seed` picks. -1: the set has none.
-zone_for :: proc(bank: ^Bank, set: int, key, velocity: int, seed: u64) -> i32 {
-	if bank == nil || set < 0 || set >= len(bank.sets) {
+zone_for :: proc(bank: ^Bank, set: Set_Id, key, velocity: int, seed: u64) -> i32 {
+	row := bank_set_row(bank, set)
+	if row < 0 {
 		return -1
 	}
-	span := bank.sets[set].zones
-	best_key, best_vel, count := zone_nearest(bank, set, key, velocity)
+	span := bank.sets[row].zones
+	best_key, best_vel, count := zone_nearest(bank, row, key, velocity)
 	if count == 0 {
 		return -1
 	}
@@ -181,11 +182,11 @@ zone_for :: proc(bank: ^Bank, set: int, key, velocity: int, seed: u64) -> i32 {
 	return -1
 }
 
-// How near the zones of `set` nearest a note come (keys, then velocities
-// away), and how many are that near: the ones zone_for picks among.
-zone_nearest :: proc(bank: ^Bank, set: int, key, velocity: int) -> (best_key, best_vel, count: int) {
+// How near the zones of the set at `row` nearest a note come (keys, then
+// velocities away), and how many are that near: the ones zone_for picks among.
+zone_nearest :: proc(bank: ^Bank, row: int, key, velocity: int) -> (best_key, best_vel, count: int) {
 	best_key, best_vel = max(int), max(int)
-	span := bank.sets[set].zones
+	span := bank.sets[row].zones
 	for i in span.first ..< base.span_end(span) {
 		z := &bank.zones[i]
 		dk := range_distance(key, int(z.lo_key), int(z.hi_key))
@@ -201,7 +202,7 @@ zone_nearest :: proc(bank: ^Bank, set: int, key, velocity: int) -> (best_key, be
 }
 
 // A note of set `set` answering `key` at the note's pitch.
-sampler_start :: proc(st: ^Sampler_State, set: i32, attack, release: f32, key: f32, n: Note, seed: u64, env: ^Voice_Env) {
+sampler_start :: proc(st: ^Sampler_State, set: Set_Id, attack, release: f32, key: f32, n: Note, seed: u64, env: ^Voice_Env) {
 	st.zone = -1
 	if env == nil || env.bank == nil {
 		return
@@ -209,7 +210,7 @@ sampler_start :: proc(st: ^Sampler_State, set: i32, attack, release: f32, key: f
 	bank := env.bank
 	pitch := n.pitch > 0 ? f32(n.pitch) : key
 	velocity := velocity_midi(n.velocity)
-	zi := zone_for(bank, int(set), int(math.round(key)), velocity, seed)
+	zi := zone_for(bank, set, int(math.round(key)), velocity, seed)
 	if zi < 0 {
 		return
 	}
@@ -309,21 +310,21 @@ sampler_run :: proc(st: ^Sampler_State, data: []$T, channels: int, scale: f32, a
 // release, cut short by its sample's end unless it loops. Before the
 // samples are loaded: a drum note SAMPLER_ONE_SHOT_TAIL, a held one its
 // gate and release.
-tail_sampler :: proc(set_index: i32, release: f32, key: f32, n: Note, env: ^Voice_Env) -> base.Seconds {
+tail_sampler :: proc(set: Set_Id, release: f32, key: f32, n: Note, env: ^Voice_Env) -> base.Seconds {
 	held := f64(max(n.duration, 0)) + max(f64(release), SAMPLER_DECLICK)
 	guess := n.pad != 0 ? SAMPLER_ONE_SHOT_TAIL : held
 	if env == nil || env.bank == nil {
 		return base.Seconds(guess)
 	}
-	set := int(set_index)
-	if set < 0 || set >= len(env.bank.sets) {
+	row := bank_set_row(env.bank, set)
+	if row < 0 {
 		return base.Seconds(guess)
 	}
 	bank := env.bank
 	pitch := n.pitch > 0 ? f32(n.pitch) : key
 	k, velocity := int(math.round(key)), velocity_midi(n.velocity)
-	best_key, best_vel, _ := zone_nearest(bank, set, k, velocity)
-	span := bank.sets[set].zones
+	best_key, best_vel, _ := zone_nearest(bank, row, k, velocity)
+	span := bank.sets[row].zones
 	tail := 0.0
 	for i in span.first ..< base.span_end(span) {
 		z := &bank.zones[i]
@@ -445,11 +446,11 @@ region_start :: proc(c: ^Node_Call, lane: ^Lane, st: ^Region_State) {
 		return
 	}
 	bank := env.bank
-	set := int(v[REGION_SET])
-	if set < 0 || set >= len(bank.sets) {
+	row := bank_set_row(bank, Set_Id(v[REGION_SET]))
+	if row < 0 {
 		return
 	}
-	zs := bank.sets[set].zones
+	zs := bank.sets[row].zones
 	zi := zs.first + i32(v[REGION_ZONE])
 	if v[REGION_ZONE] < 0 || zi >= base.span_end(zs) {
 		return

@@ -1,9 +1,7 @@
 package odawg_song
 
-import "core:fmt"
 import "core:math"
 import "core:slice"
-import "core:strconv"
 import "core:strings"
 import base "../base"
 import device "../device"
@@ -481,20 +479,12 @@ automation_effect :: proc(song: ^Song, row: ^Automation, chain: Span, rest, path
 		return
 	}
 	which, param_path := rest[:at], rest[at + 1:]
-	name, nth := which, 1
-	if hash := strings.index_byte(which, '#'); hash >= 0 {
-		name = which[:hash]
-		nth, _ = strconv.parse_int(which[hash + 1:])
+	given_id :: proc(song: ^Song, d: i32) -> string {
+		return int(d) < len(song.device_given_ids) ? song.device_given_ids[d] : "" // a host's own row has none
 	}
-	index, by_index := strconv.parse_int(which)
-	seen := 0
-	for d, i in song.chain[chain.first:base.span_end(chain)] {
+	for d in song.chain[chain.first:base.span_end(chain)] {
 		kind := song.devices[d]
-		if by_index ? i + 1 != index : song.labels[d] != name {
-			continue
-		}
-		seen += 1
-		if !by_index && seen != nth {
+		if song.labels[d] != which && given_id(song, d) != which {
 			continue
 		}
 		if device.DEVICE_TABLE[kind].program {
@@ -525,7 +515,7 @@ automation_effect :: proc(song: ^Song, row: ^Automation, chain: Span, rest, path
 			if pr.path != param_path || p not_in device.DEVICE_TABLE[kind].reads {
 				continue
 			}
-			if p in device.PARAM_FIXED || pr.unit == .Choice || pr.unit == .Asset || pr.unit == .Table {
+			if p in device.PARAM_FIXED || pr.unit == .Choice || pr.unit == .Table {
 				base.report(findings, "fixed_value", .Error, path, "%s: %s's %s is read once (it shapes the effect) and can't move", path, device.DEVICE_TABLE[kind].name, param_path)
 				return
 			}
@@ -545,8 +535,9 @@ automation_effect :: proc(song: ^Song, row: ^Automation, chain: Span, rest, path
 		return
 	}
 	effects := make([dynamic]string, context.temp_allocator)
-	for d, i in song.chain[chain.first:base.span_end(chain)] {
-		append(&effects, song.labels[d] != "" ? song.labels[d] : fmt.tprint(i + 1)) // a row written out: by its place
+	for d in song.chain[chain.first:base.span_end(chain)] {
+		id := given_id(song, d)
+		append(&effects, id != "" ? id : song.labels[d] != "" ? song.labels[d] : "a row written out: give it an id")
 	}
 	base.report(findings, "unknown_key", .Error, path, "%s: no effect %q in the chain (it has: %s)", path, which, names_joined(effects[:]))
 }

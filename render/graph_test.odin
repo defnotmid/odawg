@@ -9,6 +9,12 @@ import song "../song"
 import spec "../spec"
 
 @(private = "file")
+node_named :: proc(s: ^song.Song, name: string) -> i32 {
+	ref, ok := song.node_ref_from_name(s, name)
+	return ok ? song.node_index(s, ref) : -1
+}
+
+@(private = "file")
 compose_text :: proc(t: ^testing.T, text: string, arena: ^virtual.Arena) -> ^song.Song {
 	_ = virtual.arena_init_growing(arena)
 	context.allocator = virtual.arena_allocator(arena)
@@ -59,7 +65,7 @@ test_routes :: proc(t: ^testing.T) {
 				play: [ { name: "a", chords: true } ] } } }`, &arena)
 	testing.expect(t, !has_finding(s, "bad_value"))
 	drums, lead, pad := song.part_index(s, "drums"), song.part_index(s, "lead"), song.part_index(s, "pad")
-	glue := song.node_from_name(s, "glue")
+	glue := node_named(s, "glue")
 	song_out := song.song_node(s, 0) // the song's node: what it plays, into the master
 	testing.expect(t, glue >= 0 && s.nodes[glue].kind == .Bus)
 	testing.expect(t, has_edge(s, song_out, song.master_node(s), .Audio))
@@ -210,7 +216,7 @@ test_route_latency :: proc(t: ^testing.T) {
 		}
 		return -1
 	}
-	bus := int(song.node_from_name(s, "brick")) - len(s.tracks)
+	bus := int(node_named(s, "brick")) - len(s.tracks)
 	through, straight := first(out.stems[bus][0]), first(out.stems[song.part_index(s, "b")][0])
 	testing.expectf(t, through > 0 && abs(through - straight) <= 1, "through the limiter at %d, straight at %d", through, straight)
 }
@@ -249,7 +255,7 @@ test_bus_key :: proc(t: ^testing.T) {
 			pad: { instrument: { name: "Synth", oscillator: { type: "sawtooth" }, envelope: { attack: 0.01, sustain: 1, release: 0.1 } }, to: "pump",
 				play: [ { name: "a", notes: "C4", subdivision: "1m" } ] } } }`, &arena)
 	testing.expect(t, !has_finding(s, "bad_value"))
-	kick, pump := song.part_node(s, song.part_index(s, "kick")), song.node_from_name(s, "pump")
+	kick, pump := song.part_node(s, song.part_index(s, "kick")), node_named(s, "pump")
 	testing.expect(t, pump >= 0 && has_edge(s, kick, pump, .Key))
 	testing.expect(t, !has_edge(s, kick, pump, .Audio))
 	out := output_from_song(s, {stems = true})

@@ -70,7 +70,7 @@ test_analyzer_is_table :: proc(t: ^testing.T) {
 	kinds := [3]Table_Kind{.Bands, .Stereo, .Crest}
 	for kind in kinds {
 		tab: Table
-		table_init(&tab, s, kind, -1, STEP, 1)
+		table_init(&tab, s, kind, 0, STEP, 1)
 		tables_fill(s, {&tab}, {whole.left, whole.right}, nil)
 		at := i64(3 * RATE + 777) // mid-song, off the grid
 		a: Analyzer

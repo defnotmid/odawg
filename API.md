@@ -90,6 +90,40 @@ Added in odawg:
 - **Checking:** checks that stand in for listening, and analysis (loudness, onsets, beat),
   moved out of onimite.
 
+### Identity: one rule everywhere
+
+Inside one composed song, rows refer to rows by index. Whatever names a row from outside
+that build (a host, a table kept across a recompose, a saved project) names it by an id,
+which stays when the row moves:
+
+| What | Id | Made from |
+|---|---|---|
+| a sample set | `device.Set_Id` | allocated when it is declared or lent; never used twice in a run |
+| a track, part, return, bus or placed song | `song.Node_Id` (`g.node_ids`, parallel to `g.nodes`) | its name, or the `id` it is given |
+| a section, a marker | `song.Section_Id`, `song.Marker_Id` (`.id`) | its name, or the `id` it is given |
+| an instrument, an effect | `song.Device_Id` (`g.device_ids`), and the path `keys/effects/<id>/wet` | whose it is, and its label or the `id` it is given |
+| a note | `song.Note_Id` (`g.note_ids`) | its track, its section and where in it, its pitch and its pad |
+| a chord | through `Row_Ref` | its section, and which of its section's it is |
+| a routing edge, a region, an automation row | `song.Edge_Id`, `song.Region_Id`, `song.Lane_Id` | what it joins; its part and what triggered it; its path |
+| a pad, an instrument's node, a control | `base.name_id` | its name |
+
+A host shows any of these without knowing the song's layout: a `song.Row_Kind` says which
+table, `song.ROW_KINDS[kind]` counts it and reads a row's id, and a `song.Row_Ref` (`kind`
+and `id`) is what a view keeps, say for its selection. `song.row_from_ref(&g, ref)` finds
+that row in the build it has now, -1 where it is gone.
+
+- A name's id is the same on every build and every machine. Adding a part doesn't move
+  another part's id, though it does move its row.
+- Give something an `id` where it must survive a rename: `parts = { solo = { id = "p1" } }`,
+  `sections = { { "hook", id = "c1" } }`, `{ "Filter", id = "tone" }`, and
+  `returns = { plate = { id = "room", effects = { ... } } }`. Two parts with one `id` is a
+  finding.
+- The second row of one name (a section repeated, a file placed twice) gets an id for being
+  the second. Removing the first moves that id to it, so give a clip an `id` where that
+  matters: `song.append_clip(&mix, { name = "take.wav", id = "take-3", ... })`.
+- A composed note is what it plays. Parts moving, the tempo changing and a section added
+  before it leave its id alone; moving the note, or changing its pitch, makes another note.
+
 ### Units and names: one rule everywhere
 
 - **A bare number is seconds.** This holds in onimite, in Tone.js and in Web Audio. Musical
@@ -391,8 +425,8 @@ parts = { keys = { instrument = "pluck", effects = { "autowah", { "tremolo", dep
   through it.
 - **Automation:** `parts/<part>/effects/<row>/<option>`, or
   `.../<row>/<node>/<field>[/<modulator field>]`, and the return and bus forms. These name a
-  row's controls the way a built-in's params are named: by the row's name (`phaser`), by
-  name and count (`phaser#2`), or by place (`2`). After compose, a command sets one while
+  row's controls the way a built-in's params are named: by the row's name (`phaser`), which
+  is the first of that name in the chain, or by the `id` you gave it. After compose, a command sets one while
   the engine plays: `Effect_Param_Set "keys/effects/phaser/depth"`. The engine receives
   the row's program whole at its next walk, as it does for an instrument's.
 - **A host's chains:** a mix's `host_rows` is a spec holding a host's `effects` tables and
@@ -627,8 +661,8 @@ automation = {
     A send's and the master's lanes are their values, as written.
   - `parts/<part>/sends/<return or bus>`: a send's level.
   - `parts/<part>/effects/<effect>/<param>`: an effect in the part's chain, by name
-    (`Filter`), by name and count (`Filter#2`) or by place (`2`); an effect row's option
-    or node/field the same way (`effects/phaser/depth`, `effects/phaser/ap1/q`; §3.4.1).
+    (`Filter`, the first of that name) or by the `id` you gave it (`{ "Filter", id = "tone" }`:
+    `effects/tone/frequency`); an effect row's option or node/field the same way (`effects/phaser/depth`, `effects/phaser/ap1/q`; §3.4.1).
   - `parts/<part>/<option>` or `parts/<part>/<node>/<field>[/<modulator field>]`: the
     instrument's options (`cutoff`) and fields (`lp/frequency`, `lp/frequency/octaves`,
     `pads/kick/body/decay`).
@@ -772,6 +806,7 @@ render.engine_init(&e, &g, pool = nil); render.engine_seek(&e, at, exact = false
 render.export_song(&g, {from, to, stems}, sink)   // the stream on every core, to a sink in order
 render.master_export(&g, opts, .Streaming, sink)  // measured, gained, limited, written
 song.mix_init(&mix); song.append_song(&mix, &g, at, "score", gain = base.db_to_gain(-6), window = w, duck = d)
+set := device.bank_borrow(&bank, "vo.wav", frames)  // a device.Set_Id: it names the set in any bank viewing this one
 song.append_clip(&mix, {name = "vo.wav", set = set, start = 2, stop = 9, gain = base.db_to_gain(-3), voice = true}); song.mix_end(&mix)
                                                   // levels are base.Gain (linear; the host converts its dB): a
                                                   // clip's gain and its duck's floor are Maybe (nil: 1, -12 dB);
@@ -783,11 +818,18 @@ render.duck_gain_at(&mix, track, at)              // the gain the voice ducks pu
 fi, fo := dsp.span_edges(fade_in, fade_out, first, length, rate, frames)   // a clip's or a window's fades, as the
 dsp.fade_envelope(k, length, fi, fo, curve)                                // mix plays them (a host's waveforms)
 
+live: [dynamic]device.Set_Id                      // a changed file declares its set again, and the old one stays for the songs on it:
+song.sets_of_song(&g, &live)                      // gather what every song still alive names,
+device.bank_collect(&bank, live[:])               // and the rest goes, with what only it played (where nothing reads the bank)
+
 g.nodes, g.edges                                  // the routing: tracks, parts, returns, buses, master; edges by where they go
+song.part_id(&g, part); song.node_from_id(&g, id) // a part's id; the row an id is at in this build (-1: none)
+song.row_ref(&g, .Note, row); song.row_from_ref(&g, ref)   // any table's row, as what a view keeps, and back (-1: gone)
 song.graph_order(&g)                              // each node after everything feeding it (loops: their edges)
 g.regions                                         // where each part is triggered: { part, start, stop, source }
 t: render.Table                                   // what is read at random: peaks, energy, spectrum per step
-render.table_init(&t, &g, .Peaks, part, 256, 1)   // rows only where the part sounds (its regions and tails)
+render.table_init(&t, &g, .Peaks, song.part_id(&g, part), 256, 1)   // rows only where the part sounds (its regions and tails); 0: the mix
+render.stem_id(&g, stem); render.stem_from_id(&g, id)   // a stem (stem_count's order) and what names it
 render.tables_build(&g, {&t, &u})                 // one streamed export fills them all
 render.table_row(&t, step)                        // nil where it is silent
 render.table_fill_steps(&t, first, end, from, l, r)   // rows from samples a host holds (table_window: what a row reads)

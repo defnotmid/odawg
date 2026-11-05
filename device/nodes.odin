@@ -129,7 +129,7 @@ nodes_init :: proc "contextless" () {
 	})
 	NODE_SAMPLER = register_node(r, {
 		name = "Sampler", stereo = true, needs = .Note, state = size_of(Sampler_State), start = start_sampler, process = process_sampler, tail = tail_sampler_node,
-		fields = {{name = "set", unit = .Asset, default = -1}, {name = "attack", unit = .Seconds}, {name = "release", unit = .Seconds, default = 0.1}},
+		fields = {{name = "set", unit = .Asset}, {name = "attack", unit = .Seconds}, {name = "release", unit = .Seconds, default = 0.1}},
 	})
 	NODE_SEGMENTS = register_node(r, {
 		name = "Segments", unipolar = true, needs = .Note, process = process_segments, tail = tail_segments,
@@ -143,7 +143,7 @@ nodes_init :: proc "contextless" () {
 	NODE_REGION = register_node(r, {
 		name = "Region", stereo = true, needs = .Note, state = size_of(Region_State), start = start_region, process = process_region, tail = tail_region,
 		fields = {
-			{name = "set", unit = .Asset, default = -1},
+			{name = "set", unit = .Asset},
 			{name = "zone", unit = .Number},
 			{name = "keycenter", unit = .Number, default = 60},
 			{name = "keytrack", unit = .Number, default = 100},
@@ -162,7 +162,7 @@ nodes_init :: proc "contextless" () {
 	NODE_CLIP = register_node(r, {
 		name = "Clip", stereo = true, jump = true, needs = .Note, process = process_clip, tail = tail_clip,
 		fields = {
-			{name = "set", unit = .Asset, default = -1},
+			{name = "set", unit = .Asset},
 			{name = "offset", unit = .Seconds},
 			{name = "fade_in", unit = .Seconds},
 			{name = "fade_out", unit = .Seconds},
@@ -1305,7 +1305,7 @@ memory_comb :: proc(values: ^[MAX_FIELDS]f32, slots: []int) -> f64 {
 @(private = "file")
 start_sampler :: proc(c: ^Node_Call, lane: ^Lane) {
 	s := node_state(c, lane, Sampler_State)
-	sampler_start(s, i32(node_values(c, lane)[3]), node_value(c, lane, 4), node_value(c, lane, 5), lane.key, lane.note, lane.seed, c.env)
+	sampler_start(s, Set_Id(node_values(c, lane)[3]), node_value(c, lane, 4), node_value(c, lane, 5), lane.key, lane.note, lane.seed, c.env)
 }
 
 @(private = "file")
@@ -1319,7 +1319,7 @@ process_sampler :: proc(c: ^Node_Call) {
 
 @(private = "file")
 tail_sampler_node :: proc(c: ^Node_Call, lane: ^Lane) -> base.Seconds {
-	return tail_sampler(i32(node_values(c, lane)[3]), node_value(c, lane, 5), lane.key, lane.note, c.env)
+	return tail_sampler(Set_Id(node_values(c, lane)[3]), node_value(c, lane, 5), lane.key, lane.note, c.env)
 }
 
 // ---- Clip: a recording as it was made ----------------------------------------------
@@ -1349,15 +1349,15 @@ process_clip :: proc(c: ^Node_Call) {
 	bank := c.env != nil ? c.env.bank : nil
 	for &lane in c.lanes {
 		v := node_values(c, &lane)
-		set := int(v[CLIP_SET])
+		row := bank_set_row(bank, Set_Id(v[CLIP_SET]))
 		l, r := node_out(c, &lane)
 		for i in 0 ..< len(l) {
 			l[i], r[i] = 0, 0
 		}
-		if bank == nil || set < 0 || set >= len(bank.sets) || bank.sets[set].zones.count == 0 {
+		if row < 0 || bank.sets[row].zones.count == 0 {
 			continue
 		}
-		sm := bank.samples[bank.zones[bank.sets[set].zones.first].sample]
+		sm := bank.samples[bank.zones[bank.sets[row].zones.first].sample]
 		switch sm.format {
 		case .F32:
 			clip_run(v, &lane, sample_f32(bank, sm), int(sm.channels), 1, l, r)

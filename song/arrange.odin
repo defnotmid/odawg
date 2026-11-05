@@ -83,8 +83,9 @@ arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 		}
 	}
 	slice.sort(song.parts[:])
-	// each part's role: the spec's part's, else a style's
+	// each part's role and id: the spec's part's, else a style's
 	resize(&song.roles, len(song.parts))
+	resize(&song.part_given_ids, len(song.parts))
 	for name, i in song.parts {
 		written, path := "", ""
 		for st in work.styles {
@@ -93,6 +94,9 @@ arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 					if p.name == name && p.role != "" {
 						written, path = p.role, base.path_join(base.path_join("parts", name), "role")
 					}
+					if p.name == name && p.id != "" {
+						song.part_given_ids[i] = p.id
+					}
 				}
 			}
 		}
@@ -100,6 +104,12 @@ arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 			if p.name == name && p.role != "" {
 				written, path = p.role, base.path_join(base.path_join("parts", name), "role")
 			}
+			if p.name == name && p.id != "" {
+				song.part_given_ids[i] = p.id
+			}
+		}
+		if id := song.part_given_ids[i]; id != "" && slice.contains(song.part_given_ids[:i], id) {
+			base.report(&song.findings, "bad_value", .Error, base.path_join(base.path_join("parts", name), "id"), "parts/%s/id: another part has the id %q", name, id)
 		}
 		if written == "" {
 			continue
@@ -127,7 +137,7 @@ arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 	}
 	// the spec's buses and where they go, its parts' routes
 	for b in s.buses {
-		append(&song.buses, Bus{b.name, chain_into_song(song, s, b.chain, 60 / song.sections[0].bpm0)})
+		append(&song.buses, Bus{b.name, b.id, chain_into_song(song, s, b.chain, 60 / song.sections[0].bpm0)})
 	}
 	for b in s.buses {
 		if b.to != "" {
@@ -362,7 +372,7 @@ in_band :: proc(energy: f64, band: [2]f64) -> bool {
 
 @(private = "file")
 add_return :: proc(song: ^Song, from: ^spec.Spec, ret: spec.Return_Spec) {
-	r := Return{name = ret.name, chain = chain_into_song(song, from, ret.chain, 60 / song.sections[0].bpm0)}
+	r := Return{name = ret.name, id = ret.id, chain = chain_into_song(song, from, ret.chain, 60 / song.sections[0].bpm0)}
 	for &x in song.returns {
 		if x.name == ret.name {
 			x = r
@@ -376,11 +386,8 @@ add_return :: proc(song: ^Song, from: ^spec.Spec, ret: spec.Return_Spec) {
 // beats at `beat_seconds`).
 @(private = "file")
 device_into_song :: proc(song: ^Song, from: ^spec.Spec, d: i32, beat_seconds: f64, drafts: ^spec.Drafts = nil) -> i32 {
-	p, ok := spec.params_from_device(from, d, beat_seconds, song.bank)
+	p := spec.params_from_device(from, d, beat_seconds)
 	plays_program := device.DEVICE_TABLE[from.devices[d].kind].program
-	if !ok && !plays_program {
-		base.report(&song.findings, "asset_unavailable", .Error, from.devices[d].path, "%s: a sample set it plays is not loaded (offline, or not in the register)", from.devices[d].path)
-	}
 	fixed := make([dynamic]spec.Fixed_Tone, context.temp_allocator)
 	if plays_program {
 		// its row (an instrument's, an effect row's), read into a program at
@@ -400,6 +407,7 @@ device_into_song :: proc(song: ^Song, from: ^spec.Spec, d: i32, beat_seconds: f6
 	append(&song.devices, from.devices[d].kind)
 	append(&song.params, p)
 	append(&song.labels, device_label(from.devices[d]))
+	append(&song.device_given_ids, strings.clone(from.devices[d].id))
 	return i32(len(song.devices) - 1)
 }
 

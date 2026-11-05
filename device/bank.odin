@@ -1,5 +1,7 @@
 package odawg_device
 
+import "core:slice"
+import "core:sync"
 import base "../base"
 
 // The samples a Sampler plays, as tables: sets (an instrument or a kit: its
@@ -12,7 +14,51 @@ import base "../base"
 // exactly; a host's own audio is lent as a chunk (bank_borrow), not copied;
 // another bank's rows can be viewed over the same chunks (bank_view). The assets layer fills it from the
 // register (downloading a set the first time a song uses it); dsp only
-// reads it. A `.Asset` param holds a set's index here.
+// reads it. A node's `.Asset` field holds a set's id.
+
+// A set, whatever row it is at, in its bank and any bank viewing it. An id is
+// never used twice in a process, so what outlives its set finds nothing, not
+// another set's samples. 0: no set. Rows stay in id order (bank_set_row).
+Set_Id :: distinct u32
+
+// Ids sit in programs' values, which are f32s: exact to here. That is 16
+// million sets declared or lent in one run.
+@(private = "file")
+SET_ID_END :: 1 << 24
+
+@(private = "file")
+set_id_last: u32
+
+@(private = "file")
+set_id_next :: proc() -> Set_Id {
+	id := sync.atomic_add(&set_id_last, 1) + 1
+	assert(id < SET_ID_END, "odawg: sample set ids ran out")
+	return Set_Id(id)
+}
+
+// The row of set `id` in `b`: -1 where `b` doesn't have it.
+bank_set_row :: proc "contextless" (b: ^Bank, id: Set_Id) -> int {
+	if b == nil || id == 0 {
+		return -1
+	}
+	lo, hi := 0, len(b.sets)
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if b.sets[mid].id < id {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	return lo < len(b.sets) && b.sets[lo].id == id ? lo : -1
+}
+
+// A new set over zones already appended: its row, at a new id.
+bank_set_append :: proc(b: ^Bank, name: string, zones: base.Span, stamp: u64 = 0) -> Set_Id {
+	id := set_id_next()
+	append(&b.sets, Sample_Set{id = id, name = name, zones = zones, stamp = stamp})
+	return id
+}
 
 Bank :: struct {
 	sets:    [dynamic]Sample_Set,
@@ -37,6 +83,7 @@ Chunk :: struct {
 }
 
 Sample_Set :: struct {
+	id:    Set_Id,
 	name:  string, // "vcsl/upright_piano", an inline set's "my_kit#9f3c…", an SFZ's path
 	zones: base.Span, // into zones
 	stamp: u64, // its files' contents when declared (a changed file declares it again)
@@ -60,7 +107,7 @@ Bank_File :: struct {
 // the zones a Sampler would pick for them are loaded (a key without
 // velocities: at any).
 Sample_Need :: struct {
-	set:        i32,
+	set:        Set_Id,
 	keys:       bit_set[0 ..< 128;u128],
 	velocities: [128]bit_set[0 ..< 128;u128], // by key
 	zones:      [dynamic]i32, // zones (of the set's, by index) played as such (an SFZ region's Region)
@@ -145,8 +192,8 @@ bank_destroy :: proc(b: ^Bank) {
 // Adds a set of one sample (a clip: stereo interleaved frames at RATE) lent
 // by the host, not copied: its frames must outlive the bank's use. Float
 // frames, or 16-bit ones as they are (a host's render of a song, full scale
-// 32768). Returns the set's index.
-bank_borrow :: proc(b: ^Bank, name: string, frames: []$T) -> i32 where T == f32 || T == i16 {
+// 32768). Returns the set.
+bank_borrow :: proc(b: ^Bank, name: string, frames: []$T) -> Set_Id where T == f32 || T == i16 {
 	when T == f32 {
 		append(&b.f32s, frames)
 		chunk, format := len(b.f32s) - 1, Sample_Format.F32
@@ -159,22 +206,21 @@ bank_borrow :: proc(b: ^Bank, name: string, frames: []$T) -> i32 where T == f32 
 
 // A lent sample's rows: the sample, one zone over every key, its set.
 @(private = "file")
-borrowed_set :: proc(b: ^Bank, name: string, sm: Sample) -> i32 {
+borrowed_set :: proc(b: ^Bank, name: string, sm: Sample) -> Set_Id {
 	append(&b.samples, sm)
 	append(&b.zones, Zone{sample = i32(len(b.samples) - 1), lo_key = 0, hi_key = 127, root = 60, lo_velocity = 0, hi_velocity = 127, gain = 1, one_shot = true})
 	append(&b.zone_file, -1)
-	append(&b.sets, Sample_Set{name = name, zones = {i32(len(b.zones) - 1), 1}})
-	return i32(len(b.sets) - 1)
+	return bank_set_append(b, name, {i32(len(b.zones) - 1), 1})
 }
 
 // Appends `src`'s sets to `dst` over the same chunks (its rows copied, its
-// audio not): what one bank needs of another that outlives it. Returns the
-// index `src`'s first set has in `dst`.
-bank_view :: proc(dst, src: ^Bank) -> i32 {
+// audio not): what one bank needs of another that outlives it. They keep
+// their ids, so what names them plays them from either bank.
+bank_view :: proc(dst, src: ^Bank) {
 	f0, i0 := i32(len(dst.f32s)), i32(len(dst.i16s))
 	append(&dst.f32s, ..src.f32s[:])
 	append(&dst.i16s, ..src.i16s[:])
-	s0, z0, set0, file0 := i32(len(dst.samples)), i32(len(dst.zones)), i32(len(dst.sets)), i32(len(dst.files))
+	s0, z0, file0 := i32(len(dst.samples)), i32(len(dst.zones)), i32(len(dst.files))
 	append(&dst.files, ..src.files[:])
 	for sm in src.samples {
 		x := sm
@@ -191,21 +237,139 @@ bank_view :: proc(dst, src: ^Bank) -> i32 {
 		append(&dst.zone_file, f >= 0 ? f + file0 : f)
 	}
 	for set in src.sets {
-		append(&dst.sets, Sample_Set{set.name, {set.zones.first + z0, set.zones.count}, set.stamp})
+		append(&dst.sets, Sample_Set{set.id, set.name, {set.zones.first + z0, set.zones.count}, set.stamp})
 	}
-	return set0
+	slice.stable_sort_by(dst.sets[:], proc(a, b: Sample_Set) -> bool {return a.id < b.id})
 }
 
 // The set named `name`, its newest declaration (a set declared again when
 // its files changed: earlier songs keep the one they were composed with).
-bank_set_from_name :: proc(b: ^Bank, name: string) -> (i32, bool) {
+bank_set_from_name :: proc(b: ^Bank, name: string) -> (Set_Id, bool) {
 	if b == nil {
-		return -1, false
+		return 0, false
 	}
-	#reverse for s, i in b.sets {
+	#reverse for s in b.sets {
 		if s.name == name {
-			return i32(i), true
+			return s.id, true
 		}
 	}
-	return -1, false
+	return 0, false
+}
+
+// Moves the rows marked in `to` down, in order; each mark becomes its new
+// row + 1.
+@(private = "file")
+rows_compact :: proc(rows: ^[dynamic]$T, to: []i32) {
+	kept := 0
+	for x, i in rows^ {
+		if to[i] != 0 {
+			rows^[kept] = x
+			kept += 1
+			to[i] = i32(kept)
+		}
+	}
+	resize(rows, kept)
+}
+
+// Drops every set `keep` doesn't name, and what only those played: zones,
+// files, samples, text, and the chunks the bank owns (a chunk lent to it
+// stays the host's). Rows move and ids don't. What a declared-again set's old
+// songs named goes once no song names it (song.sets_of_song gathers what to
+// keep). Call it where nothing reads the bank; a bank viewing this one reads
+// these chunks, so what it plays must be kept too, or the view made again.
+// Returns how many sets went.
+bank_collect :: proc(b: ^Bank, keep: []Set_Id) -> (dropped: int) {
+	sets := make([dynamic]Sample_Set, 0, len(b.sets), context.temp_allocator)
+	zones := make([dynamic]Zone, 0, len(b.zones), context.temp_allocator)
+	zone_file := make([dynamic]i32, 0, len(b.zones), context.temp_allocator)
+	// what the kept zones reach: each old row's new one, 0 unreached and
+	// row + 1 after
+	sample_to := make([]i32, len(b.samples), context.temp_allocator)
+	file_to := make([]i32, len(b.files), context.temp_allocator)
+	for set in b.sets {
+		if !slice.contains(keep, set.id) {
+			dropped += 1
+			continue
+		}
+		x := set
+		x.zones.first = i32(len(zones))
+		append(&sets, x)
+		for zi in set.zones.first ..< base.span_end(set.zones) {
+			append(&zones, b.zones[zi])
+			append(&zone_file, b.zone_file[zi])
+			if s := b.zones[zi].sample; s >= 0 {
+				sample_to[s] = 1
+			}
+			if f := b.zone_file[zi]; f >= 0 {
+				file_to[f] = 1
+			}
+		}
+	}
+	if dropped == 0 {
+		return
+	}
+	// the chunks the kept samples read: the rest are freed where they are
+	// the bank's, then every table's kept rows move down
+	chunk_to := [Sample_Format][]i32 {
+		.F32 = make([]i32, len(b.f32s), context.temp_allocator),
+		.I16 = make([]i32, len(b.i16s), context.temp_allocator),
+	}
+	for sm, i in b.samples {
+		if sample_to[i] != 0 {
+			chunk_to[sm.format][sm.chunk] = 1
+		}
+	}
+	#reverse for c, i in b.owned {
+		if chunk_to[c.format][c.index] != 0 {
+			continue
+		}
+		switch c.format {
+		case .F32:
+			delete(b.f32s[c.index], b.sets.allocator)
+		case .I16:
+			delete(b.i16s[c.index], b.sets.allocator)
+		}
+		unordered_remove(&b.owned, i)
+	}
+	rows_compact(&b.samples, sample_to)
+	rows_compact(&b.f32s, chunk_to[.F32])
+	rows_compact(&b.i16s, chunk_to[.I16])
+	rows_compact(&b.files, file_to)
+	for &sm in b.samples {
+		sm.chunk = chunk_to[sm.format][sm.chunk] - 1
+	}
+	for &c in b.owned {
+		c.index = chunk_to[c.format][c.index] - 1
+	}
+	for &z in zones {
+		if z.sample >= 0 {
+			z.sample = sample_to[z.sample] - 1
+		}
+	}
+	for &f in zone_file {
+		if f >= 0 {
+			f = file_to[f] - 1
+		}
+	}
+	resize(&b.sets, len(sets))
+	copy(b.sets[:], sets[:])
+	resize(&b.zones, len(zones))
+	copy(b.zones[:], zones[:])
+	resize(&b.zone_file, len(zone_file))
+	copy(b.zone_file[:], zone_file[:])
+	// the text no kept row names (a register set's name is the register's)
+	named := make(map[rawptr]bool, 2 * (len(b.sets) + len(b.files)), context.temp_allocator)
+	for set in b.sets {
+		named[raw_data(set.name)] = true
+	}
+	for f in b.files {
+		named[raw_data(f.path)], named[raw_data(f.url)], named[raw_data(f.sha256)] = true, true, true
+	}
+	#reverse for s, i in b.text {
+		if !named[raw_data(s)] {
+			delete(s, b.sets.allocator)
+			unordered_remove(&b.text, i)
+		}
+	}
+	return
 }

@@ -219,7 +219,7 @@ lfo_wave :: proc(n: int) -> string {
 
 // The program an SFZ instrument plays: `set` its set of the bank (a zone a
 // region with a sample, in order), `cc` the values its CCs sit at.
-sfz_program_desc :: proc(s: ^Sfz, set: i32, cc: [128]f32, path: string, findings: ^base.Findings, overrides: map[string]f64 = nil) -> ^device.Program_Desc {
+sfz_program_desc :: proc(s: ^Sfz, set: device.Set_Id, cc: [128]f32, path: string, findings: ^base.Findings, overrides: map[string]f64 = nil) -> ^device.Program_Desc {
 	c := Sfz_Compile{s = s, cc = cc, overrides = overrides}
 	c.rows_read = make([]bool, len(SFZ_OPCODES), context.temp_allocator)
 	c.read = make(map[Sfz_Name]bool, context.temp_allocator)
@@ -345,7 +345,7 @@ int_text :: proc(n: int) -> string {
 
 // The program one region plays.
 @(private = "file")
-sfz_region_desc :: proc(c: ^Sfz_Compile, r: int, set: i32, zone: int, sample: string, release: bool) -> ^device.Program_Desc {
+sfz_region_desc :: proc(c: ^Sfz_Compile, r: int, set: device.Set_Id, zone: int, sample: string, release: bool) -> ^device.Program_Desc {
 	s := c.s
 	desc := new(device.Program_Desc, context.temp_allocator)
 	desc.out = "out"

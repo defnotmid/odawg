@@ -35,6 +35,7 @@ lay_out :: proc(s: ^spec.Spec, song: ^Song) -> bool {
 	default_sections := [1]spec.Section_Spec{{name = "song", duration = {"4m", spec.UNSET_SECONDS}, start = spec.UNSET_SECONDS, energy = base.UNSET, flex = {{"", spec.UNSET_SECONDS}, {"", spec.UNSET_SECONDS}}}}
 	sections := len(s.sections) > 0 ? s.sections[:] : default_sections[:]
 	lay := make([]Laying, len(sections), context.temp_allocator)
+	section_seen := make(map[u32]u32, len(sections), context.temp_allocator)
 	bpm, bpb, bars := s.bpm, int(s.beats_per_bar), 4
 	for &ss, i in sections {
 		l := &lay[i]
@@ -129,6 +130,7 @@ lay_out :: proc(s: ^spec.Spec, song: ^Song) -> bool {
 			chords = ss.chords
 		}
 		sec := Section {
+			id = Section_Id(base.row_id(&section_seen, ss.id != "" ? ss.id : ss.name)),
 			name = ss.name, beat = g.beat, beats = g.beats, start = g.seconds, stop = g.seconds + base.Seconds(seconds_of(l)),
 			bpm0 = l.bpm0, bpm1 = l.bpm1, beats_per_bar = l.bpb, bars = l.bars, style = style_intern(song, style), energy = energy,
 			transition_part = ss.transition_part,

@@ -1,6 +1,7 @@
 package odawg_device
 
 import "core:math"
+import "core:strings"
 import "core:testing"
 import base "../base"
 
@@ -26,24 +27,26 @@ add_sine :: proc(b: ^Bank, hz: f64, seconds: f64, amplitude: f32 = 0.5) -> i32 {
 }
 
 @(private = "file")
-add_set :: proc(b: ^Bank, name: string, zones: []Zone) -> int {
+add_set :: proc(b: ^Bank, name: string, zones: []Zone) -> Set_Id {
 	first := len(b.zones)
 	append(&b.zones, ..zones)
-	append(&b.sets, Sample_Set{name = name, zones = {i32(first), i32(len(zones))}})
-	return len(b.sets) - 1
+	for _ in zones {
+		append(&b.zone_file, -1)
+	}
+	return bank_set_append(b, name, {i32(first), i32(len(zones))})
 }
 
 
 // Renders a note into a buffer of `total` samples in blocks of `block` (0:
 // one call), as the engine does.
 @(private = "file")
-play :: proc(b: ^Bank, set: int, n: Note, total: int, block := 0, seed: u64 = 1, p: Maybe(Params) = nil, key: f32 = 0) -> (l, r: []f32, calls_alive: bool) {
+play :: proc(b: ^Bank, set: Set_Id, n: Note, total: int, block := 0, seed: u64 = 1, p: Maybe(Params) = nil, key: f32 = 0) -> (l, r: []f32, calls_alive: bool) {
 	params := p.? or_else sampler_params()
 	l = make([]f32, total, context.temp_allocator)
 	r = make([]f32, total, context.temp_allocator)
 	state: Sampler_State
 	env := Voice_Env{bank = b}
-	sampler_start(&state, i32(set), params[.Attack], params[.Release], key > 0 ? key : f32(n.pitch), n, seed, &env)
+	sampler_start(&state, set, params[.Attack], params[.Release], key > 0 ? key : f32(n.pitch), n, seed, &env)
 	step := block > 0 ? block : total
 	alive := true
 	for at := 0; at < total && alive; at += step {
@@ -101,7 +104,7 @@ test_sampler_zone_selection :: proc(t: ^testing.T) {
 		{sample = s2, lo_key = 40, hi_key = 59, root = 57, lo_velocity = 64, hi_velocity = 127, group = 2, gain = 1},
 		{sample = s3, lo_key = 60, hi_key = 80, root = 69, lo_velocity = 0, hi_velocity = 127, group = 3, gain = 1},
 	})
-	first := b.sets[set].zones.first
+	first := b.sets[bank_set_row(&b, set)].zones.first
 	// key and velocity
 	testing.expect(t, zone_for(&b, set, 50, 100, 1) == first + 2)
 	testing.expect(t, zone_for(&b, set, 70, 10, 1) == first + 3)
@@ -118,7 +121,7 @@ test_sampler_zone_selection :: proc(t: ^testing.T) {
 	}
 	testing.expect(t, seen[0] > 10 && seen[1] > 10)
 	// nothing to pick
-	testing.expect(t, zone_for(&b, 7, 50, 30, 1) == -1)
+	testing.expect(t, zone_for(&b, set + 1000, 50, 30, 1) == -1)
 	testing.expect(t, zone_for(nil, 0, 50, 30, 1) == -1)
 }
 
@@ -168,10 +171,10 @@ test_sampler_block_split :: proc(t: ^testing.T) {
 	p[.Release] = 0.05
 	for n in ([]Note{{pitch = 63.3, velocity = 0.7, duration = 0.2}, {pitch = 70, velocity = 0.9, duration = 0.5}, {pitch = 48, velocity = 0.4, duration = 0.05}}) {
 		env := Voice_Env{bank = &b}
-		total := int(tail_sampler(0, p[.Release], f32(n.pitch), n, &env) * RATE) + 100
-		wl, wr, _ := play(&b, 0, n, total, 0, 9, p)
+		total := int(tail_sampler(set, p[.Release], f32(n.pitch), n, &env) * RATE) + 100
+		wl, wr, _ := play(&b, set, n, total, 0, 9, p)
 		for block in ([]int{1, 37, 64, 1000, 4097}) {
-			l, r, _ := play(&b, 0, n, total, block, 9, p)
+			l, r, _ := play(&b, set, n, total, block, 9, p)
 			same := true
 			for i in 0 ..< total {
 				if l[i] != wl[i] || r[i] != wr[i] {
@@ -236,15 +239,15 @@ test_sampler_pads :: proc(t: ^testing.T) {
 	// a pad with a pitch plays the pad's sample at that pitch
 	l3, _, _ := play(&b, set, {pad = base.name_id("snare"), pitch = 50, velocity = 1, duration = 0.01}, RATE / 10, key = 38)
 	testing.expect(t, abs(frequency(l3[100:]) - 600) < 2)
-	testing.expect(t, tail_sampler(i32(set), 0.1, 36, {pad = base.name_id("kick")}, nil) == SAMPLER_ONE_SHOT_TAIL) // not loaded: a guess
+	testing.expect(t, tail_sampler(set, 0.1, 36, {pad = base.name_id("kick")}, nil) == SAMPLER_ONE_SHOT_TAIL) // not loaded: a guess
 	// loaded: the sample's own length (and the kernel's reach), and nothing after it
 	env := Voice_Env{bank = &b}
-	kick_tail := tail_sampler(i32(set), 0.1, 36, {pad = base.name_id("kick"), velocity = 1}, &env)
+	kick_tail := tail_sampler(set, 0.1, 36, {pad = base.name_id("kick"), velocity = 1}, &env)
 	testing.expectf(t, kick_tail >= 0.2 && kick_tail < 0.21, "a 0.2 s kick's tail is %f", kick_tail)
 	l4, _, _ := play(&b, set, {pad = base.name_id("kick"), velocity = 1, duration = 0.01}, RATE / 2, key = 36)
 	testing.expect(t, rms(l4[int(math.ceil(f64(kick_tail) * RATE)):]) == 0)
 	// a held note on a sample that doesn't loop: cut by the sample's end
-	held := tail_sampler(i32(set), 0.1, 36, {pitch = 36, velocity = 1, duration = 2}, &env)
+	held := tail_sampler(set, 0.1, 36, {pitch = 36, velocity = 1, duration = 2}, &env)
 	testing.expectf(t, abs(held - kick_tail) < 1e-9, "held %f", held)
 }
 
@@ -273,4 +276,77 @@ test_sampler_file_rate :: proc(t: ^testing.T) {
 	hz2 := frequency(l2[2000:])
 	testing.expectf(t, abs(hz2 - 882) < 1, "an octave up plays %f Hz", hz2)
 	testing.expect_value(t, sample_frames(b.samples[0], 44100), f64(RATE))
+}
+
+// A set keeps its id wherever its row is: in a bank viewing it, whatever was
+// there before, and it plays the same samples there.
+@(test)
+test_set_ids :: proc(t: ^testing.T) {
+	src, mix: Bank
+	defer bank_destroy(&src)
+	defer bank_destroy(&mix)
+	frames := []f32{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8}
+	a := bank_borrow(&src, "a", frames[:4])
+	b := bank_borrow(&src, "b", frames[4:])
+	testing.expect(t, a != 0 && b != 0 && a != b)
+	// a row of the viewer's first: it has the later id, and rows stay in id order
+	own := bank_borrow(&mix, "own", frames[:2])
+	testing.expect_value(t, bank_set_row(&mix, own), 0)
+	bank_view(&mix, &src)
+	testing.expect(t, bank_set_row(&mix, a) == 0 && bank_set_row(&mix, b) == 1 && bank_set_row(&mix, own) == 2)
+	first :: proc(m: ^Bank, set: Set_Id) -> f32 {
+		z := zone_for(m, set, 60, 100, 1)
+		return sample_f32(m, m.samples[m.zones[z].sample])[0]
+	}
+	testing.expect(t, first(&mix, a) == 0.1 && first(&mix, b) == 0.5 && first(&mix, own) == 0.1)
+	found, ok := bank_set_from_name(&mix, "b")
+	testing.expect(t, ok && found == b)
+	// an id no bank has plays nothing; nor does no set
+	testing.expect(t, bank_set_row(&mix, own + 1000) == -1 && bank_set_row(&mix, 0) == -1 && zone_for(&mix, own + 1000, 60, 100, 1) == -1)
+}
+
+// Collecting drops the sets not kept and what only they played; what stays
+// keeps its id, and plays the same samples from wherever its rows moved to.
+@(test)
+test_bank_collect :: proc(t: ^testing.T) {
+	b: Bank
+	defer bank_destroy(&b)
+	gone_only := add_sine(&b, 220, 0.1)
+	shared := add_sine(&b, 440, 0.1)
+	own := add_sine(&b, 880, 0.1)
+	whole := Zone{lo_key = 0, hi_key = 127, root = 69, hi_velocity = 127, gain = 1}
+	low, high, z1, z2 := whole, whole, whole, whole
+	z1.sample, z2.sample, low.sample, high.sample = gone_only, shared, shared, own
+	low.hi_key, high.lo_key = 69, 70
+	name := strings.clone("gone")
+	append(&b.text, name)
+	append(&b.files, Bank_File{register = -1})
+	gone := add_set(&b, name, {z1, z2})
+	b.zone_file[0] = 0 // only `gone` plays this file
+	kept := add_set(&b, "kept", {low, high})
+	later := add_set(&b, "later", {high})
+	note := Note{pitch = 75, velocity = 1, duration = 0.05}
+	before, _, _ := play(&b, kept, note, RATE / 20)
+	testing.expect_value(t, bank_collect(&b, {later, kept}), 1)
+	testing.expect(t, bank_set_row(&b, gone) == -1 && zone_for(&b, gone, 60, 100, 1) == -1)
+	testing.expect(t, bank_set_row(&b, kept) == 0 && bank_set_row(&b, later) == 1)
+	testing.expect_value(t, len(b.zones), 3)
+	testing.expect_value(t, len(b.zone_file), 3)
+	testing.expect_value(t, len(b.samples), 2)
+	testing.expect_value(t, len(b.f32s), 2)
+	testing.expect_value(t, len(b.owned), 2)
+	testing.expect_value(t, len(b.files), 0)
+	testing.expect_value(t, len(b.text), 0)
+	after, _, _ := play(&b, kept, note, RATE / 20)
+	for v, i in after {
+		if v != before[i] {
+			testing.expectf(t, false, "sample %d: %v, was %v", i, v, before[i])
+			break
+		}
+	}
+	// nothing to drop: nothing moves; nothing kept: all of it goes
+	testing.expect_value(t, bank_collect(&b, {kept, later}), 0)
+	testing.expect_value(t, len(b.samples), 2)
+	testing.expect_value(t, bank_collect(&b, nil), 2)
+	testing.expect(t, len(b.sets) == 0 && len(b.zones) == 0 && len(b.samples) == 0 && len(b.f32s) == 0 && len(b.owned) == 0)
 }
