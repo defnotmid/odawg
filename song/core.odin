@@ -310,7 +310,10 @@ Song :: struct {
 	// mix's limiter).
 	master_gain: base.Gain,
 	master:   Span,
-	bank:     ^device.Bank, // the sample sets its Samplers play (nil: none)
+	// Its own rows of the sample sets it plays (song_bank_view: their audio
+	// the bank's it was loaded into; empty: none yet), made once.
+	bank:        device.Bank,
+	bank_viewed: bool,
 	findings: base.Findings,
 	// Edits since it was composed (command_apply): every one, and each
 	// part's; what render's tables were measured at.
@@ -321,6 +324,7 @@ Song :: struct {
 // What composing keeps until the note table is built: each track's notes.
 Work :: struct {
 	notes:  [dynamic][dynamic]Note_Row, // by track
+	bank:   ^device.Bank, // what names its sample sets (nil: none)
 	drafts: spec.Drafts, // the instruments drafted, each row once (placed at each tempo)
 	styles: [dynamic]^spec.Spec, // by style (Song.styles): the spec its parts are read from (nil: none)
 }
@@ -330,11 +334,16 @@ Work :: struct {
 START_TEMPO_LIMIT :: 0.06
 DURATION_TEMPO_LIMIT :: 0.03
 
-// Composes `s` into `out`, its Samplers playing sets of `bank` (load the
-// sets spec.asset_names lists first). Everything is allocated with
+// Composes `s` into `out`, its Samplers naming sets declared in `bank`
+// (assets.bank_declare_spec first), read while it composes and never kept:
+// it plays its own view of them (assets.song_load, song_bank_view), so it
+// plays nothing until it has one. Of `bank` it reads only the sets' rows
+// (their names and ids): it may run while bank_load runs on that bank on
+// another thread (a load adds no set and moves none), never while anything
+// declares, lends, collects or views into it. Everything is allocated with
 // context.allocator: give it an arena and release the arena with the song.
 song_from_spec :: proc(s: ^spec.Spec, out: ^Song, bank: ^device.Bank = nil) -> bool {
-	out.bank = bank
+	device.bank_init(&out.bank) // its own: made with the song's allocator, whatever the context when it is viewed
 	out.name, out.start, out.seed, out.gain = s.name, s.start, u64(s.seed), base.db_to_gain(s.gain_db)
 	out.master_gain = 1
 	out.findings = make(base.Findings)
@@ -366,7 +375,7 @@ song_from_spec :: proc(s: ^spec.Spec, out: ^Song, bank: ^device.Bank = nil) -> b
 	for span in s.room {
 		append(&out.room, Room_Span{0, span[0] - s.start, span[1] - s.start})
 	}
-	work: Work
+	work := Work{bank = bank}
 	work.notes = make([dynamic][dynamic]Note_Row, context.temp_allocator)
 	spec.drafts_init(&work.drafts)
 	arrange(s, out, &work)
@@ -428,7 +437,7 @@ style_name :: proc(s: ^Song, style: i32) -> string {
 
 // What the song's voices read beyond their notes.
 voice_env :: proc(s: ^Song) -> device.Voice_Env {
-	return {bank = s.bank, programs = &s.programs}
+	return {bank = &s.bank, programs = &s.programs}
 }
 
 // A pad's id, its name kept for what prints it.

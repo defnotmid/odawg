@@ -492,12 +492,10 @@ effect_bit_crusher :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: [
 // 0.5 leaves the signal as it is, 0 is mono and 1 only the sides.
 effect_stereo_widener :: proc(state: []u8, p: ^Params, l, r: []f32, key_l, key_r: []f32, scratch: ^Fx_Scratch) {
 	fx_run(state, p, l, r, key_l, key_r, scratch, proc(state: []u8, p: ^Params, l, r, _, _: []f32, scratch: ^Fx_Scratch) {
-		gm := 2 * (1 - p[.Width])
-		gs := 2 * p[.Width]
+		w := dsp.mid_side(2 * (1 - p[.Width]), 2 * p[.Width])
 		for i in 0 ..< len(l) {
-			m := 0.5 * (l[i] + r[i]) * gm
-			s := 0.5 * (l[i] - r[i]) * gs
-			l[i], r[i] = m + s, m - s
+			v := w * [2]f32{l[i], r[i]}
+			l[i], r[i] = v[0], v[1]
 		}
 	})
 }

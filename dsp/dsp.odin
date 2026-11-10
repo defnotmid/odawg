@@ -54,6 +54,14 @@ fade_envelope :: #force_inline proc "contextless" (k, length, fade_in, fade_out:
 	return fade_gain(k, fade_in, curve) * fade_gain(length - 1 - k, fade_out, curve)
 }
 
+// Left and right as mid and side, each scaled (`mid`, `side`), and back:
+// one 2x2 over a frame ([2]f32{l, r}). 1 and 1: as it was; a side of 0:
+// mono.
+mid_side :: #force_inline proc "contextless" (mid, side: f32) -> matrix[2, 2]f32 {
+	a, b := (mid + side) / 2, (mid - side) / 2
+	return {a, b, b, a}
+}
+
 // ---- per-sample math ---------------------------------------------------------------------
 
 // What the hot loops call per sample instead of libm: each a pure function

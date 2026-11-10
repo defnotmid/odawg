@@ -203,7 +203,7 @@ bank_file_song :: proc(bank: ^device.Bank, d: ^Declaring, f: Song_File) -> i32 {
 	if f.url == "" {
 		return bank_file_path(bank, f.path, file_stamp(d.host, f.path))
 	}
-	init_tables(bank)
+	device.bank_init(bank)
 	for x, i in bank.files {
 		if x.url == f.url && x.sha256 == f.sha256 {
 			return i32(i)

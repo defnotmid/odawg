@@ -3,6 +3,7 @@ package odawg_assets
 import "base:runtime"
 import base "../base"
 import device "../device"
+import song "../song"
 import "core:fmt"
 import "core:math"
 import "core:mem"
@@ -151,7 +152,7 @@ declare_set :: proc(bank: ^device.Bank, s: ^Set_Row) -> Error {
 // Declares the named sets not in the bank yet (their zones, nothing loaded).
 // A name the register lacks is a finding. True when every name is declared.
 bank_declare :: proc(bank: ^device.Bank, names: []string, findings: ^base.Findings) -> bool {
-	init_tables(bank)
+	device.bank_init(bank)
 	ok := true
 	for name in names {
 		if _, declared := device.bank_set_from_name(bank, name); declared {
@@ -190,10 +191,28 @@ bank_load :: proc(bank: ^device.Bank, needs: []device.Sample_Need, findings: ^ba
 	return bank_load_at(bank, root, needs, findings, progress, host = host)
 }
 
+// Loads what a composed song plays into `bank` (sample_needs, then
+// bank_load: with bank's allocator, its findings with the context's), then
+// gives the song its own view of it (song.song_bank_view, with the song's),
+// which it plays from then on: the one call a host makes for a song, where
+// nothing else writes `bank`. False when the song has a view already (and
+// nothing is loaded), or a needed zone didn't load (the view is made all
+// the same: what didn't load is silent).
+song_load :: proc(s: ^song.Song, bank: ^device.Bank, findings: ^base.Findings, progress: Progress = progress_stderr, host: ^Bank_Host = nil) -> bool {
+	if s.bank_viewed {
+		return false
+	}
+	needs := make([dynamic]device.Sample_Need, context.temp_allocator)
+	song.sample_needs(s, &needs)
+	loaded := len(needs) == 0 || bank_load(bank, needs[:], findings, progress, host)
+	song.song_bank_view(s, bank)
+	return loaded
+}
+
 // bank_load with the files under `root`; trust_disk: use the files there as
 // they are, unverified and never fetched (a test's own stand-ins).
 bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Need, findings: ^base.Findings, progress: Progress = progress_stderr, trust_disk := false, host: ^Bank_Host = nil) -> bool {
-	init_tables(bank)
+	device.bank_init(bank)
 	// the files the needs reach, once each (a finding names the set)
 	Wanted :: struct {
 		file: i32,
@@ -513,34 +532,6 @@ bank_from_names :: proc(bank: ^device.Bank, names: []string, findings: ^base.Fin
 	return bank_load(bank, needs[:], findings, progress) && ok
 }
 
-// The bank's tables keep the caller's allocator; decoding happens in scratch.
-@(private)
-init_tables :: proc(bank: ^device.Bank) {
-	if bank.f32s.allocator.procedure == nil {
-		bank.f32s.allocator = context.allocator
-	}
-	if bank.i16s.allocator.procedure == nil {
-		bank.i16s.allocator = context.allocator
-	}
-	if bank.owned.allocator.procedure == nil {
-		bank.owned.allocator = context.allocator
-	}
-	if bank.samples.allocator.procedure == nil {
-		bank.samples.allocator = context.allocator
-	}
-	if bank.zones.allocator.procedure == nil {
-		bank.zones.allocator = context.allocator
-	}
-	if bank.zone_file.allocator.procedure == nil {
-		bank.zone_file.allocator = context.allocator
-	}
-	if bank.sets.allocator.procedure == nil {
-		bank.sets.allocator = context.allocator
-	}
-	if bank.files.allocator.procedure == nil {
-		bank.files.allocator = context.allocator
-	}
-}
 
 @(private)
 set_names_joined :: proc() -> string {

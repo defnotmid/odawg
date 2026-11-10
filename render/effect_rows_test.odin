@@ -345,7 +345,6 @@ test_effect_row_host_clip :: proc(t: ^testing.T) {
 	play :: proc(rows: ^spec.Spec, bank: ^device.Bank, set: device.Set_Id, effects: spec.json_value) -> (^song.Song, Output) {
 		m := new(song.Song)
 		song.mix_init(m)
-		m.bank = bank
 		m.host_rows = rows
 		{
 			// what append_clip reads the chain with is its own: gone after it
@@ -356,6 +355,7 @@ test_effect_row_host_clip :: proc(t: ^testing.T) {
 			virtual.arena_destroy(&scratch)
 		}
 		song.mix_end(m)
+		song.song_bank_view(m, bank)
 		return m, output_from_song(m, {})
 	}
 	m, wet := play(rows, &bank, set, effects)

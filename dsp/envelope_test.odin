@@ -229,3 +229,15 @@ test_adsr_unstarted :: proc(t: ^testing.T) {
 		testing.expectf(t, w >= 0 && w < 1, "wrap(%e) = %e", x, w)
 	}
 }
+
+// Mid and side scaled as one 2x2: both at 1 is the frame as it was, exactly;
+// no side is mono; no mid leaves only the sides.
+@(test)
+test_mid_side :: proc(t: ^testing.T) {
+	frame := [2]f32{0.3, -0.7}
+	testing.expect_value(t, mid_side(1, 1) * frame, frame)
+	mono := mid_side(1, 0) * frame
+	testing.expect(t, mono[0] == mono[1] && abs(mono[0] - (frame[0] + frame[1]) / 2) < 1e-7)
+	sides := mid_side(0, 1) * frame
+	testing.expect(t, sides[0] == -sides[1] && abs(sides[0] - (frame[0] - frame[1]) / 2) < 1e-7)
+}

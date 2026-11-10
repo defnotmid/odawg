@@ -62,6 +62,88 @@ has_code :: proc(fs: base.Findings, code: string) -> bool {
 	return false
 }
 
+// A song plays its own view of its sets, made once as it loads: the bank it
+// was loaded into may grow (its rows moving) and have its rows written over
+// while it plays, and it plays the same. Its view holds only the sets it
+// names; a mix's, made the same way from the bank, holds a set two of its
+// songs play once. A command can't point a node at another set.
+@(test)
+test_song_view :: proc(t: ^testing.T) {
+	root := scratch_root("view")
+	defer os.remove_all(root)
+	write(t, root, "keys/c4.wav", sine_wav(44100, 22050, 261.63))
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	_ = virtual.arena_init_growing(&arena)
+	context.allocator = virtual.arena_allocator(&arena)
+	findings := make(base.Findings)
+	sp := new(spec.Spec)
+	testing.expect(t, spec.spec_from_json(`{ bpm: 120, chords: "C", sections: [ { name: "a", duration: "1m" } ],
+		sets: { keys: { zones: [ { file: "keys/c4.wav", root: "C4" } ] } },
+		parts: { piano: { instrument: { name: "Sampler", set: "keys" }, play: [ { name: "a", notes: "C4 E4 G4 C5" } ] } } }`, sp, &findings))
+	host := Bank_Host{root = root}
+	bank: device.Bank
+	defer device.bank_destroy(&bank)
+	testing.expect(t, bank_declare_spec(&bank, sp, &findings, &host))
+	frames := make([]f32, 64)
+	device.bank_borrow(&bank, "lent", frames) // a set it doesn't name
+	testing.expect_value(t, len(bank.sets), 2)
+	s := new(song.Song)
+	testing.expect(t, song.song_from_spec(sp, s, &bank))
+	testing.expect(t, len(s.bank.sets) == 0, "composed, it has no view yet")
+	testing.expect(t, song_load(s, &bank, &findings, nil, &host))
+	keys, _ := device.bank_set_from_name(&bank, spec.asset_key(sp, "keys"))
+	testing.expect(t, len(s.bank.sets) == 1 && s.bank.sets[0].id == keys, "its view: the one set it names")
+	out := render.output_from_song(s, {})
+	testing.expect(t, render.peak_from_samples(out.left, out.right) > 0.01)
+	// the bank grows past every row's room and its rows are written over
+	for _ in 0 ..< 1000 {
+		device.bank_borrow(&bank, "lent", frames)
+	}
+	for &z in bank.zones {
+		z.sample = -1
+	}
+	again := render.output_from_song(s, {})
+	testing.expect(t, again.frames == out.frames && slice.equal(again.left, out.left) && slice.equal(again.right, out.right), "it plays its view, not the bank")
+	// once: a view made again is another song
+	testing.expect(t, !song_load(s, &bank, &findings, nil, &host))
+	testing.expect(t, !song.song_bank_view(s, &bank))
+	testing.expect(t, len(s.bank.sets) == 1)
+	// a mix of two songs playing one set: its own view, the set once
+	s2 := new(song.Song)
+	testing.expect(t, song.song_from_spec(sp, s2, &bank))
+	m := new(song.Song)
+	song.mix_init(m)
+	song.append_song(m, s, 0, "one")
+	song.append_song(m, s2, 0, "two")
+	song.mix_end(m)
+	testing.expect(t, len(m.bank.sets) == 0, "a mix takes no view from its songs")
+	testing.expect(t, song.song_bank_view(m, &bank))
+	testing.expect(t, len(m.bank.sets) == 1 && m.bank.sets[0].id == keys)
+	// a command or a lane moves a Sampler's own values, never the set it
+	// plays: not by its row's option (`set`, a control), nor by the field
+	set_of :: proc(s: ^song.Song) -> f32 {
+		program := i32(s.params[s.tracks[0].instrument][.Program])
+		for n in s.programs.nodes[s.programs.programs[program].nodes.first:][:s.programs.programs[program].nodes.count] {
+			if row := device.node_row(n.kind); row.name == "Sampler" {
+				return n.values[row.slots[0]] // its `set`
+			}
+		}
+		return -1
+	}
+	testing.expect_value(t, set_of(s), f32(keys))
+	testing.expect(t, song.command_apply(s, {.Param_Set, "piano/attack", 0.05}))
+	testing.expect(t, song.command_apply(s, {.Param_Set, "piano/out/release", 0.2}))
+	testing.expect(t, !song.command_apply(s, {.Param_Set, "piano/set", f64(keys) + 1}))
+	testing.expect(t, !song.command_apply(s, {.Param_Set, "piano/out/set", f64(keys) + 1}))
+	testing.expect_value(t, set_of(s), f32(keys))
+	program := i32(s.params[s.tracks[0].instrument][.Program])
+	testing.expect_value(t, device.control_from_path(&s.programs, program, "out/set"), -1)
+	c := device.control_from_path(&s.programs, program, "set")
+	testing.expect(t, c >= 0 && !device.control_moves(&s.programs, program, c, f32(keys), f32(keys) + 1))
+	testing.expect_value(t, set_of(s), f32(keys))
+}
+
 // A set the song brings: zones split their keys between roots, pads sit
 // at their drum keys, every file is reported, the song plays them at their
 // own rate; a file changed declares the set again (new songs hear it, the
@@ -101,9 +183,7 @@ test_inline_set :: proc(t: ^testing.T) {
 	testing.expect(t, kick.lo_key == 36 && kick.hi_key == 36 && kick.one_shot)
 	s := new(song.Song)
 	testing.expect(t, song.song_from_spec(sp, s, &bank))
-	needs := make([dynamic]device.Sample_Need)
-	song.sample_needs(s, &needs)
-	testing.expect(t, bank_load(&bank, needs[:], &findings, nil, &host))
+	testing.expect(t, song_load(s, &bank, &findings, nil, &host))
 	testing.expectf(t, !has_code(findings, "asset_unavailable"), "%v", findings)
 	testing.expect_value(t, int(bank.samples[bank.zones[zs.first].sample].rate), 44100)
 	out := render.output_from_song(s, {})
@@ -297,9 +377,7 @@ test_style_plays_song_set :: proc(t: ^testing.T) {
 	clear(&findings)
 	s := new(song.Song)
 	song.song_from_spec(sp, s, &bank)
-	needs := make([dynamic]device.Sample_Need)
-	song.sample_needs(s, &needs)
-	testing.expect(t, bank_load(&bank, needs[:], &s.findings, nil, &host))
+	testing.expect(t, song_load(s, &bank, &s.findings, nil, &host))
 	paths := make([dynamic]string)
 	for f in s.findings {
 		append(&paths, f.path)
@@ -634,7 +712,7 @@ test_load_on_a_pool :: proc(t: ^testing.T) {
 	load :: proc(t: ^testing.T, root: string, audio: ^Host_Audio, threads: int, big: bool) -> []Result {
 		// the bank on this test's allocator, which sees any free it didn't make
 		bank: device.Bank
-		init_tables(&bank)
+		device.bank_init(&bank)
 		defer device.bank_destroy(&bank)
 		arena: virtual.Arena
 		_ = virtual.arena_init_growing(&arena)

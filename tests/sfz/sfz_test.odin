@@ -125,9 +125,7 @@ test_sfz_instrument :: proc(t: ^testing.T) {
 	testing.expectf(t, assets.bank_declare_spec(&bank, sp, &findings, &host), "%v", findings[:])
 	s := new(song.Song)
 	testing.expect(t, song.song_from_spec(sp, s, &bank))
-	needs := make([dynamic]device.Sample_Need)
-	song.sample_needs(s, &needs)
-	testing.expect(t, assets.bank_load(&bank, needs[:], &findings, nil, &host))
+	testing.expect(t, assets.song_load(s, &bank, &findings, nil, &host))
 	append(&s.findings, ..findings[:])
 	for f in s.findings {
 		testing.expectf(t, f.severity != .Error, "%s: %s", f.code, f.message)
@@ -239,9 +237,7 @@ test_layer_unavailable :: proc(t: ^testing.T) {
 	_ = assets.bank_declare_spec(&bank, sp, &findings, &host)
 	s := new(song.Song)
 	testing.expect(t, song.song_from_spec(sp, s, &bank))
-	needs := make([dynamic]device.Sample_Need)
-	song.sample_needs(s, &needs)
-	_ = assets.bank_load(&bank, needs[:], &findings, nil, &host) // soft.wav: a finding, and it plays on
+	_ = assets.song_load(s, &bank, &findings, nil, &host) // soft.wav: a finding, and it plays on
 	out := render.output_from_song(s, {})
 	defer render.output_destroy(&out)
 	level :: proc(out: render.Output, from, to: f64) -> (peak: f32) {

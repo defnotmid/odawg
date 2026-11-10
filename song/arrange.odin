@@ -128,16 +128,16 @@ arrange :: proc(s: ^spec.Spec, song: ^Song, work: ^Work) {
 	for st in work.styles {
 		if st != nil {
 			for ret in st.returns {
-				add_return(song, st, ret)
+				add_return(song, st, ret, work.bank)
 			}
 		}
 	}
 	for ret in s.returns {
-		add_return(song, s, ret)
+		add_return(song, s, ret, work.bank)
 	}
 	// the spec's buses and where they go, its parts' routes
 	for b in s.buses {
-		append(&song.buses, Bus{b.name, b.id, chain_into_song(song, s, b.chain, 60 / song.sections[0].bpm0)})
+		append(&song.buses, Bus{b.name, b.id, chain_into_song(song, s, b.chain, 60 / song.sections[0].bpm0, work.bank)})
 	}
 	for b in s.buses {
 		if b.to != "" {
@@ -371,8 +371,8 @@ in_band :: proc(energy: f64, band: [2]f64) -> bool {
 }
 
 @(private = "file")
-add_return :: proc(song: ^Song, from: ^spec.Spec, ret: spec.Return_Spec) {
-	r := Return{name = ret.name, id = ret.id, chain = chain_into_song(song, from, ret.chain, 60 / song.sections[0].bpm0)}
+add_return :: proc(song: ^Song, from: ^spec.Spec, ret: spec.Return_Spec, bank: ^device.Bank) {
+	r := Return{name = ret.name, id = ret.id, chain = chain_into_song(song, from, ret.chain, 60 / song.sections[0].bpm0, bank)}
 	for &x in song.returns {
 		if x.name == ret.name {
 			x = r
@@ -383,16 +383,16 @@ add_return :: proc(song: ^Song, from: ^spec.Spec, ret: spec.Return_Spec) {
 }
 
 // Copies a spec's device into the song with its values resolved (lengths in
-// beats at `beat_seconds`).
+// beats at `beat_seconds`, sample sets by name to their ids in `bank`).
 @(private = "file")
-device_into_song :: proc(song: ^Song, from: ^spec.Spec, d: i32, beat_seconds: f64, drafts: ^spec.Drafts = nil) -> i32 {
+device_into_song :: proc(song: ^Song, from: ^spec.Spec, d: i32, beat_seconds: f64, bank: ^device.Bank, drafts: ^spec.Drafts = nil) -> i32 {
 	p := spec.params_from_device(from, d, beat_seconds)
 	plays_program := device.DEVICE_TABLE[from.devices[d].kind].program
 	fixed := make([dynamic]spec.Fixed_Tone, context.temp_allocator)
 	if plays_program {
 		// its row (an instrument's, an effect row's), read into a program at
 		// this tempo: a program each placement
-		program := spec.instrument_program(from, d, beat_seconds, song.bank, &song.programs, &song.findings, drafts, &fixed)
+		program := spec.instrument_program(from, d, beat_seconds, bank, &song.programs, &song.findings, drafts, &fixed)
 		if program < 0 {
 			return -1
 		}
@@ -434,11 +434,11 @@ device_label :: proc(d: spec.Device_Spec) -> string {
 }
 
 @(private)
-chain_into_song :: proc(song: ^Song, from: ^spec.Spec, c: Span, beat_seconds: f64) -> Span {
+chain_into_song :: proc(song: ^Song, from: ^spec.Spec, c: Span, beat_seconds: f64, bank: ^device.Bank) -> Span {
 	devices := make([dynamic]i32, context.temp_allocator)
 	for d in from.chain[c.first:base.span_end(c)] {
 		// an effect row that can't play (its findings say why) isn't placed
-		if x := device_into_song(song, from, d, beat_seconds); x >= 0 {
+		if x := device_into_song(song, from, d, beat_seconds, bank); x >= 0 {
 			append(&devices, x)
 		}
 	}
@@ -498,7 +498,7 @@ track_for :: proc(song: ^Song, s: ^spec.Spec, work: ^Work, pi: i32, name: string
 			t.pan = p.pan
 		}
 		if p.effects.count >= 0 {
-			t.chain = chain_into_song(song, from, p.effects, beat_seconds)
+			t.chain = chain_into_song(song, from, p.effects, beat_seconds, work.bank)
 		}
 		if p.sends.count > 0 {
 			t.sends = sends_into_song(song, from, p.sends, t.sends, pi, base.path_join("parts", name))
@@ -516,7 +516,7 @@ track_for :: proc(song: ^Song, s: ^spec.Spec, work: ^Work, pi: i32, name: string
 		base.report(&song.findings, "no_instrument", .Warning, path, "%s: no instrument, so it doesn't play: give it one (`instrument = {{ \"Synth\", ... }}`)", path)
 		return -1
 	}
-	t.instrument = device_into_song(song, instrument.from, instrument.d, beat_seconds, &work.drafts)
+	t.instrument = device_into_song(song, instrument.from, instrument.d, beat_seconds, work.bank, &work.drafts)
 	if t.instrument < 0 {
 		return -1
 	}

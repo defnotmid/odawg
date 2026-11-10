@@ -529,6 +529,7 @@ region_run :: proc(st: ^Region_State, lane: ^Lane, data: []$T, channels: int, sc
 	taps := i64(st.taps)
 	c := f32(st.cutoff)
 	cutoff := f32(st.cutoff) * scale
+	width := dsp.mid_side(1, st.width)
 	for i in 0 ..< len(l) {
 		k := lane.at + i64(i) - st.delay
 		if k < 0 {
@@ -561,8 +562,8 @@ region_run :: proc(st: ^Region_State, lane: ^Lane, data: []$T, channels: int, sc
 		loop_to := looped ? st.loop_to : st.loop_from // its loop only while it loops
 		sl, sr := read_frame(data, ch, right, st.length, st.loop_from, loop_to, pos, c, taps, cutoff, st.step * f64(varies ? rate[i] : factor) == 1)
 		if st.width != 1 {
-			mid, side := (sl + sr) * 0.5, (sl - sr) * 0.5 * st.width
-			sl, sr = mid + side, mid - side
+			v := width * [2]f32{sl, sr}
+			sl, sr = v[0], v[1]
 		}
 		l[i], r[i] = sl, sr
 	}

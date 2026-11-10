@@ -1095,6 +1095,13 @@ compile_controls :: proc(progs: ^Programs, id: i32, desc: ^Program_Desc, finding
 			c.value = desc.controls[i].value
 		}
 	}
+	// a control reaching a sample set (a Sampler's or a Player's `set`) was
+	// read here: a command or a lane moving it after is refused
+	for &c in controls {
+		for tg in progs.control_targets[c.targets.first:base.span_end(c.targets)] {
+			c.fixed ||= target_is_asset(progs, tg)
+		}
+	}
 }
 
 // A control's value as its first target holds it (what a knob shows when
@@ -1134,6 +1141,18 @@ target_is_gain :: proc(progs: ^Programs, t: Control_Target) -> bool {
 	}
 	f := field_of_slot(progs.nodes[t.node].kind, int(t.slot))
 	return f != nil && f.unit == .Gain
+}
+
+// Whether a target is a sample set (a field of .Asset): read at compile, a
+// name to its id, and never moved after (a song's view holds the sets it
+// was composed with).
+@(private = "file")
+target_is_asset :: proc(progs: ^Programs, t: Control_Target) -> bool {
+	if t.mod >= 0 {
+		return false
+	}
+	f := field_of_slot(progs.nodes[t.node].kind, int(t.slot))
+	return f != nil && f.unit == .Asset
 }
 
 // Sets a single target's underlying storage directly to `v`.
@@ -1286,8 +1305,8 @@ control_from_path :: proc(progs: ^Programs, program: i32, path: string) -> i32 {
 		p := progs.programs[pi]
 		for &g, j in progs.nodes[p.nodes.first:base.span_end(p.nodes)] {
 			field, slot, known := node_field_from_name(g.kind, parts[1])
-			if g.name != name || !known || field.list > 0 {
-				continue
+			if g.name != name || !known || field.list > 0 || field.unit == .Asset {
+				continue // a sample set never moves after compile
 			}
 			x := Control_Target{node = p.nodes.first + i32(j), mod = -1, param = -1, slot = u8(slot), field = mf, op = .Set, scale = 1}
 			if mf != .None {
@@ -1374,6 +1393,8 @@ control_pinned :: proc(progs: ^Programs, c: i32) -> ^Node_Field {
 
 // A node's field (by the node's name; its pads' programs' too) set to
 // value, and what follows derived. False: none, or its shape would change.
+// Never a sample set (a field of .Asset): the sets a song plays are fixed
+// when it is composed (its own view of them), another set is another song.
 node_field_set :: proc(progs: ^Programs, program: i32, node: u32, field: string, value: f32) -> bool {
 	if program < 0 {
 		return false
@@ -1389,7 +1410,7 @@ node_field_set :: proc(progs: ^Programs, program: i32, node: u32, field: string,
 			if n.name != node {
 				continue
 			}
-			if f, slot, known := node_field_from_name(n.kind, field); known && f.list == 0 {
+			if f, slot, known := node_field_from_name(n.kind, field); known && f.list == 0 && f.unit != .Asset {
 				append(olds, Old{&n.values[slot], n.values[slot]})
 				n.values[slot] = f.unit == .Gain ? f32(base.db_to_gain(base.Db(value))) : value
 			}
@@ -1403,7 +1424,7 @@ node_field_set :: proc(progs: ^Programs, program: i32, node: u32, field: string,
 					if gn.name != node {
 						continue
 					}
-					if f, slot, known := node_field_from_name(gn.kind, field); known && f.list == 0 && int(lp_param.slot) == slot {
+					if f, slot, known := node_field_from_name(gn.kind, field); known && f.list == 0 && f.unit != .Asset && int(lp_param.slot) == slot {
 						append(olds, Old{&lp_param.value, lp_param.value})
 						lp_param.value = f.unit == .Gain ? f32(base.db_to_gain(base.Db(value))) : value
 					}

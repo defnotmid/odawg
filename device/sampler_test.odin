@@ -292,7 +292,7 @@ test_set_ids :: proc(t: ^testing.T) {
 	// a row of the viewer's first: it has the later id, and rows stay in id order
 	own := bank_borrow(&mix, "own", frames[:2])
 	testing.expect_value(t, bank_set_row(&mix, own), 0)
-	bank_view(&mix, &src)
+	bank_view(&mix, &src, {a, b})
 	testing.expect(t, bank_set_row(&mix, a) == 0 && bank_set_row(&mix, b) == 1 && bank_set_row(&mix, own) == 2)
 	first :: proc(m: ^Bank, set: Set_Id) -> f32 {
 		z := zone_for(m, set, 60, 100, 1)

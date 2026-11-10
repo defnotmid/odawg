@@ -1,5 +1,6 @@
 package odawg_device
 
+import "base:runtime"
 import "core:slice"
 import "core:sync"
 import base "../base"
@@ -12,7 +13,8 @@ import base "../base"
 // float stereo) at the rate they were recorded (a Sampler reads them at
 // RATE), clips as float stereo at RATE. A file loaded is a chunk sized
 // exactly; a host's own audio is lent as a chunk (bank_borrow), not copied;
-// another bank's rows can be viewed over the same chunks (bank_view). The assets layer fills it from the
+// another bank's sets can be viewed over the same chunks (bank_view: a
+// song plays its own view, never a bank a host grows). The assets layer fills it from the
 // register (downloading a set the first time a song uses it); dsp only
 // reads it. A node's `.Asset` field holds a set's id.
 
@@ -34,6 +36,26 @@ set_id_next :: proc() -> Set_Id {
 	id := sync.atomic_add(&set_id_last, 1) + 1
 	assert(id < SET_ID_END, "odawg: sample set ids ran out")
 	return Set_Id(id)
+}
+
+// Gives every table of `b` not yet given one `allocator`, so what is
+// appended later goes there whatever the context then: a song's own bank
+// (its view, what a host lends a mix) is made with the song's.
+bank_init :: proc(b: ^Bank, allocator := context.allocator) {
+	set :: proc(a: ^$T/[dynamic]$E, allocator: runtime.Allocator) {
+		if a.allocator.procedure == nil {
+			a.allocator = allocator
+		}
+	}
+	set(&b.sets, allocator)
+	set(&b.zones, allocator)
+	set(&b.zone_file, allocator)
+	set(&b.files, allocator)
+	set(&b.samples, allocator)
+	set(&b.f32s, allocator)
+	set(&b.i16s, allocator)
+	set(&b.owned, allocator)
+	set(&b.text, allocator)
 }
 
 // The row of set `id` in `b`: -1 where `b` doesn't have it.
@@ -213,31 +235,60 @@ borrowed_set :: proc(b: ^Bank, name: string, sm: Sample) -> Set_Id {
 	return bank_set_append(b, name, {i32(len(b.zones) - 1), 1})
 }
 
-// Appends `src`'s sets to `dst` over the same chunks (its rows copied, its
-// audio not): what one bank needs of another that outlives it. They keep
-// their ids, so what names them plays them from either bank.
-bank_view :: proc(dst, src: ^Bank) {
-	f0, i0 := i32(len(dst.f32s)), i32(len(dst.i16s))
-	append(&dst.f32s, ..src.f32s[:])
-	append(&dst.i16s, ..src.i16s[:])
-	s0, z0, file0 := i32(len(dst.samples)), i32(len(dst.zones)), i32(len(dst.files))
-	append(&dst.files, ..src.files[:])
-	for sm in src.samples {
-		x := sm
-		x.chunk += sm.format == .F32 ? f0 : i0
-		append(&dst.samples, x)
-	}
-	for z, i in src.zones {
-		x := z
-		if x.sample >= 0 {
-			x.sample += s0
-		}
-		append(&dst.zones, x)
-		f := src.zone_file[i]
-		append(&dst.zone_file, f >= 0 ? f + file0 : f)
+// Appends the sets of `src` that `sets` names to `dst`, and only what they
+// reach: their zones, the files and samples those play, the chunks those
+// read. The rows are copied; the audio and the names stay src's (a view
+// owns no chunk), so src may grow, move its rows or collect what else it
+// holds while dst is read, as long as it keeps these sets (bank_collect).
+// They keep their ids, so what names them plays them from either bank.
+// Only dst's rows move (into id order).
+bank_view :: proc(dst, src: ^Bank, sets: []Set_Id) {
+	// each src row's in dst: row + 1 (0: not yet)
+	sample_to := make([]i32, len(src.samples), context.temp_allocator)
+	file_to := make([]i32, len(src.files), context.temp_allocator)
+	chunk_to := [Sample_Format][]i32 {
+		.F32 = make([]i32, len(src.f32s), context.temp_allocator),
+		.I16 = make([]i32, len(src.i16s), context.temp_allocator),
 	}
 	for set in src.sets {
-		append(&dst.sets, Sample_Set{set.id, set.name, {set.zones.first + z0, set.zones.count}, set.stamp})
+		if !slice.contains(sets, set.id) {
+			continue
+		}
+		z0 := i32(len(dst.zones))
+		for zi in set.zones.first ..< base.span_end(set.zones) {
+			z := src.zones[zi]
+			if s := z.sample; s >= 0 {
+				if sample_to[s] == 0 {
+					sm := src.samples[s]
+					to := &chunk_to[sm.format][sm.chunk]
+					if to^ == 0 {
+						switch sm.format {
+						case .F32:
+							append(&dst.f32s, src.f32s[sm.chunk])
+							to^ = i32(len(dst.f32s))
+						case .I16:
+							append(&dst.i16s, src.i16s[sm.chunk])
+							to^ = i32(len(dst.i16s))
+						}
+					}
+					sm.chunk = to^ - 1
+					append(&dst.samples, sm)
+					sample_to[s] = i32(len(dst.samples))
+				}
+				z.sample = sample_to[s] - 1
+			}
+			append(&dst.zones, z)
+			f := src.zone_file[zi]
+			if f >= 0 {
+				if file_to[f] == 0 {
+					append(&dst.files, src.files[f])
+					file_to[f] = i32(len(dst.files))
+				}
+				f = file_to[f] - 1
+			}
+			append(&dst.zone_file, f)
+		}
+		append(&dst.sets, Sample_Set{set.id, set.name, {z0, set.zones.count}, set.stamp})
 	}
 	slice.stable_sort_by(dst.sets[:], proc(a, b: Sample_Set) -> bool {return a.id < b.id})
 }

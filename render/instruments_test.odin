@@ -237,9 +237,9 @@ test_clip :: proc(t: ^testing.T) {
 	set := device.bank_borrow(&bank, "ramp", audio)
 	m: song.Song
 	song.mix_init(&m)
-	m.bank = &bank
 	song.append_clip(&m, {name = "bed", set = set, start = 1, stop = 50, offset = 2, fade_in = 0.5, fade_out = 1, curve = .Linear})
 	song.mix_end(&m)
+	song.song_bank_view(&m, &bank)
 	testing.expect_value(t, m.labels[m.tracks[0].instrument], "Player")
 	straight := output_from_song(&m, {})
 	tp8 := test_pool(3)
@@ -260,10 +260,10 @@ test_clip :: proc(t: ^testing.T) {
 	// with effects, as a part's are written: on the clip's track, labelled
 	fx: song.Song
 	song.mix_init(&fx)
-	fx.bank = &bank
 	effects, _ := json.parse_string(`[ { "name": "Filter", "type": "lowpass", "frequency": 200 }, { "name": "Nothing" } ]`, .JSON5, true)
 	ti := song.append_clip(&fx, {name = "bed", set = set, start = 1, stop = 3, offset = 2, effects = effects})
 	song.mix_end(&fx)
+	song.song_bank_view(&fx, &bank)
 	chain := fx.tracks[ti].chain
 	testing.expect_value(t, chain.count, 1)
 	if chain.count == 1 {
@@ -330,12 +330,12 @@ test_song_placed_sounds_alone :: proc(t: ^testing.T) {
 		m: song.Song
 		song.mix_init(&m)
 		if as_clip {
-			m.bank = &bank
 			song.append_clip(&m, {name = "s", set = device.bank_borrow(&bank, "s", frames), start = start, stop = stop, offset = offset, gain = base.db_to_gain(-3), fade_in = 0.2, fade_out = 0.3})
 		} else {
 			song.append_song(&m, s, start - offset, "s", base.db_to_gain(-3), {start, stop, 0.2, 0.3, .Linear})
 		}
 		song.mix_end(&m)
+		song.song_bank_view(&m, &bank)
 		(as_clip ? &clip : &placed)^ = output_from_song(&m, {to = length})
 	}
 	worst: f32
@@ -353,9 +353,9 @@ test_song_placed_sounds_alone :: proc(t: ^testing.T) {
 		song.append_song(&m, s, start - offset, "s", base.db_to_gain(-3), {start, stop, 0.2, 0.3, .Linear})
 		song.mix_end(&m)
 		song.mix_init(&c)
-		c.bank = &bank
 		song.append_clip(&c, {name = "s", set = device.bank_borrow(&bank, "s", frames), start = start, stop = stop, offset = offset, gain = base.db_to_gain(-3), fade_in = 0.2, fade_out = 0.3})
 		song.mix_end(&c)
+		song.song_bank_view(&c, &bank)
 		a := output_from_song(&m, {to = length, mastering = master})
 		b := output_from_song(&c, {to = length, mastering = master})
 		limited: f32
@@ -421,9 +421,9 @@ test_clip_borrows_i16 :: proc(t: ^testing.T) {
 	play :: proc(bank: ^device.Bank, set: device.Set_Id) -> Output {
 		m: song.Song
 		song.mix_init(&m)
-		m.bank = bank
 		song.append_clip(&m, {name = "render", set = set, start = 0.5, stop = 3.5, offset = 0.25, fade_in = 0.1, fade_out = 0.2})
 		song.mix_end(&m)
+		song.song_bank_view(&m, bank)
 		return output_from_song(&m, {})
 	}
 	bank: device.Bank
@@ -460,9 +460,9 @@ test_clip_rate :: proc(t: ^testing.T) {
 	for rate in ([]f64{2, 0.5, -1}) {
 		m: song.Song
 		song.mix_init(&m)
-		m.bank = &bank
 		song.append_clip(&m, {name = "bed", set = set, start = 1, stop = 9, offset = 4, rate = rate})
 		song.mix_end(&m)
+		song.song_bank_view(&m, &bank)
 		straight := output_from_song(&m, {})
 		tp9 := test_pool(3)
 		defer test_pool_free(tp9)
@@ -789,7 +789,6 @@ test_duck_gain_at :: proc(t: ^testing.T) {
 	mix :: proc(s: ^song.Song, bank: ^device.Bank, bed, quiet: device.Set_Id, duck: song.Sidechain, placed, ducked: bool) -> (m: ^song.Song, track: i32) {
 		m = new(song.Song)
 		song.mix_init(m)
-		m.bank = bank
 		if placed {
 			pl := song.append_song(m, s, 0, "s", 1, {}, ducked ? duck : {})
 			track = m.placements[pl].tracks.first
@@ -798,6 +797,7 @@ test_duck_gain_at :: proc(t: ^testing.T) {
 		}
 		song.append_clip(m, {name = "vo", set = quiet, start = 3, stop = 5, voice = true})
 		song.mix_end(m)
+		song.song_bank_view(m, bank)
 		return
 	}
 	clip_mix, clip := mix(s, &bank, bed, quiet, duck, false, true)
@@ -846,9 +846,9 @@ test_mastering_release :: proc(t: ^testing.T) {
 	mix :: proc(bank: ^device.Bank, set: device.Set_Id) -> ^song.Song {
 		m := new(song.Song)
 		song.mix_init(m)
-		m.bank = bank
 		song.append_clip(m, {name = "bursts", set = set, start = 0, stop = 4})
 		song.mix_end(m)
+		song.song_bank_view(m, bank)
 		return m
 	}
 	own := mix(&bank, set)

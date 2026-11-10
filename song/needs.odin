@@ -59,6 +59,32 @@ needs_of_program :: proc(s: ^Song, play: i32, layer: i32, key: f32, velocity: f3
 	}
 }
 
+// The song's own rows of the sample sets it names in `bank` (sets_of_song):
+// a view (device.bank_view) of them, their rows copied and their audio and
+// names bank's. Made once its samples are loaded (assets.song_load does
+// both); from then on it plays these alone, never `bank`, which may grow,
+// move its rows and collect on other threads while the song renders. A
+// mix is a song like any other: its view is of the bank its songs were
+// loaded into and its clips lent to (never of its songs' views). Made once:
+// false when it has one, since a song may be read as it plays (a view made
+// again is another song: compose it again). Its rows go with the song's
+// allocator (given when it was composed: song_from_spec, mix_init). Keep
+// its sets in `bank` while it lives (bank_collect's `keep`).
+song_bank_view :: proc(s: ^Song, bank: ^device.Bank) -> bool {
+	if s.bank_viewed {
+		return false
+	}
+	s.bank_viewed = true
+	if bank == nil {
+		return true
+	}
+	sets := make([dynamic]device.Set_Id, context.temp_allocator)
+	sets_of_song(s, &sets)
+	device.bank_init(&s.bank) // a song never composed: the context's
+	device.bank_view(&s.bank, bank, sets[:])
+	return true
+}
+
 // The sets a song names, whether or not it reaches them or they are loaded:
 // what a host keeps for it when it collects the bank (device.bank_collect).
 sets_of_song :: proc(s: ^Song, out: ^[dynamic]device.Set_Id) {

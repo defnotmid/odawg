@@ -198,15 +198,13 @@ load :: proc(a: ^Args, l: ^Loaded, pinning := false) -> bool {
 	// the song's own files are from its folder: style files read in first,
 	// then its sample sets declared (names to ids: the register's, its
 	// own, SFZ files), then only the zones the notes reach loaded (the
-	// register's fetched on first use)
+	// register's fetched on first use) and the song given its own view
 	host := assets.Bank_Host{root = filepath.dir(path), pinning = pinning, verify = a.verify, pool = a.pool}
 	read_style_files(&host, &l.spec, &l.findings)
 	assets.bank_declare_spec(&l.bank, &l.spec, &l.findings, &host)
 	ok := song.song_from_spec(&l.spec, &l.song, &l.bank)
-	if ok && len(l.bank.sets) > 0 {
-		needs := make([dynamic]device.Sample_Need)
-		song.sample_needs(&l.song, &needs)
-		assets.bank_load(&l.bank, needs[:], &l.findings, host = &host)
+	if ok {
+		assets.song_load(&l.song, &l.bank, &l.findings, host = &host)
 	}
 	append(&l.findings, ..l.song.findings[:])
 	return ok

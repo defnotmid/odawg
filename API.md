@@ -365,7 +365,9 @@ A row:
   pitch; a pad cuts those it chokes. The example 808 and 909 take `decay` (1: as built),
   `tone` (0.5) and `tune` (semitones), v0.0.7's DrumMachine knobs.
 - **After compose**, a command sets a control by name (`Param_Set "bass/cutoff"`), else a
-  node's field (`"bass/out/q"`); a change that would make a mono node stereo is refused.
+  node's field (`"bass/out/q"`); a change that would make a mono node stereo is refused, as
+  is a sample set (a field of `.Asset`): what a song plays is fixed at compose, so another
+  set is another song.
 - **In memory:** `device.compile_program(progs, &desc, findings)` places a `Program_Desc`
   (nodes, mods, pads, keys, controls as plain data) without JSON; spec reads rows into one.
 - **A clip** is a program of one `Clip` node (`song.append_clip`, or the built-in `Player`
@@ -794,10 +796,12 @@ assets.bank_declare_spec(&bank, &s, &findings, &host, &files)   // every set the
                                                   // the song's own, SFZ, the register's (rows only);
                                                   // a source's files fetched when bank_load reaches them
 g: song.Song
-song.song_from_spec(&s, &g, &bank)                // the form, the arrangement, the note table
-needs: [dynamic]device.Sample_Need
-song.sample_needs(&g, &needs)
-assets.bank_load(&bank, needs[:], &findings, host = &host)   // only the zones the notes reach
+song.song_from_spec(&s, &g, &bank)                // the form, the arrangement, the note table (bank: read for
+                                                  // its sets' ids, never kept: it plays nothing yet)
+assets.song_load(&g, &bank, &findings, host = &host)   // only the zones the notes reach, then the song's own
+                                                  // view of its sets (song.song_bank_view): what it plays from
+                                                  // then on, never bank, which may grow on other threads while it
+                                                  // renders; made once (false after: another view is another song)
 song.seconds_from_position(&g, "drop@1m")         // the time grammar; beat_from_position, beats_from_range
 song.pulse_from_seconds(&g, t, {part = "drums", note = "kick"}, 8)
 song.notes_from_filter(&g, {part = "drums", note = "clap", range = "drop"}, &out)
@@ -808,6 +812,8 @@ render.master_export(&g, opts, .Streaming, sink)  // measured, gained, limited, 
 song.mix_init(&mix); song.append_song(&mix, &g, at, "score", gain = base.db_to_gain(-6), window = w, duck = d)
 set := device.bank_borrow(&bank, "vo.wav", frames)  // a device.Set_Id: it names the set in any bank viewing this one
 song.append_clip(&mix, {name = "vo.wav", set = set, start = 2, stop = 9, gain = base.db_to_gain(-3), voice = true}); song.mix_end(&mix)
+song.song_bank_view(&mix, &bank)                  // a mix is a song: its own view, of the bank its songs were loaded
+                                                  // into and its clips lent to (never of its songs' views)
                                                   // levels are base.Gain (linear; the host converts its dB): a
                                                   // clip's gain and its duck's floor are Maybe (nil: 1, -12 dB);
                                                   // a duck's floor is the gain it dips to (0: silence)
@@ -820,7 +826,9 @@ dsp.fade_envelope(k, length, fi, fo, curve)                                // mi
 
 live: [dynamic]device.Set_Id                      // a changed file declares its set again, and the old one stays for the songs on it:
 song.sets_of_song(&g, &live)                      // gather what every song still alive names,
-device.bank_collect(&bank, live[:])               // and the rest goes, with what only it played (where nothing reads the bank)
+device.bank_collect(&bank, live[:])               // and the rest goes, with what only it played (where nothing writes the
+                                                  // bank; a song's view keeps its rows, and its audio stays while its sets are kept)
+device.bank_view(&dst, &bank, sets)               // the rows of those sets and only what they reach, over bank's audio
 
 g.nodes, g.edges                                  // the routing: tracks, parts, returns, buses, master; edges by where they go
 song.part_id(&g, part); song.node_from_id(&g, id) // a part's id; the row an id is at in this build (-1: none)

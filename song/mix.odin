@@ -17,6 +17,7 @@ import spec "../spec"
 
 mix_init :: proc(m: ^Song) {
 	m^ = {master_gain = 1}
+	device.bank_init(&m.bank) // its own: its view, and what a host lends it, with the mix's allocator
 	m.findings = make(base.Findings)
 }
 
@@ -28,9 +29,6 @@ mix_init :: proc(m: ^Song) {
 // placed clip is, `duck` (a spans sidechain) dipping all it plays under the
 // voice. Returns its placement (a host's room spans for it name it).
 append_song :: proc(m: ^Song, s: ^Song, at: base.Seconds, prefix: string, gain: base.Gain = 1, window: Window = {}, duck: Sidechain = {}) -> i32 {
-	if m.bank == nil {
-		m.bank = s.bank
-	}
 	part0, dev0, chain0 := i32(len(m.parts)), i32(len(m.devices)), i32(len(m.chain))
 	send0, ret0, track0, note0 := i32(len(m.sends)), i32(len(m.returns)), i32(len(m.tracks)), i32(len(m.notes))
 	bus0, place0 := i32(len(m.buses)), i32(len(m.placements))
@@ -242,7 +240,7 @@ append_clip :: proc(m: ^Song, c: Clip) -> i32 {
 		spec.spec_init(fx, context.temp_allocator)
 		fx.outer = m.host_rows // the rows it names: the host's
 		chain := spec.effects_from_value(fx, c.effects, base.path_join(c.name, "effects"), &m.findings)
-		t.chain = chain_into_song(m, fx, chain, CLIP_BEAT_SECONDS)
+		t.chain = chain_into_song(m, fx, chain, CLIP_BEAT_SECONDS, nil) // a host row names no sample set
 	}
 	if c.ducked {
 		t.sidechains = {i32(len(m.sidechains)), 1}

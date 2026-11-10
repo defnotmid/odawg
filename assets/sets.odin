@@ -115,7 +115,7 @@ bank_text :: proc(bank: ^device.Bank, s: string) -> string {
 
 // A path of the host's as a file of the bank: one row per path and content.
 bank_file_path :: proc(bank: ^device.Bank, path: string, stamp: u64) -> i32 {
-	init_tables(bank)
+	device.bank_init(bank)
 	for f, i in bank.files {
 		if f.register < 0 && f.path == path && f.stamp == stamp {
 			return i32(i)
@@ -176,7 +176,7 @@ SET_SOURCES := [Set_Source]Set_Source_Row {
 // set's samples, a source's pins): what a host watches and keys the song
 // by. True when every set is declared.
 bank_declare_spec :: proc(bank: ^device.Bank, s: ^spec.Spec, findings: ^base.Findings, host: ^Bank_Host = nil, files: ^[dynamic]string = nil) -> bool {
-	init_tables(bank)
+	device.bank_init(bank)
 	refs := make([dynamic]spec.Asset_Ref, context.temp_allocator)
 	spec.asset_refs(s, &refs)
 	d := Declaring{findings = findings, host = host, files = files, sources = make([dynamic]Source_Read, context.temp_allocator)}
@@ -234,7 +234,7 @@ Zone_Draft :: struct {
 // (zones answering the same keys and velocities alternate).
 @(private)
 append_set :: proc(bank: ^device.Bank, name: string, stamp: u64, drafts: []Zone_Draft) {
-	init_tables(bank)
+	device.bank_init(bank)
 	first := i32(len(bank.zones))
 	groups := make(map[[4]int][dynamic]int, context.temp_allocator)
 	for z, zi in drafts {

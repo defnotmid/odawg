@@ -1894,8 +1894,11 @@ reset_fx :: proc(e: ^Engine, k: int, f: Fx_Run, at: i64) {
 
 // Streams the next len(l) samples of the mix into l and r (and into stems,
 // when given: one [2][]f32 per stem (stem_count: the parts, then the
-// returns, then the buses), as long as l, what goes into the master), on
-// the caller's thread: for a preview playing, or a frame.
+// returns, then the buses), as long as l, what goes into the master),
+// returning to the caller's thread with them filled: for a preview playing,
+// or a frame. The nodes run on the pool engine_init was lent (nil: on the
+// caller's thread alone), so a pool lent to an engine runs nothing else
+// while it plays.
 engine_process :: proc(e: ^Engine, l, r: []f32, stems: [][2][]f32 = nil) {
 	walk(e, len(l), true, {l = l, r = r, stems = stems})
 }
