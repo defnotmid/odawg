@@ -915,3 +915,99 @@ test_tail_covers_a_moved_decay :: proc(t: ^testing.T) {
 		testing.expectf(t, peak > 0 && end < 0.01 * peak, "%s: cut off at sample %d, at %f of its peak", time, last, end / peak)
 	}
 }
+
+// Each spans sidechain merges the voice spans by its own `merge` in mix_end
+// (sharing a slice when two ask the same), and both rendering and duck_gain_at
+// match the unmerged scalar envelope bit for bit.
+@(test)
+test_duck_spans_merge :: proc(t: ^testing.T) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	_ = virtual.arena_init_growing(&arena)
+	context.allocator = virtual.arena_allocator(&arena)
+
+	frames := 6 * RATE
+	unit := make([]f32, 2 * frames)
+	for i in 0 ..< len(unit) {
+		unit[i] = 0.5
+	}
+	bank: device.Bank
+	device.bank_init(&bank)
+	bed := device.bank_borrow(&bank, "bed", unit)
+	quiet := device.bank_borrow(&bank, "vo", make([]f32, 2 * frames))
+
+	m := new(song.Song)
+	song.mix_init(m)
+	// two tracks sharing merge 0.8 s, one with a tighter 0.15 s merge that must NOT bridge the 0.4 s pause
+	tight := song.append_clip(m, {name = "tight", set = bed, start = 0, stop = 6, ducked = true, duck = {base.db_to_gain(-12), 0.1, 0.05, 0.2, 0.15}})
+	wide_a := song.append_clip(m, {name = "wide_a", set = bed, start = 0, stop = 6, ducked = true, duck = {base.db_to_gain(-12), 0.1, 0.05, 0.2, 0.8}})
+	wide_b := song.append_clip(m, {name = "wide_b", set = bed, start = 0, stop = 6, ducked = true, duck = {base.db_to_gain(-6), 0.1, 0.05, 0.2, 0.8}})
+	// unsorted, nested, close (0.08 s: both merge) and medium (0.4 s: only 0.8 s merges)
+	spans := [?][2]base.Seconds{{2.2, 3.0}, {0.8, 1.5}, {1.0, 1.3}, {1.58, 1.8}}
+	for sp in spans {
+		song.append_clip(m, {name = "vo", set = quiet, start = sp[0], stop = sp[1], voice = true})
+	}
+	song.mix_end(m)
+	song.song_bank_view(m, &bank)
+
+	// wide_a and wide_b share one merged slice (1 span: [0.8, 3.0]); tight gets its own (2 spans: [0.8, 1.8] and [2.2, 3.0])
+	sc_tight := m.sidechains[m.tracks[tight].sidechains.first]
+	sc_wa := m.sidechains[m.tracks[wide_a].sidechains.first]
+	sc_wb := m.sidechains[m.tracks[wide_b].sidechains.first]
+	testing.expect_value(t, sc_wa.spans, sc_wb.spans)
+	testing.expect_value(t, sc_wa.spans.count, 1)
+	testing.expect_value(t, sc_tight.spans.count, 2)
+	testing.expect_value(t, len(m.voice_spans), 3)
+
+	// at 2.0 s (inside the 0.4 s pause): wide is held at full duck, tight has recovered above floor
+	testing.expect(t, abs(duck_gain_at(m, wide_a, 2 * RATE) - sc_wa.floor) < 1e-7)
+	testing.expect(t, duck_gain_at(m, tight, 2 * RATE) > sc_tight.floor + 0.1)
+
+	// sample-for-sample identity against unmerged scalar reference on both tight and wide_a
+	ref_gain :: proc(voices: [][2]base.Seconds, sc: song.Sidechain, at: i64) -> f32 {
+		attack := base.samples_from_seconds(sc.attack)
+		hold := base.samples_from_seconds(sc.hold)
+		release := base.samples_from_seconds(sc.release)
+		gap := base.samples_from_seconds(sc.merge)
+		w_max: f32
+		one :: proc(a, b, at, attack, hold, release: i64) -> f32 {
+			if at < a - attack || at >= b + hold + release {
+				return 0
+			}
+			if at < a {
+				return f32(at - (a - attack)) / f32(max(attack, 1))
+			}
+			if at >= b + hold {
+				return 1 - f32(at - (b + hold)) / f32(max(release, 1))
+			}
+			return 1
+		}
+		a := base.samples_from_seconds(voices[0][0])
+		b := base.samples_from_seconds(voices[0][1])
+		for v in voices[1:] {
+			va, vb := base.samples_from_seconds(v[0]), base.samples_from_seconds(v[1])
+			if va - b < gap {
+				b = max(b, vb)
+				continue
+			}
+			w_max = max(w_max, one(a, b, at, attack, hold, release))
+			a, b = va, vb
+		}
+		w_max = max(w_max, one(a, b, at, attack, hold, release))
+		return 1 + (f32(sc.floor) - 1) * w_max
+	}
+
+	out := output_from_song(m, {stems = true})
+	tight_l := out.stems[m.tracks[tight].part][0]
+	wide_l := out.stems[m.tracks[wide_a].part][0]
+
+	worst_query, worst_stem: f32
+	for at in 0 ..< frames {
+		gt := ref_gain(m.voices[:], sc_tight, i64(at))
+		gw := ref_gain(m.voices[:], sc_wa, i64(at))
+		worst_query = max(worst_query, max(abs(f32(duck_gain_at(m, tight, i64(at))) - gt), abs(f32(duck_gain_at(m, wide_a, i64(at))) - gw)))
+		worst_stem = max(worst_stem, max(abs(tight_l[at] - 0.5 * gt), abs(wide_l[at] - 0.5 * gw)))
+	}
+	testing.expect_value(t, worst_query, 0)
+	testing.expect_value(t, worst_stem, 0)
+}

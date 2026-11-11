@@ -18,6 +18,7 @@ import spec "../spec"
 mix_init :: proc(m: ^Song) {
 	m^ = {master_gain = 1}
 	device.bank_init(&m.bank) // its own: its view, and what a host lends it, with the mix's allocator
+	m.voice_spans = make([dynamic][2]i64)
 	m.findings = make(base.Findings)
 }
 
@@ -266,15 +267,59 @@ duck_under_voice :: proc(floor: Maybe(base.Gain), attack, hold, release, merge: 
 	return {mode = .Spans, floor = floor.? or_else base.db_to_gain(-12), attack = attack > 0 ? attack : 0.2, hold = hold > 0 ? hold : 0.3, release = release > 0 ? release : 0.8, merge = merge > 0 ? merge : 0.8}
 }
 
-// After the appends: the notes in time order, the voice spans merged by the
-// widest merge any ducked track asks (each track then merges by its own
-// when it ducks).
+// After the appends: the notes in time order, and each spans sidechain's
+// voice spans merged by its own `merge` gap (sidechains sharing a gap share
+// one slice of voice_spans).
 mix_end :: proc(m: ^Song) {
 	sort_regions(m)
 	graph_build(m)
 	ids_build(m, true)
 	notes_by_time(m)
 	slice.sort_by(m.voices[:], proc(a, b: [2]base.Seconds) -> bool {return a[0] < b[0]})
+	clear(&m.voice_spans)
+	if len(m.voices) == 0 {
+		return
+	}
+	Done :: struct {
+		gap:  i64,
+		span: Span,
+	}
+	done := make([dynamic]Done, 0, 4, context.temp_allocator)
+	spans_for :: proc(m: ^Song, done: ^[dynamic]Done, merge: base.Seconds) -> Span {
+		gap := max(base.samples_from_seconds(merge), 0)
+		for d in done^ {
+			if d.gap == gap {
+				return d.span
+			}
+		}
+		first := i32(len(m.voice_spans))
+		a := base.samples_from_seconds(m.voices[0][0])
+		b := max(a, base.samples_from_seconds(m.voices[0][1]))
+		for v in m.voices[1:] {
+			va := base.samples_from_seconds(v[0])
+			vb := max(va, base.samples_from_seconds(v[1]))
+			if va - b < gap {
+				b = max(b, vb)
+				continue
+			}
+			append(&m.voice_spans, [2]i64{a, b})
+			a, b = va, vb
+		}
+		append(&m.voice_spans, [2]i64{a, b})
+		sp := Span{first, i32(len(m.voice_spans)) - first}
+		append(done, Done{gap, sp})
+		return sp
+	}
+	for &sc in m.sidechains {
+		if sc.mode == .Spans {
+			sc.spans = spans_for(m, &done, sc.merge)
+		}
+	}
+	for &pl in m.placements {
+		if pl.duck.mode == .Spans {
+			pl.duck.spans = spans_for(m, &done, pl.duck.merge)
+		}
+	}
 }
 
 // The mode of the program owning layer `i` (its row's table).

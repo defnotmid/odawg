@@ -2628,48 +2628,58 @@ duck_gain_at :: proc(s: ^song.Song, track: i32, at: i64) -> base.Gain {
 }
 
 // Dips the block under the voice tracks' spans (onimite's duck_envelope,
-// fframes' duck_under_voice): spans closer than `merge` merge; the gain
-// falls to `floor` over `attack` before a span and comes back over
-// `release` after `hold`, per sample on the song's clock.
+// fframes' duck_under_voice): spans closer than `merge` are merged once in
+// mix_end; the gain falls to `floor` over `attack` before a span and comes
+// back over `release` after `hold`, per sample on the song's clock.
 @(private = "file")
 duck_spans :: proc(s: ^song.Song, sc: song.Sidechain, at: i64, l, r: []f32) {
-	if len(s.voices) == 0 {
+	spans := s.voice_spans[sc.spans.first:base.span_end(sc.spans)]
+	if len(spans) == 0 || len(l) == 0 {
 		return
 	}
+	assert(len(l) <= BLOCK)
 	n := i64(len(l))
 	attack := base.samples_from_seconds(sc.attack)
 	hold := base.samples_from_seconds(sc.hold)
 	release := base.samples_from_seconds(sc.release)
-	gap := base.samples_from_seconds(sc.merge)
+	tail := hold + release
+	// disjoint and sorted, so their ends increase too
+	lo_i, hi_i := 0, len(spans)
+	for lo_i < hi_i {
+		mid := int(uint(lo_i + hi_i) >> 1)
+		if spans[mid][1] + tail <= at {
+			lo_i = mid + 1
+		} else {
+			hi_i = mid
+		}
+	}
+	if lo_i >= len(spans) || spans[lo_i][0] - attack >= at + n {
+		return
+	}
 	floor := f32(sc.floor)
-	weight := make([]f32, n, context.temp_allocator)
-	region :: proc(a, b, at, n, attack, hold, release: i64, weight: []f32) {
+	att_f := f32(max(attack, 1))
+	rel_f := f32(max(release, 1))
+	weight_buf: [BLOCK]f32 = ---
+	weight := weight_buf[:len(l)]
+	mem.zero_slice(weight)
+	for sp in spans[lo_i:] {
+		a, b := sp[0], sp[1]
+		if a - attack >= at + n {
+			break
+		}
 		lo := max(a - attack, at)
-		hi := min(b + hold + release, at + n)
+		hi := min(b + tail, at + n)
 		for t in lo ..< hi {
 			w: f32 = 1
 			switch {
 			case t < a:
-				w = f32(t - (a - attack)) / f32(max(attack, 1))
+				w = f32(t - (a - attack)) / att_f
 			case t >= b + hold:
-				w = 1 - f32(t - (b + hold)) / f32(max(release, 1))
+				w = 1 - f32(t - (b + hold)) / rel_f
 			}
 			weight[t - at] = max(weight[t - at], w)
 		}
 	}
-	// merged as they come (the spans are sorted by start)
-	a := base.samples_from_seconds(s.voices[0][0])
-	b := base.samples_from_seconds(s.voices[0][1])
-	for v in s.voices[1:] {
-		va, vb := base.samples_from_seconds(v[0]), base.samples_from_seconds(v[1])
-		if va - b < gap {
-			b = max(b, vb)
-			continue
-		}
-		region(a, b, at, n, attack, hold, release, weight)
-		a, b = va, vb
-	}
-	region(a, b, at, n, attack, hold, release, weight)
 	for i in 0 ..< len(l) {
 		g := 1 + (floor - 1) * weight[i]
 		l[i] *= g

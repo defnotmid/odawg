@@ -123,6 +123,7 @@ Sidechain :: struct {
 	hold:    base.Seconds,
 	release: base.Seconds,
 	merge:   base.Seconds,
+	spans:   Span, // Spans: into Song.voice_spans, merged by `merge` (mix_end)
 }
 
 Send :: struct {
@@ -298,8 +299,9 @@ Song :: struct {
 	// texts of the files they name (spec_add_instrument_text; what to read:
 	// spec.instrument_files). nil: built-ins only.
 	host_rows: ^spec.Spec,
-	voices:   [dynamic][2]base.Seconds, // the voice tracks' spans, sorted (a spans sidechain ducks under them)
-	sidechains: [dynamic]Sidechain,
+	voices:      [dynamic][2]base.Seconds, // the voice tracks' spans, sorted (a spans sidechain ducks under them)
+	voice_spans: [dynamic][2]i64, // sample ranges of `voices` merged per spans sidechain's `merge` (mix_end)
+	sidechains:  [dynamic]Sidechain,
 	pad_gains: [dynamic]Pad_Gain,
 	// Values moving over song time (automation.odin): a row per thing moved,
 	// each lane's points once.

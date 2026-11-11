@@ -350,3 +350,99 @@ test_bank_collect :: proc(t: ^testing.T) {
 	testing.expect_value(t, bank_collect(&b, nil), 2)
 	testing.expect(t, len(b.sets) == 0 && len(b.zones) == 0 && len(b.samples) == 0 && len(b.f32s) == 0 && len(b.owned) == 0)
 }
+
+// The scalar tap sum that read_frame vectorises: reference for every cutoff,
+// remainder mod 4, edge, loop wrap, format and channel count.
+@(private = "file")
+read_frame_scalar :: proc "contextless" (data: []$T, channels: int, length, loop_from, loop_to: i64, pos: f64, cutoff: f32, taps: i64, gain: f32, exact: bool) -> (sl, sr: f32) {
+	if pos < 0 {
+		return
+	}
+	ch := i64(channels)
+	right := i64(channels > 1 ? 1 : 0)
+	centre := i64(pos)
+	frac := pos - f64(centre)
+	if exact && frac == 0 && centre < length {
+		return f32(data[ch * centre]) * gain, f32(data[ch * centre + right]) * gain
+	}
+	f := f32(frac)
+	looped := loop_to > loop_from
+	for d in 1 - taps ..= taps {
+		fi := centre + d
+		if looped && fi >= loop_to {
+			fi = loop_from + (fi - loop_from) % (loop_to - loop_from)
+		}
+		if fi < 0 || fi >= length {
+			continue
+		}
+		x := abs((f - f32(d)) * cutoff) * SINC_STEPS
+		ti := int(x)
+		w := (sinc_table[ti] + (sinc_table[ti + 1] - sinc_table[ti]) * (x - f32(ti))) * gain
+		sl += f32(data[ch * fi]) * w
+		sr += f32(data[ch * fi + right]) * w
+	}
+	return
+}
+
+@(test)
+test_read_frame_equivalence :: proc(t: ^testing.T) {
+	frames :: 512
+	mono_f32 := make([]f32, frames)
+	stereo_f32 := make([]f32, 2 * frames)
+	mono_i16 := make([]i16, frames)
+	stereo_i16 := make([]i16, 2 * frames)
+	defer {
+		delete(mono_f32)
+		delete(stereo_f32)
+		delete(mono_i16)
+		delete(stereo_i16)
+	}
+	for i in 0 ..< frames {
+		p := f64(i) / RATE
+		vl := f32(0.55 * math.sin(2 * math.PI * 330 * p) + 0.3 * math.cos(2 * math.PI * 1210 * p))
+		vr := f32(0.55 * math.cos(2 * math.PI * 415 * p) - 0.3 * math.sin(2 * math.PI * 1620 * p))
+		mono_f32[i] = vl
+		stereo_f32[2 * i], stereo_f32[2 * i + 1] = vl, vr
+		mono_i16[i] = i16(math.round(vl * 32000))
+		stereo_i16[2 * i], stereo_i16[2 * i + 1] = i16(math.round(vl * 32000)), i16(math.round(vr * 32000))
+	}
+
+	// taps % 4 == 0 (16, 32, 64), 1 (17), 2 (18), 3 (23)
+	cutoffs := [?]f64{1.0, 16.0 / 16.4, 16.0 / 17.5, 1.0 / math.SQRT_TWO, 0.5, 1.0 / SINC_MAX_STRETCH}
+	loops := [?][2]i64{{0, 0}, {40, 140}, {0, 19}}
+
+	check_all :: proc(data: []$T, channels: int, scale: f32, cutoffs: []f64, loops: [][2]i64) -> f32 {
+		worst: f32
+		for c64 in cutoffs {
+			c := f32(c64)
+			taps := i64(math.ceil(f64(SINC_HALF) / c64))
+			gain := c * scale
+			exact := c64 == 1.0
+			for lp in loops {
+				// negative, start edge, whole and fractional interior, loop wrap, past end
+				for step := -4; step <= 4 * (frames + 70); step += 3 {
+					pos := f64(step) * 0.25
+					l0, r0 := read_frame_scalar(data, channels, frames, lp[0], lp[1], pos, c, taps, gain, exact)
+					l1, r1 := read_frame(data, channels, frames, lp[0], lp[1], pos, c, taps, gain, exact)
+					worst = max(worst, max(abs(l0 - l1), abs(r0 - r1)))
+				}
+				// fractions off the quarter grid, and one that rounds up to 1 in f32
+				for k in 0 ..< i64(frames + 70) {
+					for frac in ([?]f64{0.0371, 0.5003, 0.9371, 1 - 1e-9}) {
+						pos := f64(k) + frac
+						l0, r0 := read_frame_scalar(data, channels, frames, lp[0], lp[1], pos, c, taps, gain, exact)
+						l1, r1 := read_frame(data, channels, frames, lp[0], lp[1], pos, c, taps, gain, exact)
+						worst = max(worst, max(abs(l0 - l1), abs(r0 - r1)))
+					}
+				}
+			}
+		}
+		return worst
+	}
+
+	worst := max(
+		max(check_all(mono_f32, 1, 1, cutoffs[:], loops[:]), check_all(stereo_f32, 2, 1, cutoffs[:], loops[:])),
+		max(check_all(mono_i16, 1, 1.0 / 32768, cutoffs[:], loops[:]), check_all(stereo_i16, 2, 1.0 / 32768, cutoffs[:], loops[:])),
+	)
+	testing.expectf(t, worst < 1e-6, "SIMD read_frame drifted from scalar reference by %g", worst)
+}

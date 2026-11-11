@@ -1406,14 +1406,13 @@ clip_run :: proc(v: ^[MAX_FIELDS]f32, lane: ^Lane, data: []$T, channels: int, sc
 clip_run_rate :: proc(data: []$T, channels: int, scale: f32, frames, first: i64, rate: f64, length, fade_in, fade_out: i64, curve: Curve, mono: bool, at: i64, l, r: []f32) {
 	cutoff := clamp(1 / abs(rate), 1.0 / SINC_MAX_STRETCH, 1)
 	taps := i64(math.ceil(SINC_HALF / cutoff))
-	right := i64(channels > 1 ? 1 : 0)
 	for i in 0 ..< i64(len(l)) {
 		k := at + i
 		pos := f64(first) + f64(k) * rate
 		if k >= length || pos < 0 || pos >= f64(frames) {
 			continue
 		}
-		a, b := read_frame(data, i64(channels), right, frames, 0, 0, pos, f32(cutoff), taps, f32(cutoff) * scale, cutoff == 1)
+		a, b := read_frame(data, channels, frames, 0, 0, pos, f32(cutoff), taps, f32(cutoff) * scale, cutoff == 1)
 		g := dsp.fade_envelope(k, length, fade_in, fade_out, curve)
 		if mono {
 			a = a * 0.70710678 + b * 0.70710678

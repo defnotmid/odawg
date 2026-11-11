@@ -1,8 +1,10 @@
 package odawg_device
 
+import "base:intrinsics"
 import base "../base"
 import dsp "../dsp"
 import "core:math"
+import "core:simd"
 
 // Tone's Sampler over a set of the Bank: a note picks the zone answering its
 // key and velocity (the nearest when none does; one of a round-robin group by
@@ -27,6 +29,8 @@ SINC_BETA :: 7.0
 SINC_STEPS :: 512
 // The widest a kernel gets, shifting up: two octaves (beyond, it aliases).
 SINC_MAX_STRETCH :: 4
+@(private = "file")
+MAX_TAPS :: 2 * SINC_HALF * SINC_MAX_STRETCH
 
 // Seconds a drum note may ring before its samples are loaded (then, their
 // own length).
@@ -38,8 +42,20 @@ SAMPLER_DECLICK :: f64(dsp.DECLICK) / RATE
 
 // One side of the kernel at SINC_STEPS points per tap (symmetric), zero for
 // two taps past its edge, so a tap at the edge reads it without a check.
-@(private = "file")
+@(private = "package")
 sinc_table: [(SINC_HALF + 2) * SINC_STEPS + 2]f32
+
+// The unity kernel transposed by phase (SINC_STEPS + 1 rows of 32 contiguous
+// taps) so cutoff 1 lerps four-wide vectors straight from two adjacent rows.
+@(private = "file")
+poly_sinc: [SINC_STEPS + 1][2 * SINC_HALF]f32
+
+@(private = "file")
+F32x4 :: #simd[4]f32
+@(private = "file")
+F32x8 :: #simd[8]f32
+@(private = "file")
+I32x4 :: #simd[4]i32
 
 @(private = "file")
 bessel_i0 :: proc "contextless" (x: f64) -> f64 {
@@ -70,55 +86,170 @@ sinc_init :: proc "contextless" () {
 	for i in 0 ..< len(sinc_table) {
 		sinc_table[i] = f32(kaiser_sinc(f64(i) / SINC_STEPS, SINC_HALF, SINC_BETA))
 	}
+	for p in 0 ..= SINC_STEPS {
+		for j in 0 ..< 2 * SINC_HALF {
+			d := j - SINC_HALF + 1
+			poly_sinc[p][j] = sinc_table[abs(p - d * SINC_STEPS)]
+		}
+	}
 }
 
+@(private = "file")
+load4_f32 :: #force_inline proc "contextless" (ptr: ^$T) -> F32x4 {
+	when T == f32 {
+		return intrinsics.unaligned_load((^F32x4)(ptr))
+	} else when T == i16 {
+		return F32x4(intrinsics.unaligned_load((^#simd[4]i16)(ptr)))
+	}
+}
 
-// Both sides of interleaved `data` (`ch` channels, `right` the one read
-// as the right; `length` frames) at frame `pos` (fractional, >= 0) through
-// the kernel at `cutoff` (relative to the sample's Nyquist; `taps` on each
-// side), times `gain` (cutoff times the scale): its own frame where `exact`
-// (a whole pos read at its own rate), else every tap, from the table; a
-// loop's taps past its end wrapped (loop_to > loop_from), taps outside the
-// sample silent. The Sampler's, a Region's and a clip at a rate read so.
-@(private = "package")
-read_frame :: #force_inline proc "contextless" (data: []$T, ch, right, length, loop_from, loop_to: i64, pos: f64, cutoff: f32, taps: i64, gain: f32, exact: bool) -> (sl, sr: f32) {
-	if pos < 0 {
-		return
+@(private = "file")
+load8_f32 :: #force_inline proc "contextless" (ptr: ^$T) -> F32x8 {
+	when T == f32 {
+		return intrinsics.unaligned_load((^F32x8)(ptr))
+	} else when T == i16 {
+		return F32x8(intrinsics.unaligned_load((^#simd[8]i16)(ptr)))
 	}
-	centre := i64(pos) // pos >= 0: truncation floors it
-	frac := pos - f64(centre)
-	if exact && frac == 0 && centre < length {
-		return f32(data[ch * centre]) * gain, f32(data[ch * centre + right]) * gain
+}
+
+@(private = "file")
+sinc_weights4 :: #force_inline proc "contextless" (xv: F32x4) -> F32x4 #no_bounds_check {
+	ti := I32x4(xv)
+	tf := xv - F32x4(ti)
+	i0, i1 := simd.extract(ti, 0), simd.extract(ti, 1)
+	i2, i3 := simd.extract(ti, 2), simd.extract(ti, 3)
+	a := F32x4{sinc_table[i0], sinc_table[i1], sinc_table[i2], sinc_table[i3]}
+	b := F32x4{sinc_table[i0 + 1], sinc_table[i1 + 1], sinc_table[i2 + 1], sinc_table[i3 + 1]}
+	return a + (b - a) * tf
+}
+
+@(private = "file")
+tail_weights4 :: #force_inline proc "contextless" (xv: F32x4, rem: int) -> F32x4 {
+	w := sinc_weights4(simd.clamp(xv, F32x4(0), F32x4(SINC_HALF * SINC_STEPS)))
+	return F32x4{simd.extract(w, 0), rem > 1 ? simd.extract(w, 1) : 0, rem > 2 ? simd.extract(w, 2) : 0, 0}
+}
+
+// Four taps of `samples` (`CH` 1 or 2) into `acc0` (mono) or `acc0` + `acc1` (stereo).
+@(private = "file")
+mac4 :: #force_inline proc "contextless" (samples: [^]$T, j: int, $CH: int, w: F32x4, acc0, acc1: ^F32x4) #no_bounds_check {
+	when CH == 1 {
+		acc0^ += load4_f32(&samples[j]) * w
+	} else {
+		s8 := load8_f32(&samples[2 * j])
+		acc0^ += simd.swizzle(s8, 0, 1, 2, 3) * simd.swizzle(w, 0, 0, 1, 1)
+		acc1^ += simd.swizzle(s8, 4, 5, 6, 7) * simd.swizzle(w, 2, 2, 3, 3)
 	}
-	f := f32(frac)
-	looped := loop_to > loop_from
-	if centre - taps + 1 >= 0 && centre + taps < (looped ? loop_to : length) {
-		// every tap inside the sample, every table index inside the table
-		#no_bounds_check for d in 1 - taps ..= taps {
-			x := abs((f - f32(d)) * cutoff) * SINC_STEPS
-			ti := int(x)
-			w := (sinc_table[ti] + (sinc_table[ti + 1] - sinc_table[ti]) * (x - f32(ti))) * gain
-			fi := centre + d
-			sl += f32(data[ch * fi]) * w
-			sr += f32(data[ch * fi + right]) * w
+}
+
+@(private = "file")
+sum_taps :: #force_inline proc "contextless" (samples: [^]$T, $CH: int, f, cutoff: f32, t: int, gain: f32) -> (sl, sr: f32) #no_bounds_check {
+	acc0, acc1: F32x4 = 0, 0
+	if t == SINC_HALF && cutoff == 1 {
+		s := f * SINC_STEPS
+		p := min(int(s), SINC_STEPS - 1) // f rounds up to 1 within 2^-25 of it: row 512 at alpha 1
+		alpha: F32x4 = s - f32(p)
+		r0, r1 := &poly_sinc[p], &poly_sinc[p + 1]
+		#unroll for k in 0 ..< (2 * SINC_HALF) / 4 {
+			j := 4 * k
+			w := intrinsics.unaligned_load((^F32x4)(&r0[j]))
+			w += (intrinsics.unaligned_load((^F32x4)(&r1[j])) - w) * alpha
+			mac4(samples, j, CH, w, &acc0, &acc1)
 		}
-		return
+	} else {
+		f_v: F32x4 = f
+		step_v: F32x4 = cutoff * SINC_STEPS
+		four: F32x4 = 4
+		rem := t & 3
+		dv := F32x4{f32(1 - t), f32(2 - t), f32(3 - t), f32(4 - t)}
+		for j := 0; j + 4 <= t; j += 4 {
+			mac4(samples, j, CH, sinc_weights4((f_v - dv) * step_v), &acc0, &acc1)
+			dv += four
+		}
+		if rem != 0 {
+			mac4(samples, t - rem, CH, tail_weights4((f_v - dv) * step_v, rem), &acc0, &acc1)
+		}
+		dv = F32x4{1, 2, 3, 4}
+		for j := t; j + 4 <= 2 * t; j += 4 {
+			mac4(samples, j, CH, sinc_weights4((dv - f_v) * step_v), &acc0, &acc1)
+			dv += four
+		}
+		if rem != 0 {
+			mac4(samples, 2 * t - rem, CH, tail_weights4((dv - f_v) * step_v, rem), &acc0, &acc1)
+		}
 	}
-	for d in 1 - taps ..= taps {
-		fi := centre + d
+	when CH == 1 {
+		s := simd.reduce_add_bisect(acc0) * gain
+		return s, s
+	} else {
+		s4 := acc0 + acc1
+		return (simd.extract(s4, 0) + simd.extract(s4, 2)) * gain, (simd.extract(s4, 1) + simd.extract(s4, 3)) * gain
+	}
+}
+
+@(private = "file")
+read_frame_edge :: proc "contextless" (data: []$T, $CH: int, length, loop_from, loop_to, first: i64, span: int, f, cutoff: f32, t: int, gain: f32) -> (sl, sr: f32) {
+	buf: [CH * MAX_TAPS]T = ---
+	looped := loop_to > loop_from
+	n := 2 * t
+	#no_bounds_check for j in 0 ..< span {
+		fi := first + i64(j)
 		if looped && fi >= loop_to {
 			fi = loop_from + (fi - loop_from) % (loop_to - loop_from)
 		}
-		if fi < 0 || fi >= length {
-			continue
+		if j < n && fi >= 0 && fi < length {
+			buf[CH * j] = data[i64(CH) * fi]
+			when CH == 2 {
+				buf[2 * j + 1] = data[2 * fi + 1]
+			}
+		} else {
+			buf[CH * j] = 0
+			when CH == 2 {
+				buf[2 * j + 1] = 0
+			}
 		}
-		x := abs((f - f32(d)) * cutoff) * SINC_STEPS
-		ti := int(x)
-		w := (sinc_table[ti] + (sinc_table[ti + 1] - sinc_table[ti]) * (x - f32(ti))) * gain
-		sl += f32(data[ch * fi]) * w
-		sr += f32(data[ch * fi + right]) * w
 	}
-	return
+	return sum_taps(&buf[0], CH, f, cutoff, t, gain)
+}
+
+@(private = "file")
+read_frame_ch :: #force_inline proc "contextless" (data: []$T, $CH: int, length, loop_from, loop_to: i64, pos: f64, cutoff: f32, taps: i64, gain: f32, exact: bool) -> (sl, sr: f32) {
+	centre := i64(pos) // pos >= 0: truncation floors it
+	frac := pos - f64(centre)
+	if exact && frac == 0 && centre < length {
+		s0 := f32(data[i64(CH) * centre]) * gain
+		when CH == 1 {
+			return s0, s0
+		} else {
+			return s0, f32(data[2 * centre + 1]) * gain
+		}
+	}
+	t := int(taps)
+	rem := t & 3
+	span := rem == 0 ? 2 * t : 2 * t + 4 - rem
+	first := centre - taps + 1
+	limit := loop_to > loop_from ? loop_to : length
+	if first >= 0 && first + i64(span) <= limit {
+		return sum_taps(raw_data(data)[i64(CH) * first:], CH, f32(frac), cutoff, t, gain)
+	}
+	return read_frame_edge(data, CH, length, loop_from, loop_to, first, span, f32(frac), cutoff, t, gain)
+}
+
+// Both sides of interleaved `data` (`channels` 1 or 2; `length` frames) at
+// frame `pos` (fractional, >= 0) through the kernel at `cutoff` (relative to
+// the sample's Nyquist; `taps` on each side), times `gain` (cutoff times the
+// scale): its own frame where `exact` (a whole pos read at its own rate),
+// else every tap; a loop's taps past its end wrapped (loop_to > loop_from),
+// taps outside the sample silent. The Sampler's, a Region's and a clip at a
+// rate read so.
+@(private = "package")
+read_frame :: #force_inline proc "contextless" (data: []$T, channels: int, length, loop_from, loop_to: i64, pos: f64, cutoff: f32, taps: i64, gain: f32, exact: bool) -> (sl, sr: f32) {
+	if pos < 0 {
+		return
+	}
+	if channels == 1 {
+		return read_frame_ch(data, 1, length, loop_from, loop_to, pos, cutoff, taps, gain, exact)
+	}
+	return read_frame_ch(data, 2, length, loop_from, loop_to, pos, cutoff, taps, gain, exact)
 }
 
 
@@ -270,8 +401,6 @@ sampler_run :: proc(st: ^Sampler_State, data: []$T, channels: int, scale: f32, a
 	loop_len := st.loop_to - st.loop_from
 	m := min(len(l), len(r))
 	cutoff := f32(st.cutoff) * scale
-	right := i64(channels > 1 ? 1 : 0)
-	ch := i64(channels)
 	taps := i64(st.taps)
 	c := f32(st.cutoff)
 	levels: [NODE_CHUNK]f32 = ---
@@ -298,7 +427,7 @@ sampler_run :: proc(st: ^Sampler_State, data: []$T, channels: int, scale: f32, a
 			slice_zero(r[i:m])
 			return false
 		}
-		sl, sr := read_frame(data, ch, right, st.length, st.loop_from, st.loop_to, pos, c, taps, cutoff, st.step == 1)
+		sl, sr := read_frame(data, channels, st.length, st.loop_from, st.loop_to, pos, c, taps, cutoff, st.step == 1)
 		l[i] = sl * st.gain_l * level
 		r[i] = sr * st.gain_r * level
 	}
@@ -524,8 +653,6 @@ process_region :: proc(c: ^Node_Call) {
 
 @(private = "file")
 region_run :: proc(st: ^Region_State, lane: ^Lane, data: []$T, channels: int, scale: f32, varies: bool, factor: f32, rate: []f32, l, r: []f32) {
-	ch := i64(channels)
-	right := i64(channels > 1 ? 1 : 0)
 	taps := i64(st.taps)
 	c := f32(st.cutoff)
 	cutoff := f32(st.cutoff) * scale
@@ -560,7 +687,7 @@ region_run :: proc(st: ^Region_State, lane: ^Lane, data: []$T, channels: int, sc
 			return
 		}
 		loop_to := looped ? st.loop_to : st.loop_from // its loop only while it loops
-		sl, sr := read_frame(data, ch, right, st.length, st.loop_from, loop_to, pos, c, taps, cutoff, st.step * f64(varies ? rate[i] : factor) == 1)
+		sl, sr := read_frame(data, channels, st.length, st.loop_from, loop_to, pos, c, taps, cutoff, st.step * f64(varies ? rate[i] : factor) == 1)
 		if st.width != 1 {
 			v := width * [2]f32{sl, sr}
 			sl, sr = v[0], v[1]
