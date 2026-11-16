@@ -100,10 +100,10 @@ jobs:
         run: build/odawg fetch examples/*.json || build/odawg fetch examples/*.json
 
       - name: Render every example (network cut off)
-        env:
-          https_proxy: http://127.0.0.1:9
-          HTTPS_PROXY: http://127.0.0.1:9
+        # Exported here, not as the step's env: Actions takes env keys
+        # without case, so https_proxy and HTTPS_PROXY can't both be keys.
         run: |
+          export https_proxy=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9
           mkdir -p "$RUNNER_TEMP/out"
           for f in examples/*.json; do
             n=$(basename "$f" .json)
