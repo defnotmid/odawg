@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The Odin nightly odawg is developed against (same pin as onimite).
+  ODIN_VERSION: dev-2026-11a
+
+# odawg reads oicut (audio decoding and WAV writing) through
+# `-collection:deps=..`, and its CLI (tools/odawg) reads odawg itself as
+# deps:odawg, so the job checks both out side by side:
+#   $GITHUB_WORKSPACE/{odawg,oicut}
+# oicut is pinned to the tag onimite builds odawg with.
+#
+# Everything runs headless: the tests (make test), then every example song
+# rendered by the CLI. Ten of the fifteen play sample sets and SFZ libraries,
+# fetched once (about 300 MB, each file checked against its pin) into a cached
+# data directory, then rendered with the network cut off, so a render reads
+# only what fetch put there. Windows is type-checked from Linux.
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: odawg
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: odawg
+      - uses: actions/checkout@v4
+        with:
+          repository: defnotmid/oicut
+          ref: v0.0.29
+          path: oicut
+
+      - name: Cache Odin
+        id: odin-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.odin
+          key: odin-${{ runner.os }}-${{ runner.arch }}-${{ env.ODIN_VERSION }}-v1
+
+      - name: Install Odin
+        if: steps.odin-cache.outputs.cache-hit != 'true'
+        run: |
+          case "$RUNNER_OS" in
+            Linux) asset="odin-linux-amd64-$ODIN_VERSION.tar.gz" ;;
+            macOS) asset="odin-macos-arm64-$ODIN_VERSION.tar.gz" ;;
+          esac
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/odin.tar.gz" \
+            "https://github.com/odin-lang/Odin/releases/download/$ODIN_VERSION/$asset"
+          mkdir -p ~/.odin
+          tar -xzf "$RUNNER_TEMP/odin.tar.gz" -C ~/.odin --strip-components=1
+
+      - name: Set up Odin
+        run: |
+          echo "$HOME/.odin" >> "$GITHUB_PATH"
+          echo "ODIN_ROOT=$HOME/.odin" >> "$GITHUB_ENV"
+          echo "ODAWG_DATA=$HOME/odawg-data" >> "$GITHUB_ENV"
+
+      - name: Test
+        run: make test
+
+      - name: Build the CLI
+        run: make build
+
+      - name: Check the Windows build
+        if: runner.os == 'Linux'
+        run: odin check tools/odawg -collection:deps=.. -target:windows_amd64
+
+      # Keyed by what decides which files the examples play: the songs and
+      # their pins, and the register of sample sets in assets/. A partial hit
+      # restores the last data and fetch adds only what is missing.
+      - name: Cache the examples' sample sets
+        uses: actions/cache@v4
+        with:
+          path: ~/odawg-data
+          key: odawg-data-${{ runner.os }}-${{ hashFiles('odawg/examples/**', 'odawg/assets/*.odin') }}
+          restore-keys: odawg-data-${{ runner.os }}-
+
+      - name: Fetch the examples' sample sets
+        # Once more on a failure: fetch keeps what it already has.
+        run: build/odawg fetch examples/*.json || build/odawg fetch examples/*.json
+
+      - name: Render every example (network cut off)
+        env:
+          https_proxy: http://127.0.0.1:9
+          HTTPS_PROXY: http://127.0.0.1:9
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          for f in examples/*.json; do
+            n=$(basename "$f" .json)
+            build/odawg render "$f" -o "$RUNNER_TEMP/out/$n.wav" --master streaming
+          done
+          build/odawg analyze examples/explainer.json --master streaming > /dev/null
