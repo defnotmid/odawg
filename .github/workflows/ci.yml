@@ -75,6 +75,14 @@ jobs:
           echo "ODIN_ROOT=$HOME/.odin" >> "$GITHUB_ENV"
           echo "ODAWG_DATA=$HOME/odawg-data" >> "$GITHUB_ENV"
 
+      - name: Install libcurl (Linux)
+        # assets downloads with libcurl, which the tests and the CLI link; the
+        # hosted image has libcurl.so.4 but not the -lcurl link library.
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends libcurl4-openssl-dev
+
       - name: Test
         run: make test
 
