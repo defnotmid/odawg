@@ -1,6 +1,6 @@
 # Workflows: making videos with odawg in onimite
 
-Six runs through the API in [API.md](API.md), as the agent would write them. After each
+Four runs through the API in [API.md](API.md), as the agent would write them. After each
 are the problems it hit and what changed in the API because of them.
 
 **Presets are a shortcut, not the way.** The walkthroughs lean on the example styles
@@ -164,46 +164,7 @@ cue("snare", SNARES)                            -- inspect checks the flashes la
 
 ---
 
-## W3. Two songs: a generated sting into a licensed track
-
-The brief: a 2-bar cinematic sting at 120 BPM, then the client's licensed track (97 BPM)
-coming in a bar early, cut to 40 s.
-
-```lua
-local sting = song { "sting", bpm = 120, key = "D minor",
-  sections = { { "hit", duration = "2m", style = "styles/cinematic.json", energy = 1, transition = "impact" } } }
-
-local track = song { "track", from = "licensed.mp3", start = sting.time("hit@1m"), duration = 40,
-  sections = { { "verse", at = 0 }, { "chorus", at = "16m" },
-               { "verse2", at = "32m", optional = true }, { "chorus2", at = "48m" } } }
-
-local BAR = sting.seconds("1m", "hit@1m")
-video { ..., duration = track.start + track.duration,
-  audio = {
-    { "sting", bus = "music", fade_out = BAR, curve = "equal_power" },
-    { "track", bus = "music", fade_in = BAR, curve = "equal_power", ducked = true },
-  } }
--- the picture over the track reads the track: track.pulse(f, 9), track.section(f)
-```
-
-**What worked**
-
-- **No reel and no nested project.** The video's timeline is the parent, as in any editor.
-  Each song keeps its own tempo. The crossfade is onimite's existing `fade_*` and `curve`.
-- **`duration = 40` on a file song** cuts it at bar lines: it removes `verse2` and joins
-  `chorus` to `chorus2` with a short crossfade. `odawg timeline` shows the edit.
-
-**What I changed**
-
-- **Section names must be unique across songs** in one video. Section names become cues,
-  so onimite reports a name two songs share. The alternative, prefixing every cue, makes
-  every reference longer for a rare case.
-- **The licence of `licensed.mp3` is the user's business.** odawg only checks the samples
-  it ships (`sample_noncommercial`).
-
----
-
-## W4. Revisions on W1, which is where the time goes
+## W3. Revisions on W1, which is where the time goes
 
 | The user says | The edit | What moves | How I check |
 | --- | --- | --- | --- |
@@ -211,7 +172,7 @@ video { ..., duration = track.start + track.duration,
 | "Make a 30 s cut" | `duration = 30` on the song | `drop` shrinks 8m → 4m, then the tempo nudges ≤ 3 % | if it can't fit: `duration_unreachable` |
 | "New narration" | the `say` text | `intro`/`explain`/`outro` regrow; everything after moves | `inspect` (`cue_drift` none) |
 | "Synthwave drop" | `style = "styles/synthwave.json"` on `drop` | parts refilled; my `lead` stays | `no_events` if a style lacks the part that `pulse`/`hits` read |
-| "Drums quieter" | `parts = { drums = { gain_db = -3 } }` | that part | `odawg audio analyze` per part |
+| "Drums quieter" | `parts = { drums = { gain_db = -3 } }` | that part | `odawg analyze` per part |
 | "Music too loud under her" | `ducked = { depth_db = -16 }` (existing) | gain under the voice | `onimite audio at video.lua explain@2m` |
 
 For the 30 s cut, `duration_unreachable` lists the minimums so the fix is obvious:
@@ -238,23 +199,7 @@ skill doc should state the rule: per moment, decide who leads.
 
 ---
 
-## W5. Later: hand-tuning in the DAW app (phase 3)
-
-1. `onimite audio export video.lua --song score -o score.odawg` writes the song as a
-   project. Its generated parts are loop clips anchored to sections, and each carries
-   `made_by`.
-2. The user edits the bass line and the mix in the GUI and saves.
-3. In score.lua: `song { "score", from = "score.odawg", sections = { { "drop", duration = "4m" } } }`.
-   Section overrides resize the anchored clips, so hand edits are kept. Clips the user
-   edited lose `made_by` and are never regenerated. A later `style` change refills only
-   the clips that still have it.
-4. Without `--song`, `onimite audio export video.lua -o film.odawg` gives the whole
-   soundtrack (voice and SFX as seconds-locked clips on their buses) for mixing. Bringing
-   that mix back into the script is an open question; phase 3 can answer it.
-
----
-
-## W6. An instrument the sets don't have
+## W4. An instrument the sets don't have
 
 The brief: a lead doubled by a real violin, then a chamber piece on harp, flute, violin,
 trumpet and cellos. None of them is a sample set. The steps are SOUND_DESIGN.md's (an
@@ -322,18 +267,16 @@ What went wrong on the way, and what changed:
 - Section `duration` and `start` take onimite's time forms.
 - The `no_events` finding.
 - `duration_unreachable` lists the minimums.
-- From-file songs: `at` per section, and `duration` cuts at bar lines.
-- An SFZ (or any layered row) can be a layer; a machine as a layer is an error (W6).
-- `odawg pin` exits non-zero when a file couldn't be fetched (W6).
-- `odawg fetch SPEC` fetches what the song plays, its sources' files too (W6).
-- `buried_part`: a part far under the mix wherever it plays, with the raise to make (W6).
+- An SFZ (or any layered row) can be a layer; a machine as a layer is an error (W4).
+- `odawg pin` exits non-zero when a file couldn't be fetched (W4).
+- `odawg fetch SPEC` fetches what the song plays, its sources' files too (W4).
+- `buried_part`: a part far under the mix wherever it plays, with the raise to make (W4).
 
 **In onimite:**
 
 - Per-part clips appear automatically (`score/drums`).
 - Section names are unique across songs.
 - `say_start`.
-- `audio export [--song]` (phase 3).
 - The skill gains: "say → song → placement", "one leader per moment", and "resolve bar
   offsets through the song".
 

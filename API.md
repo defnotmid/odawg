@@ -1,4 +1,4 @@
-# odawg: API proposal
+# odawg: API
 
 odawg is sound for Odin, in Tone.js's vocabulary. It is a sibling library of ovg, o3d,
 oksl, oicut and ottis, built the same way:
@@ -43,13 +43,13 @@ the video; odawg makes and mixes the sound. Usage walkthroughs are in
 The rule: if two clients need it, it is in odawg. If it mentions frames, scenes, captions,
 cues or `say()`, it is in onimite.
 
-| | odawg (Odin library) | onimite (Lua binding, adapter, commands) | a GUI (later) |
+| | odawg (Odin library) | onimite (Lua binding, adapter, commands) | a GUI (not built) |
 | --- | --- | --- | --- |
-| reads | a **song spec** (data: §3) as an Odin struct or JSON | the `song{}` / `sound{}` Lua tables, which it turns into specs | `.odawg` projects |
-| owns | composing (spec → project), the project document and its ops, the engine, render, time queries, analysis, checks, instruments, effects, styles (as data) | the video clock, scenes, `cue`/`inspect`, `say` and captions, track placement, the renders it keeps, commands and MCP | the editing UI |
+| reads | a **song spec** (data: §3) as an Odin struct or JSON | the `song{}` / `sound{}` Lua tables, which it turns into specs | song specs |
+| owns | composing (spec → song), the commands that edit a song, the engine, render, time queries, analysis, checks, instruments, effects, styles (as data) | the video clock, scenes, `cue`/`inspect`, `say` and captions, track placement, the renders it keeps, commands and MCP | the editing UI |
 | sync | generic constraints: a section's `duration` (at least N s) and `start` (exactly at N s); finding moments in sound (onsets, the beat, a song's note hits, energy) | turning words, scenes and clips into those numbers; naming moments on the video (cues) and checking picture and sound land on them | — |
-| sound | the whole mix (phase 2): clips, songs, sounds, buses, ducking, master, analysis, decoding, the stream the preview plays | placing tracks on the video, resolving scene-relative times to seconds | — |
-| calls | — | the odawg Odin API | the odawg Odin API, and later a C ABI |
+| sound | the whole mix: clips, songs, sounds, buses, ducking, master, analysis, decoding, the stream the preview plays | placing tracks on the video, resolving scene-relative times to seconds | — |
+| calls | — | the odawg Odin API | the odawg Odin API |
 
 ---
 
@@ -59,7 +59,7 @@ cues or `say()`, it is in onimite.
 
 Borrowed from Web Audio and Tone.js, in snake case:
 
-- **Instruments:** `Synth`, `MonoSynth`, `FMSynth`, `AMSynth`, `DuoSynth`, `PolySynth`,
+- **Instruments:** `Synth`, `MonoSynth`, `FMSynth`, `AMSynth`,
   `MembraneSynth`, `MetalSynth`, `NoiseSynth`, `PluckSynth`, `Sampler`, `Player`, with
   `oscillator = { type = "sawtooth" | "fatsawtooth", count, spread }`,
   `envelope = { attack, decay, sustain, release }`, and
@@ -181,7 +181,6 @@ song { "score",
   bpm = 120, time_signature = 4, key = "A minor", seed = 1, swing = 0,
   duration = nil,                    -- optional target length in seconds (§3.2)
   gain_db = -10,                     -- the whole song's level, headroom for a mix: replaces -10, isn't added to it
-  from = nil,                        -- "track.mp3" | "score.odawg": a song from a file (§3.7)
 
   sections = {
     { "intro", duration = "8m", bpm = 84, style = "lofi", energy = 0.3, chords = "Am7 Fmaj7 C G" },
@@ -468,7 +467,7 @@ includes it), so two bands that touch never both play. There's no new schema, an
 parts, returns, swing } }`, or files. `examples/styles/` has seven to copy: `acid_house`,
 `ambient`, `booty_house`, `chicago_house`, `house`, `lofi`, `synthwave`.
 
-A style can also be a file: a section's `style = "styles/french_disco.json"` (a name with a
+A style can also be a file: a section's `style = "styles/my_style.json"` (a name with a
 `/` or ending in `.json`) is read from the song's folder, in the same shape as
 `examples/styles/*.json`. `spec.style_files` lists the ones a song names, and the host hands each
 one's text back with `spec.spec_add_style_text` before composing. A style the song defines
@@ -501,8 +500,8 @@ parts = { drums = { instrument = { "Sampler", set = "kit" } },
   around its `root`: without `lo` and `hi`, each zone's keys run halfway to the next root
   above and below, within its velocity range. Zones also take `gain_db`, `one_shot` and
   `offset` (frames into the file).
-- Files are read at their own rate and played at the right pitch. Nothing is resampled
-  when it loads.
+- A file at another rate than odawg's 48 kHz is resampled once as it loads, and plays at
+  its pitch.
 - A set is keyed by its content. When a file changes, its set is declared again, and the
   song's `files` list (from `bank_declare_spec`) is what a host watches.
 - The samples are yours: odawg never commits or redistributes them. `credit` is what
@@ -596,14 +595,11 @@ parts = { bass = { instrument = { "fashionbass/fashionbass_clean.sfz", ampeg_rel
 - A style file can bring its own sources and sets, so a style, its mappings and its pins
   can be shared as one folder.
 
-### 3.7 From a file
+### 3.7 From a file (not built)
 
-`from = "track.mp3"` builds a song from audio. Tempo, beats and energy come from analysis,
-and `sections = { { "verse", at = 0 }, { "chorus", at = "16m" } }` names spans in the file's
-own bars. `duration` cuts it at bar lines with short crossfades, removing `optional`
-sections.
-
-`from = "score.odawg"` opens a project a GUI saved. Its sections still resize.
+Not built. `from` is refused (`not_supported`): a song is always composed from its spec.
+A recording a video needs (a licensed track, a voice) plays as the host's clip in the mix
+(`song.append_clip`).
 
 ### 3.8 Routing
 
@@ -705,58 +701,11 @@ automation = {
 
 ## 4. onimite's Lua API
 
-New globals, in onimite's idiom:
-
-```lua
-local score = song { "score", ... }     -- registers clip "score" (and "score/<part>"), its sections and markers as cues
-local name  = sound { "whoosh", duration = 0.5 }                 -- a one-shot: a row by name, or
-local blip  = sound { { "Synth", oscillator = { type = "sine" } }, note = "E6", duration = "16n" }
--- sound{} returns a clip name, content-hashed, built once however often it plays
-```
-
-The song object's functions are dot-calls, like `beat_clock`'s:
-
-```lua
-score.duration, score.start, score.sections          -- { name, start, stop, bpm, bars } in video seconds
-score.time("drop@1m"), score.time(8)                  -- seconds; a beat number works as in beat_clock
-score.beat(f), score.bar(f), score.frame("drop", fps)
-score.seconds("2m", "drop")                          -- a length; under a tempo map give where (default: the start)
-score.snap(t, "8n")                                   -- the nearest grid point
-score.pulse(f, 9)                                     -- every beat, as beat_clock's
-score.pulse(f, { part = "drums", note = "kick", decay = 8 })   -- from the real events
-score.section(f)                                      -- { name, progress, bar, beat }
-score.hits { part = "drums", note = "clap", range = "drop" }  -- seconds
-score.events { part = "lead", range = "drop" }        -- { time, note, duration, velocity }
-score.note("5", "drop@2m")                            -- an in-key note, for SFX
-```
-
-Tracks don't change. A song or sound is a clip name:
-
-```lua
-audio = {
-  { "score", bus = "music", ducked = true },          -- start defaults to the song's start
-  { sound { "impact" }, start = score.time("drop"), bus = "sfx" },
-}
-```
-
-`--track score/bass`, `audio at` (which shows the notes playing) and `show song/score` work
-like they do for `say/intro`. Section names become cues, so they must be unique across the
-songs in one video. `audio_energy`, `audio_spectrum` and `audio_onsets` take a
-song's clip name like any other clip.
-
-Syncing speech stays in onimite. `say_cue` doesn't change. One helper is new:
-
-```lua
-say_start(line, word, t)  -- where to start `line` so `word` lands at t (the inverse of say_cue)
-```
-
-ottis needs no change.
-
-The video gets one new field, used from phase 2: `master = "streaming" | "podcast" |
-"broadcast" | "web"`. It measures the final mix, voice and SFX included, and replaces
-hand-tuned `master_gain_db` plus `limiter`. `web` is streaming's −14 LUFS with a −2 dBTP
-ceiling, for a file that will be encoded lossy afterwards (Opus, MP3): the encoder's
-overshoot, up to about 0.6 dB, then stays under −1 dBTP.
+onimite binds odawg as `song{}` (a song, its sections and markers as cues, its parts as
+clips) and `sound{}` (a one-shot), with the song object's time and event queries
+(`score.time`, `score.pulse`, `score.hits`, ...) and `say_start`. Its skill
+(`skills/onimite-video/references/audio.md` in onimite) is the reference for that side;
+this file describes odawg's.
 
 Inside onimite:
 
@@ -837,7 +786,9 @@ g.regions                                         // where each part is triggere
 t: render.Table                                   // what is read at random: peaks, energy, spectrum per step
 render.table_init(&t, &g, .Peaks, song.part_id(&g, part), 256, 1)   // rows only where the part sounds (its regions and tails); 0: the mix
 render.stem_id(&g, stem); render.stem_from_id(&g, id)   // a stem (stem_count's order) and what names it
-render.tables_build(&g, {&t, &u})                 // one streamed export fills them all
+render.tables_build(&g, {&t, &u})                 // one streamed export fills them all, or from an export
+render.tables_begin(&b, &g, {&t, &u}); sink := render.tables_sink(&b)   // a host runs (master_export's sink:
+render.tables_end(&b)                             // the mastered mix), tables_take per block
 render.table_row(&t, step)                        // nil where it is silent
 render.table_fill_steps(&t, first, end, from, l, r)   // rows from samples a host holds (table_window: what a row reads)
 song.command_apply(&g, {.Pad_Gain_Step, "drums/kick", 3})   // the one place a song changes
@@ -883,29 +834,6 @@ render.engine_sync(&e, row)   // the engine playing it, from any thread
   where it stands between lanes. A `gain_db` lane rides on the part's level, so an edit to
   the part's gain moves the lane with it.
 
-### The project document (`.odawg`, JSON, stable ids)
-
-The project contains:
-
-- the tempo map (steps and ramps), the meter map, sections, markers;
-- tracks and returns, each with devices (`class` plus params) and sends;
-- clips, with `lock = "beats" | "seconds"` and `anchor = { section | marker, offset }`;
-- automation per param path (`bass/filter/frequency`);
-- `made_by` on generated clips, linking each back to the spec entry.
-
-A generated part becomes **loop clips anchored to its section**, with fills anchored to the
-section's end. Resizing a section is then a plain edit to the project, with no
-re-composing. That's how a GUI retimes a song.
-
-### Ops (the only way to change a project)
-
-```odin
-odawg.apply(&project, op)   // set, add, remove, move, resize_section, set_tempo, ...
-odawg.undo(&project)
-odawg.redo(&project)
-odawg.subscribe(&project, proc)
-```
-
 ### Engine
 
 - The engine processes in blocks with sample-accurate events, so offline render, realtime
@@ -913,31 +841,38 @@ odawg.subscribe(&project, proc)
 - Tracks render in parallel and are summed in a fixed order.
 - A host's edits reach a playing engine through `engine_sync` (§5, the commands): the
   engine reads only its own copies of what can change.
-- Realtime output is `deps:odawg/sdl`. onimite's preview plays through it in phase 3.
+- odawg has no audio output of its own: a host plays what `engine_process` gives (onimite's
+  preview does).
 
 ### CLI
 
-`tools/odawg` uses onimite's verbs on a JSON spec or a `.odawg` project:
+`tools/odawg` uses onimite's verbs on a JSON spec (run it bare for the list):
 
 ```sh
-odawg render song.json -o x.wav
-odawg timeline song.json
-odawg show song.json parts/bass
+odawg render song.json -o x.wav [--range drop] [--master streaming] [--stems DIR] [--float]
+odawg timeline song.json [--json]
+odawg show song.json parts/bass        # sections/NAME, returns/NAME, buses/NAME, instrument/NAME
 odawg at song.json drop@1m
-odawg inspect song.json
-odawg audio analyze song.json
-odawg fetch
-odawg credits song.json
+odawg inspect song.json [--range drop] [--balance]
+odawg analyze song.json [--master streaming] [--reference ref.wav] [--json]
+odawg sets
+odawg fetch [song.json | SET ...] [--verify]
+odawg credits song.json | SET ...
+odawg pin song.json
 ```
 
-Every command takes `--json`.
+`timeline` and `analyze` print JSON with `--json`. A master is `streaming` (−14 LUFS,
+−1 dBTP), `web` (−14 LUFS, −2 dBTP: room for a lossy encode's overshoot, up to about
+0.6 dB), `podcast` (−16, −1), `broadcast` (−23, −1, EBU R128) or `none`: measured on the
+mix, gained to the loudness, then a true-peak limiter at the ceiling.
 
 ---
 
 ## 6. Sound quality
 
-1. **Samples.** A `Sampler` with multisamples, velocity layers and round robins, a
-   `DrumKit`, and a fetched library (§7). This is the largest single gain.
+1. **Samples.** A `Sampler` with multisamples, velocity layers and round robins, drum
+   machines (`machines/*.json`: a row per pad), SFZ instruments, and a fetched library
+   (§7). This is the largest single gain.
 2. **DSP.**
    - band-limited oscillators (polyBLEP, mipmapped wavetables), including `fat*` unison;
    - zero-delay-feedback filters;
@@ -946,37 +881,32 @@ Every command takes `--json`.
 3. **Effects.** Algorithmic `Reverb` on shared `returns`, delays, `Chorus`, tape
    saturation, `EQ3` and a parametric EQ, a glue `Compressor`, and a lookahead true-peak
    `Limiter`.
-4. **Playing.** `swing`, `humanize` (deterministic, from `hash`), voice leading, strums, and
-   bass legato.
+4. **Playing.** `swing`, `humanize` (deterministic, from `hash`), voice leading, and bass
+   legato.
 5. **Styles.**
    - a register map per role;
    - variation every 4 or 8 bars;
    - transitions recomputed whenever lengths change;
    - `room` (thinner parts and an EQ pocket under the voice).
-6. **Mix and master.** A mix template per style, and `master` presets measured on the final
-   mix.
-7. **Later:** CLAP plugin hosting. Plugin renders are frozen and cached, so determinism
-   holds.
+6. **Mix and master.** A mix template per style, and the master presets (§5, the CLI)
+   measured on the final mix.
 
-Checks that stand in for listening:
+Checks that stand in for listening (`odawg inspect` renders and reports them; the ones
+from the spec and the composed song also come with `timeline`):
 
 | finding | what it catches |
 | --- | --- |
-| `true_peak`, `clipping`, `over_limited` | levels |
-| `tonal_balance` | against the style's curve |
-| `masking`, `mud` | parts fighting over one band |
-| `mono_compat` | stereo that cancels in mono |
-| `energy_arc` | the measured shape doesn't follow the declared `energy` |
-| `repetition` | a bar looping too long with no variation |
-| `note_range` | notes at pitches outside MIDI's 0..127: they can't sound |
-| `no_region` | notes no layer, region or pad of the part's instrument answers (an SFZ's key range, a machine's pads): they're silent |
-| `off_key` | notes (planned) |
+| `true_peak`, `clipping` | levels over the ceiling, or over full scale |
+| `silent_mix`, `loudness` | a mix with nothing in it; Info: its integrated loudness, range and true peak |
 | `silent_part` | a part with notes in the range that makes no sound (a part with none isn't judged) |
 | `buried_part` | a part without a `role` more than 15 LU under the mix in every section it plays (has notes in; its tails don't count); names the `gain_db` raise to 12 LU under where it's loudest |
 | `role_balance` | a part with a `role` more than 1 LU outside its role's band where it plays (LU under the mix; an `fx` part's peak under the mix's peak); too loud is judged only where 4 or more parts play. Names the one `gain_db` change that puts every section in band, or a per-section lane when none can |
 | `no_melody` | Info: a song naming roles has no `melody` |
+| `note_range` | notes at pitches outside MIDI's 0..127: they can't sound |
+| `no_region` | notes no layer, region or pad of the part's instrument answers (an SFZ's key range, a machine's pads): they're silent |
 | `default_song` | a song on 4 or more of 6 defaults at once (tempo 118-122, a kick on every beat, A/D minor or C major or i-VI-III-VII, no feel, the same parts in every section, a chord loop); read from the composed song |
 | `tempo_fixed` | a Tone length read once at one tempo (an envelope's time, a delay's `delay_time`, an AutoFilter's rate) on a part or chain that plays where the tempo is another; names the field and the sections. An Lfo's rate in beats follows the tempo and isn't one |
+| `start_unreachable`, `duration_unreachable` | a timing constraint that can't be met; lists each section's minimum |
 
 The balance table is what these read: `check.balance_from_measures(song, measures)` over what
 `check.Measuring` measured as the render streamed (its stems pushed), with no render of its
@@ -987,11 +917,10 @@ that lands reads loud in peak and low in loudness. `plays` means a note of its i
 there (by its beat, so humanize and swing don't move it) or sounds through 400 ms of it.
 The song row compares the part over the sections it plays with the mix over the same.
 `odawg inspect SPEC --balance` prints it.
-| `no_events` | `pulse`/`hits` read a part with nothing in that range (a style without it) |
-| `start_unreachable`, `duration_unreachable` | a timing constraint that can't be met; lists each section's minimum |
 
-There's also `odawg inspect --reference ref.mp3`, and `--previews` for a 10 s clip per
-section that the user listens to.
+`odawg analyze` is the rest of the picture, per section, for the mix and every stem:
+loudness, true peak, crest, stereo width, 31 third-octave bands and the parts crowding each
+other in a band (`masking`); `--reference ref.wav` sets a recording's bands beside the mix's.
 
 ---
 
@@ -999,76 +928,26 @@ section that the user listens to.
 
 - **Synthesis is always clean.** What odawg's DSP makes belongs to whoever made it. The
   synthesized presets are the default.
-- **The fetched library is CC0 by default.** No attribution, no restrictions.
-  `odawg fetch --library cc-by` adds CC-BY packs, which need credit.
-- **Excluded:** NC (non-commercial), ND (no derivatives) and SA (share-alike: unclear for
-  samples inside a mixed work).
+- **The register's sets are CC0.** No attribution, no restrictions (`odawg sets` lists
+  them with their licences).
+- **A source may also be CC-BY 3.0 or 4.0**, which needs its credit. Anything else
+  (NC, non-commercial; ND, no derivatives; SA, share-alike: unclear for samples inside a
+  mixed work) is `licence_not_allowed`, and nothing of it is fetched.
 - **Every sample carries its licence, source and credit line in the pins file** (`assets/`,
   like ottis's pins).
-- `odawg credits` lists what a song uses. `onimite credits` should merge that with `say`'s
-  Kyutai credit into one list for the video's description.
-- **`video { license = "commercial" }`, shared with `say`,** turns the warnings into errors:
-  `tts_noncommercial` (cosette, jean) and `sample_noncommercial` both refuse to render.
+- `odawg credits` lists what a song uses: the register's sets, its sources, and its own
+  sets' `credit`.
 - I'm not a lawyer. Check each pack's licence at its source before adding it to the pins.
 
 ---
 
-## 8. Review of the first draft (`DAW-API.md`)
-
-Kept:
-
-- determinism and seeds;
-- musical time and markers;
-- stems;
-- a stable `describe` (now `show`/`timeline --json`);
-- a CLI.
-
-Changed:
-
-| Draft | Why it changed | Now |
-| --- | --- | --- |
-| The engine doesn't mix; onimite owns mixing and LUFS | A DAW backend has to mix, and the master target needs the voice and SFX | odawg mixes (phase 2); onimite places |
-| A Lua session file is the document, rewritten by the GUI | Lua can't round-trip, and siblings don't carry Lua | A data spec, a JSON project, and onimite's binding |
-| `at = 2.5` is beats in one place and seconds in another | Ambiguous | A number is seconds; musical time is a string |
-| Its own names (`osc`, `comp`, `dist`) | Consistency | Tone.js / Web Audio names |
-| Generators attached to tracks | Nothing to resize or restyle | Sections, play entries, anchored loop clips |
-| Per-sample Lua instruments | Not realtime, and no Lua in odawg | onimite's `audio_add` clips as `Sampler`/`Player` sources |
-| No data back to the picture | Agents rebuild kick times by hand | `pulse`, `hits`, `events`, `section` |
-
----
-
-## 9. Phases
-
-1. **odawg makes music for onimite.**
-   - odawg: spec, compose, project, offline engine, the `synth.lua` presets, band-limited
-     synths, `Sampler` with a CC0 kit and piano, `Reverb`/delay/`Compressor`/`Limiter`, four
-     styles, checks, the CLI.
-   - onimite: `song{}`, `sound{}`, `say_start`, and the song-to-cues link.
-   - Port `why_onimite` and `onimite_saga`. Gate: the presets match the old stems, and
-     every cue holds.
-2. **odawg mixes for onimite.**
-   - `video{ audio, buses, ducked, limiter }` builds an odawg graph, and `video { master }`
-     arrives.
-   - `audio analyze/at/onsets` run on odawg.
-   - `room` uses the voice bus.
-   - Port every example, delete `common/synth.lua`, `common/tempo.lua` and the `sfx.lua`
-     helpers, and rewrite `references/audio.md`.
-3. **The DAW app.**
-   - Realtime transport through `odawg/sdl` (onimite's preview first), ops, undo, the C
-     ABI.
-   - `onimite audio export video.lua [--song score] -o x.odawg`: one song for hand-tuning
-     (reopened with `from =`), or the whole soundtrack, voice and SFX included.
-   - CLAP hosting, MIDI in, recording.
-
----
-
-## 10. Decisions
+## 8. Decisions
 
 | # | Decision | Why (WORKFLOWS.md has the walkthroughs) |
 | --- | --- | --- |
 | 1 | A bare number is seconds; musical time is a string; conversions keep `beat_clock`'s signatures | onimite, Tone.js and Web Audio already agree. In the walkthroughs every beat number became a string anyway. |
-| 2 | The project is JSON | Agreed |
+| 2 | The spec is data: JSON, or a host's tables in the same shape | Agreed |
 | 3 | No Lua in odawg. onimite binds it; a GUI and the CLI use the Odin API and JSON | Matches every sibling. The spec is data, so nothing in odawg needs a script. |
-| 4 | odawg mixes and onimite places | `master`, `room`, ducking and export to the DAW all need the voice and SFX in the same graph as the music |
-| 5 | Synthesis first; a CC0 library; CC-BY opt-in with credits; no NC/ND/SA; `license = "commercial"` | Commercial users |
+| 4 | odawg mixes and onimite places | the master, `room` and ducking all need the voice and SFX in the same graph as the music |
+| 5 | Synthesis first; CC0 sets; CC-BY sources with their credits; no NC/ND/SA | Commercial users |
 | 6 | No reel and no nested projects. Each song is a clip with its own tempo, placed with onimite's existing `start`, `fade_*` and `curve`. | That's standard practice: one tempo map per project, and other songs are clips that keep their own tempo (Ableton's warp, Logic's Smart Tempo, every video editor). REAPER's subprojects are the exception. |

@@ -98,26 +98,18 @@ The rules that keep it this way:
 
 ## Roadmap
 
-Committed, in this order (nothing jumps ahead of them):
+Shipped: SFZ instruments (v1 and the common v2, through their own sources and pins), the
+spectrum table (one real FFT for the analysis and the tables), and song-wide automation
+(every settable value a row, lanes over it).
 
-1. **SFZ synthesis** (the next release: its first cut, SFZ v1 and the common v2,
-   is in; the rest of v2 and ARIA follow). Every region a row over the
-   registered kinds; a general primitive that's missing is added, never a
-   special case. The scope: layers, release triggers, amp, filter and pitch
-   EGs with velocity tracking, filters with key and velocity tracking, v1
-   and v2 LFOs, the `*sine` / `*saw` / `*square` / `*triangle` / `*noise`
-   generators, velocity and key crossfades, `group` / `off_by` choke,
-   polyphony, `#define` / `#include` through the host, CC reported as
-   unsupported (until automation). It ships with a corpus coverage report
-   (the sfzinstruments organisation and the four pinned libraries) and a
-   comparison against sfizz.
-2. **A spectrum table**: one shared real FFT (window, its power and the
-   twiddles precomputed) for the analysis and the tables; bins and
-   third-octave bands from the same powers.
-3. **Automation**: a song-wide param table (every settable value a row by
-   index, resolved from its path once; controls are rows over it), writes
-   drained at chunk boundaries, ramped or stepped per field, the values in
-   a song's identity; automation rows over it.
+Not built, in no order and without dates:
+
+- the rest of SFZ v2 and ARIA's extensions, and CCs that move while a note plays
+  (`*_dynamic`, an info finding: read when the note starts);
+- PitchShift, and time-stretch keeping pitch, for clips;
+- a song from a file (`from`: a recording's tempo and sections, or a saved project);
+- a DAW app on the library: projects as files, ops with undo, its own audio output, a C
+  ABI, plugin hosting.
 
 ## Mascot
 

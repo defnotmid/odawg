@@ -83,7 +83,7 @@ Command_Row :: struct {
 COMMAND_TABLE := []Command_Row {
 	{"render", "render SPEC -o OUT.wav [--range R] [--master streaming|podcast|broadcast|web] [--stems DIR] [--float]", "the mix (and a WAV per stem with --stems: each part, return and bus)", run_render},
 	{"timeline", "timeline SPEC [--json]", "sections (start, bars, tempo, style), parts and tracks, markers, findings", run_timeline},
-	{"show", "show SPEC PATH [--json]", "one thing: sections/NAME, parts/NAME (its notes, its instrument's controls, its effects), returns/NAME, buses/NAME (their effects); or instrument/NAME (a built-in row, to copy)", run_show},
+	{"show", "show SPEC PATH", "one thing: sections/NAME, parts/NAME (its notes, its instrument's controls, its effects), returns/NAME, buses/NAME (their effects); or instrument/NAME (a built-in row, to copy)", run_show},
 	{"at", "at SPEC POSITION", "what plays at a position: the section and bar, the chord, the notes sounding", run_at},
 	{"inspect", "inspect SPEC [--range R] [--balance]", "renders and reports: findings from the spec, the form and the sound; --balance: every part's LU under the mix in every section", run_inspect},
 	{"analyze", "analyze SPEC [--master M] [--reference REF.wav] [--json]", "what the sound is made of, per section, for the mix and every stem: loudness, true peak, crest, stereo width, 31 third-octave bands, the parts crowding each other; beside a reference recording's", run_analyze},
@@ -258,7 +258,7 @@ run_render :: proc(a: ^Args) -> bool {
 		found: bool
 		m, found = render.master_from_name(a.master)
 		if !found {
-			fmt.eprintfln("odawg render: master %q is not streaming, podcast, broadcast or none", a.master)
+			fmt.eprintfln("odawg render: master %q is not streaming, web, podcast, broadcast or none", a.master)
 			return false
 		}
 	}

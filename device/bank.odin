@@ -10,8 +10,8 @@ import base "../base"
 // root, its round-robin place), samples (a run of frames in a chunk), and the
 // chunks: blocks of audio that never move once made, recordings as 16-bit
 // PCM in their own channel count (a mono piano note stays mono: a quarter of
-// float stereo) at the rate they were recorded (a Sampler reads them at
-// RATE), clips as float stereo at RATE. A file loaded is a chunk sized
+// float stereo), resampled to RATE once as they load, clips as float stereo
+// at RATE. A file loaded is a chunk sized
 // exactly; a host's own audio is lent as a chunk (bank_borrow), not copied;
 // another bank's sets can be viewed over the same chunks (bank_view: a
 // song plays its own view, never a bank a host grows). The assets layer fills it from the
