@@ -56,7 +56,7 @@ test_host_kind :: proc(t: ^testing.T) {
 		parts: { p: { instrument: { velocity: "none", nodes: {
 			tone: { class: "Osc", wave: "sine" },
 			out: { class: "Bitcrush", input: "tone", bits: 2 } } },
-			play: [ { name: "a", notes: "A4 - - -" } ] } } }`, sp, &findings))
+			play: [ { range: "a", notes: "A4 - - -" } ] } } }`, sp, &findings))
 	s := new(song.Song)
 	testing.expect(t, song.song_from_spec(sp, s))
 	for f in s.findings {

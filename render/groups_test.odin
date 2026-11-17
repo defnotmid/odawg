@@ -16,7 +16,7 @@ CHOKED :: `{ bpm: 120, key: "C major", gain_db: 0, sections: [ { name: "a", dura
 	parts: { kit: { instrument: { pads: {
 		long: { key: 60, instrument: { nodes: { env: { class: "Decay", time: 2.5 }, out: { class: "Osc", wave: "sine", amp: "env", gain_db: -18 } } } },
 		stop: { key: 61, choke: [ "long" ], instrument: { nodes: { env: { class: "Decay", time: 0.01 }, out: { class: "Osc", wave: "sine", amp: "env", gain_db: -120 } } } } } },
-		play: [ { name: "a", steps: { long: "xxxxxxxxxxxx....", stop: "..............x." } } ] } } }`
+		play: [ { range: "a", steps: { long: "xxxxxxxxxxxx....", stop: "..............x." } } ] } } }`
 
 // A track sounding more voices than a group holds splits into groups that
 // render side by side, and a pad's choke still cuts every voice it chokes,

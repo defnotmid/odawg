@@ -11,7 +11,7 @@ import common "deps:oicut/common"
 
 // Sample sets from wherever a song's are: the register's (pinned, fetched
 // on first use), a set the song brings (`sets = { my_kit = { pads = ... } }`)
-// and an SFZ file (`set = "instruments/piano.sfz"`), all one shape in the
+// and an SFZ file (`instrument = "instruments/piano.sfz"`), all one shape in the
 // bank: a set, its zones, each zone a file row. Which kind a name is, and
 // how its zones are read, is a row of SET_SOURCES. Files a song brings are
 // read through the host (Bank_Host): onimite from its media, the CLI from

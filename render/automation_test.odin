@@ -18,8 +18,8 @@ AUTOMATED :: `{ bpm: 120, seed: 4, key: "C major",
 	returns: { hall: [ { name: "Reverb", decay: 1.5 } ] },
 	parts: {
 		lead: { instrument: "MonoSynth", effects: [ { name: "Filter", type: "lowpass", frequency: 2000 } ], sends: { hall: -12 },
-		        play: [ { name: "a..b", notes: "C5 E5 G5 C6 . G5 E5 .", subdivision: "8n" } ] },
-		pad: { instrument: "Synth", play: [ { name: "a..b", chords: { voicing: "open" }, octave: 4 } ] } },
+		        play: [ { range: "a..b", notes: "C5 E5 G5 C6 . G5 E5 .", subdivision: "8n" } ] },
+		pad: { instrument: "Synth", play: [ { range: "a..b", chords: { voicing: "open" }, octave: 4 } ] } },
 	automation: {
 		"parts/lead/filter/frequency": [ [ "a", 300 ], [ "b", 4000 ], [ "b@2m", 800, "step" ] ],
 		"parts/lead/effects/Filter/frequency": [ [ "a", 500 ], [ "end", 6000 ] ],
@@ -164,7 +164,7 @@ test_automation_findings :: proc(t: ^testing.T) {
 		_ = virtual.arena_init_growing(&arena)
 		context.allocator = virtual.arena_allocator(&arena)
 		text := strings.concatenate({`{ bpm: 120, sections: [ { name: "a", duration: "1m" }, { name: "b", duration: "1m" } ],
-			parts: { lead: { instrument: "MonoSynth", effects: [ { name: "Filter", frequency: 900 } ], play: [ { name: "a", notes: "C4" } ] } },
+			parts: { lead: { instrument: "MonoSynth", effects: [ { name: "Filter", frequency: 900 } ], play: [ { range: "a", notes: "C4" } ] } },
 			automation: { `, c[0], ` } }`})
 		sp := new(spec.Spec)
 		findings := make(base.Findings)
@@ -187,7 +187,7 @@ test_automation_findings :: proc(t: ^testing.T) {
 test_gain_lane_rides_on_part :: proc(t: ^testing.T) {
 	song_text :: proc(gain, lane: string) -> string {
 		return strings.concatenate({`{ bpm: 120, seed: 4, key: "C major", sections: [ { name: "a", duration: "2m", chords: "C F" } ],
-			parts: { pad: { instrument: "Synth", gain_db: `, gain, `, play: [ { name: "a", chords: { voicing: "open" }, octave: 4 } ] } }`,
+			parts: { pad: { instrument: "Synth", gain_db: `, gain, `, play: [ { range: "a", chords: { voicing: "open" }, octave: 4 } ] } }`,
 			lane != "" ? strings.concatenate({`, automation: { "parts/pad/gain_db": [ [ "a", `, lane, ` ] ] }`}, context.temp_allocator) : "", ` }`}, context.temp_allocator)
 	}
 	Pair :: struct {
@@ -242,7 +242,7 @@ test_level_lane_db :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	defer virtual.arena_destroy(&arena)
 	s := compose_text(t, `{ bpm: 120, key: "C major", sections: [ { name: "a", duration: "4m" } ],
-		parts: { pad: { instrument: "Synth", play: [ { name: "a", notes: "C4" } ] } },
+		parts: { pad: { instrument: "Synth", play: [ { range: "a", notes: "C4" } ] } },
 		automation: { "parts/pad/gain_db": [ [ 1, 0 ], [ 5, -40 ] ] } }`, &arena)
 	context.allocator = virtual.arena_allocator(&arena)
 	a := s.automation[0]
@@ -259,15 +259,15 @@ test_level_lane_db :: proc(t: ^testing.T) {
 test_sidechain_depth_db :: proc(t: ^testing.T) {
 	text :: proc(sidechain: string) -> string {
 		return strings.concatenate({`{ bpm: 120, key: "C major", gain_db: 0, sections: [ { name: "a", duration: "2m" } ],
-			parts: { drums: { instrument: "MembraneSynth", gain_db: -120, play: [ { name: "a", notes: "C2 - - -" } ] },
+			parts: { drums: { instrument: "MembraneSynth", gain_db: -120, play: [ { range: "a", notes: "C2 - - -" } ] },
 				pad: { instrument: { nodes: { out: { class: "Osc", wave: "sine", gain_db: -12 } } }, sidechain: `, sidechain, `,
-					play: [ { name: "a", events: [ { time: 0, note: "A4", duration: 3.9 } ] } ] } } }`}, context.temp_allocator)
+					play: [ { range: "a", events: [ { time: 0, note: "A4", duration: 3.9 } ] } ] } } }`}, context.temp_allocator)
 	}
 	arenas: [2]virtual.Arena
 	defer for &x in arenas {
 		virtual.arena_destroy(&x)
 	}
-	full := compose_text(t, text(`{ name: "drums/C2", depth_db: -Infinity, release: 0.05 }`), &arenas[0])
+	full := compose_text(t, text(`{ source: "drums/C2", depth_db: -Infinity, release: 0.05 }`), &arenas[0])
 	plain := compose_text(t, text(`"drums/C2"`), &arenas[1])
 	context.allocator = virtual.arena_allocator(&arenas[0])
 	testing.expect_value(t, full.sidechains[0].floor, 0)

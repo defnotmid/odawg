@@ -29,7 +29,7 @@ test_read :: proc(t: ^testing.T) {
 	s: Spec
 	fs := make(base.Findings)
 	ok := spec_from_json(`{ bpm: 100, colour: "red", sections: [ { name: "a", duration: "4m", bmp: 3, energy: "high" } ],
-		parts: { lead: { play: [ { name: "a", notes: ["E5", ["G5", "A5"], false] }, { name: "a", steps: { kick: "x..." }, notes: "C4" } ] } } }`, &s, &fs)
+		parts: { lead: { play: [ { range: "a", notes: ["E5", ["G5", "A5"], false] }, { range: "a", steps: { kick: "x..." }, notes: "C4" } ] } } }`, &s, &fs)
 	testing.expect(t, ok)
 	testing.expect(t, find(fs, "unknown_key", "song/colour"))
 	testing.expect(t, find(fs, "unknown_key", "song/sections/1/bmp"))

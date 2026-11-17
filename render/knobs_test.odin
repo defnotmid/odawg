@@ -96,11 +96,11 @@ knob_hit :: proc(t: ^testing.T, ref: Knob_Ref, knobs: bool) -> (db, centroid: f3
 	part: string
 	switch ref.machine {
 	case "808":
-		part = strings.concatenate({`instrument: { name: "machines/808.json"`, knobs ? `, decay: 0.9, tone: 0.6` : "", ` }, play: [ { name: "a", steps: { `, ref.pad, `: "x..." } } ]`})
+		part = strings.concatenate({`instrument: { name: "machines/808.json"`, knobs ? `, decay: 0.9, tone: 0.6` : "", ` }, play: [ { range: "a", steps: { `, ref.pad, `: "x..." } } ]`})
 	case "909":
-		part = strings.concatenate({`instrument: { name: "machines/909.json"`, knobs ? `, tone: 0.55` : "", ` }, play: [ { name: "a", steps: { `, ref.pad, `: "x..." } } ]`})
+		part = strings.concatenate({`instrument: { name: "machines/909.json"`, knobs ? `, tone: 0.55` : "", ` }, play: [ { range: "a", steps: { `, ref.pad, `: "x..." } } ]`})
 	case:
-		part = strings.concatenate({`octave: 1, instrument: { name: "instruments/808_bass.json"`, knobs ? `, decay: 0.7` : "", ` }, play: [ { name: "a", notes: "A1 . . ." } ]`})
+		part = strings.concatenate({`octave: 1, instrument: { name: "instruments/808_bass.json"`, knobs ? `, decay: 0.7` : "", ` }, play: [ { range: "a", notes: "A1 . . ." } ]`})
 	}
 	text := strings.concatenate({`{ bpm: 120, gain_db: 0, seed: 1, sections: [ { name: "a", duration: "1m" } ], parts: { d: { gain_db: 0, `, part, ` } } }`})
 	sp := new(spec.Spec)

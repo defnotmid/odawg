@@ -26,10 +26,10 @@ test_measured_streaming :: proc(t: ^testing.T) {
 	sp := new(spec.Spec)
 	findings := make(base.Findings)
 	testing.expect(t, spec.spec_from_json(`{ bpm: 120, seed: 3, sections: [ { name: "a", duration: "4m" } ],
-		parts: { drums: { instrument: "MembraneSynth", play: [ { name: "a", notes: "C2 - C2 -", subdivision: "8n" } ] },
+		parts: { drums: { instrument: "MembraneSynth", play: [ { range: "a", notes: "C2 - C2 -", subdivision: "8n" } ] },
 		         lead: { instrument: "PluckSynth", effects: [ { name: "FeedbackDelay", delay_time: "8n", feedback: 0.4, wet: 0.3 } ],
-		                 play: [ { name: "a", notes: "A4 C5 E5 -", subdivision: "8n" } ] },
-		         rest: { instrument: "Synth", gain_db: -200, play: [ { name: "a", notes: "C4", subdivision: "1m" } ] },
+		                 play: [ { range: "a", notes: "A4 C5 E5 -", subdivision: "8n" } ] },
+		         rest: { instrument: "Synth", gain_db: -200, play: [ { range: "a", notes: "C4", subdivision: "1m" } ] },
 		         empty: { instrument: "Synth", play: [] } } }`, sp, &findings))
 	s := new(song.Song)
 	testing.expect(t, song.song_from_spec(sp, s))
@@ -104,12 +104,12 @@ test_buried_part :: proc(t: ^testing.T) {
 	// the rest release in 50 ms), then b 10-18 s (its tail still under it)
 	testing.expect(t, spec.spec_from_json(`{ bpm: 120, seed: 3, sections: [ { name: "a", duration: "4m" }, { name: "c", duration: "1m" }, { name: "b", duration: "4m" } ],
 		automation: { "parts/half/gain_db": [ [ "a", -32, "step" ], [ "b", -10, "step" ] ] },
-		parts: { lead: { instrument: { name: "Synth", "envelope/release": 0.05 }, play: [ { name: ["a", "b"], notes: "A4 - C5 -", subdivision: "4n" } ] },
-		         under: { instrument: { name: "Synth", "envelope/release": 0.05 }, gain_db: -10, play: [ { name: ["a", "b"], notes: "E4 - - -", subdivision: "4n" } ] },
-		         buried: { instrument: { name: "Synth", "envelope/release": 0.05 }, gain_db: -32, play: [ { name: ["a", "b"], notes: "C4 - - -", subdivision: "4n" } ] },
-		         late: { instrument: { name: "Synth", "envelope/release": 0.05 }, gain_db: -32, play: [ { name: "b", notes: "G4 - - -", subdivision: "4n" } ] },
-		         half: { instrument: { name: "Synth", "envelope/release": 0.05 }, play: [ { name: ["a", "b"], notes: "D4 - - -", subdivision: "4n" } ] },
-		         faded: { instrument: { name: "Synth", "envelope/release": 0.05 }, effects: [ { name: "Reverb", decay: 10, wet: 1 } ], gain_db: -32, play: [ { name: "a", notes: "F4 - - -", subdivision: "4n" } ] } } }`, sp, &findings))
+		parts: { lead: { instrument: { name: "Synth", "envelope/release": 0.05 }, play: [ { range: ["a", "b"], notes: "A4 - C5 -", subdivision: "4n" } ] },
+		         under: { instrument: { name: "Synth", "envelope/release": 0.05 }, gain_db: -10, play: [ { range: ["a", "b"], notes: "E4 - - -", subdivision: "4n" } ] },
+		         buried: { instrument: { name: "Synth", "envelope/release": 0.05 }, gain_db: -32, play: [ { range: ["a", "b"], notes: "C4 - - -", subdivision: "4n" } ] },
+		         late: { instrument: { name: "Synth", "envelope/release": 0.05 }, gain_db: -32, play: [ { range: "b", notes: "G4 - - -", subdivision: "4n" } ] },
+		         half: { instrument: { name: "Synth", "envelope/release": 0.05 }, play: [ { range: ["a", "b"], notes: "D4 - - -", subdivision: "4n" } ] },
+		         faded: { instrument: { name: "Synth", "envelope/release": 0.05 }, effects: [ { name: "Reverb", decay: 10, wet: 1 } ], gain_db: -32, play: [ { range: "a", notes: "F4 - - -", subdivision: "4n" } ] } } }`, sp, &findings))
 	s := new(song.Song)
 	testing.expect(t, song.song_from_spec(sp, s))
 	Case :: struct {
@@ -161,9 +161,9 @@ test_balance_rows :: proc(t: ^testing.T) {
 	sp := new(spec.Spec)
 	findings := make(base.Findings)
 	testing.expect(t, spec.spec_from_json(`{ bpm: 120, seed: 7, sections: [ { name: "a", duration: "2m", chords: "C F" }, { name: "b", duration: "2m", chords: "G C" } ],
-		parts: { pad: { instrument: "Synth", play: [ { name: ["a", "b"], chords: { voicing: "open" }, octave: 4 } ] },
-		         hit: { instrument: { name: "NoiseSynth", "envelope/decay": 0.02, "envelope/sustain": 0 }, play: [ { name: "b", notes: "C4", subdivision: "1m" } ] },
-		         late: { instrument: "Synth", play: [ { name: "b", notes: "E4 G4 C5 G4", subdivision: "4n", humanize: 0.02 } ] } } }`, sp, &findings))
+		parts: { pad: { instrument: "Synth", play: [ { range: ["a", "b"], chords: { voicing: "open" }, octave: 4 } ] },
+		         hit: { instrument: { name: "NoiseSynth", "envelope/decay": 0.02, "envelope/sustain": 0 }, play: [ { range: "b", notes: "C4", subdivision: "1m" } ] },
+		         late: { instrument: "Synth", play: [ { range: "b", notes: "E4 G4 C5 G4", subdivision: "4n", humanize: 0.02 } ] } } }`, sp, &findings))
 	s := new(song.Song)
 	testing.expect(t, song.song_from_spec(sp, s))
 	// late's first note, written on b's first beat, humanized ahead of it
@@ -225,13 +225,13 @@ test_role_balance :: proc(t: ^testing.T) {
 	text :: proc(keys_gain: string, lead_role: string) -> string {
 		return strings.concatenate({`{ bpm: 120, seed: 5, sections: [ { name: "a", duration: "4m", chords: "C F G C" }, { name: "b", duration: "4m", chords: "A F G C" } ],
 			parts: {
-				lead: { instrument: "Synth", role: "`, lead_role, `", play: [ { name: ["a", "b"], notes: "C5 E5 G5 E5", subdivision: "4n" } ] },
-				keys: { instrument: "Synth", role: "comp", gain_db: `, keys_gain, `, play: [ { name: ["a", "b"], chords: { voicing: "open", rhythm: "x.x.x.x." }, octave: 4 } ] },
-				bass: { instrument: "Synth", role: "bass", play: [ { name: ["a", "b"], degrees: "1 . 5 .", subdivision: "4n", octave: 2 } ] },
-				pad: { instrument: "Synth", role: "pad", gain_db: 6, play: [ { name: ["a", "b"], chords: { voicing: "spread" }, octave: 3 } ] },
-				tex: { instrument: "Synth", role: "texture", gain_db: -24, play: [ { name: ["a", "b"], notes: "C6", subdivision: "1m" } ] },
-				fx_quiet: { instrument: { name: "NoiseSynth", "envelope/decay": 0.02, "envelope/sustain": 0 }, role: "fx", gain_db: -40, play: [ { name: "b", notes: "C4", subdivision: "1m" } ] },
-				fx_loud: { instrument: { name: "NoiseSynth", "envelope/decay": 0.02, "envelope/sustain": 0 }, role: "fx", gain_db: 6, play: [ { name: "b", notes: "C4", subdivision: "1m" } ] } } }`}, context.temp_allocator)
+				lead: { instrument: "Synth", role: "`, lead_role, `", play: [ { range: ["a", "b"], notes: "C5 E5 G5 E5", subdivision: "4n" } ] },
+				keys: { instrument: "Synth", role: "comp", gain_db: `, keys_gain, `, play: [ { range: ["a", "b"], chords: { voicing: "open", rhythm: "x.x.x.x." }, octave: 4 } ] },
+				bass: { instrument: "Synth", role: "bass", play: [ { range: ["a", "b"], degrees: "1 . 5 .", subdivision: "4n", octave: 2 } ] },
+				pad: { instrument: "Synth", role: "pad", gain_db: 6, play: [ { range: ["a", "b"], chords: { voicing: "spread" }, octave: 3 } ] },
+				tex: { instrument: "Synth", role: "texture", gain_db: -24, play: [ { range: ["a", "b"], notes: "C6", subdivision: "1m" } ] },
+				fx_quiet: { instrument: { name: "NoiseSynth", "envelope/decay": 0.02, "envelope/sustain": 0 }, role: "fx", gain_db: -40, play: [ { range: "b", notes: "C4", subdivision: "1m" } ] },
+				fx_loud: { instrument: { name: "NoiseSynth", "envelope/decay": 0.02, "envelope/sustain": 0 }, role: "fx", gain_db: 6, play: [ { range: "b", notes: "C4", subdivision: "1m" } ] } } }`}, context.temp_allocator)
 	}
 	check_song :: proc(t: ^testing.T, text: string) -> (said: map[string]string, codes: map[string]bool) {
 		sp := new(spec.Spec)

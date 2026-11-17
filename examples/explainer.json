@@ -33,7 +33,7 @@
       "octave": 5,
       "gain_db": -9.1,
       "room_db": -6,
-      "play": [ { "name": "drop@4m..", "notes": "E5 G5 A5 - G5 E5 D5 -", "subdivision": "8n" } ]
+      "play": [ { "range": "drop@4m..", "notes": "E5 G5 A5 - G5 E5 D5 -", "subdivision": "8n" } ]
     }
   },
   "markers": [ { "name": "logo", "at": "drop@2m" } ]

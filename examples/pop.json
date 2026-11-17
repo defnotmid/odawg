@@ -42,13 +42,13 @@
       "to": "drumbus",
       "play": [
         {
-          "name": "verse",
+          "range": "verse",
           "velocity": 0.75,
           "humanize": 0.004,
           "steps": { "kick": "x.......x.x.....", "clap": "....x.......x...", "hat": "x.o.x.o.x.o.x.o." }
         },
         {
-          "name": "pre",
+          "range": "pre",
           "velocity": 0.8,
           "humanize": 0.003,
           "steps": {
@@ -58,7 +58,7 @@
           }
         },
         {
-          "name": "chorus",
+          "range": "chorus",
           "velocity": 0.85,
           "humanize": 0.003,
           "steps": {
@@ -68,9 +68,9 @@
             "open_hat": "..x...x...x...x."
           }
         },
-        { "name": "break", "velocity": 0.6, "steps": { "kick": "x.......x.......", "hat": "....x.......x..." } },
+        { "range": "break", "velocity": 0.6, "steps": { "kick": "x.......x.......", "hat": "....x.......x..." } },
         {
-          "name": "chorus2",
+          "range": "chorus2",
           "velocity": 0.85,
           "humanize": 0.003,
           "steps": {
@@ -88,12 +88,12 @@
       "octave": 1,
       "gain_db": -12.4,
       "room_db": 0,
-      "sidechain": { "name": "drums/kick", "depth_db": -8, "release": 0.1 },
+      "sidechain": { "source": "drums/kick", "depth_db": -8, "release": 0.1 },
       "play": [
-        { "name": "verse", "degrees": "1 - - - - - - -", "subdivision": "8n", "velocity": 0.8 },
-        { "name": "pre", "degrees": "1 - 1 - 1 - 1 -", "subdivision": "8n", "velocity": 0.8 },
-        { "name": "chorus", "degrees": "1 - - 1 - - 1 -", "subdivision": "8n", "velocity": 0.85 },
-        { "name": "chorus2", "degrees": "1 - - 1 - - 1 -", "subdivision": "8n", "velocity": 0.85 }
+        { "range": "verse", "degrees": "1 - - - - - - -", "subdivision": "8n", "velocity": 0.8 },
+        { "range": "pre", "degrees": "1 - 1 - 1 - 1 -", "subdivision": "8n", "velocity": 0.8 },
+        { "range": "chorus", "degrees": "1 - - 1 - - 1 -", "subdivision": "8n", "velocity": 0.85 },
+        { "range": "chorus2", "degrees": "1 - - 1 - - 1 -", "subdivision": "8n", "velocity": 0.85 }
       ]
     },
     "bass": {
@@ -102,10 +102,10 @@
       "octave": 2,
       "gain_db": -7,
       "room_db": 0,
-      "sidechain": { "name": "drums/kick", "depth_db": -6, "release": 0.1 },
+      "sidechain": { "source": "drums/kick", "depth_db": -6, "release": 0.1 },
       "play": [
-        { "name": "chorus", "degrees": "1 - - 1 - - 1 -", "subdivision": "8n", "velocity": 0.7 },
-        { "name": "chorus2", "degrees": "1 - - 1 - - 1 -", "subdivision": "8n", "velocity": 0.7 }
+        { "range": "chorus", "degrees": "1 - - 1 - - 1 -", "subdivision": "8n", "velocity": 0.7 },
+        { "range": "chorus2", "degrees": "1 - - 1 - - 1 -", "subdivision": "8n", "velocity": 0.7 }
       ]
     },
     "piano": {
@@ -117,47 +117,47 @@
       "sends": { "hall": -14 },
       "play": [
         {
-          "name": "intro",
+          "range": "intro",
           "chords": { "voicing": "open", "rhythm": "x..x..x...x..x.." },
           "duration": "8n",
           "velocity": 0.58,
           "humanize": 0.008
         },
         {
-          "name": "verse",
+          "range": "verse",
           "chords": { "voicing": "open", "rhythm": "x..x..x...x..x.." },
           "duration": "8n",
           "velocity": 0.6,
           "humanize": 0.006
         },
         {
-          "name": "pre",
+          "range": "pre",
           "chords": { "voicing": "open", "rhythm": "x.x.x.x.x.x.x.x." },
           "duration": "16n",
           "velocity": 0.6,
           "humanize": 0.004
         },
         {
-          "name": "chorus",
+          "range": "chorus",
           "chords": { "voicing": "open", "rhythm": "x..x..x.x..x..x." },
           "duration": "8n",
           "velocity": 0.5
         },
         {
-          "name": "break",
+          "range": "break",
           "chords": { "voicing": "open", "rhythm": "x.......x......." },
           "duration": "2n",
           "velocity": 0.5,
           "humanize": 0.008
         },
         {
-          "name": "chorus2",
+          "range": "chorus2",
           "chords": { "voicing": "open", "rhythm": "x..x..x.x..x..x." },
           "duration": "8n",
           "velocity": 0.5
         },
         {
-          "name": "outro",
+          "range": "outro",
           "chords": { "voicing": "open", "rhythm": "x.......x......." },
           "duration": "2n",
           "velocity": 0.5,
@@ -184,13 +184,13 @@
       "key": "drums",
       "play": [
         {
-          "name": "pre",
+          "range": "pre",
           "chords": { "voicing": "spread", "rhythm": "x.x.x.x.x.x.x.x." },
           "duration": "16n",
           "velocity": 0.45
         },
-        { "name": "chorus", "chords": { "voicing": "spread" }, "velocity": 0.6 },
-        { "name": "chorus2", "chords": { "voicing": "spread" }, "velocity": 0.65 }
+        { "range": "chorus", "chords": { "voicing": "spread" }, "velocity": 0.6 },
+        { "range": "chorus2", "chords": { "voicing": "spread" }, "velocity": 0.65 }
       ]
     },
     "arp": {
@@ -203,11 +203,11 @@
       "to": "synths",
       "play": [
         {
-          "name": "verse@4m..verse",
+          "range": "verse@4m..verse",
           "arpeggio": { "pattern": "upDown", "interval": "8n", "octaves": 2 },
           "velocity": 0.4
         },
-        { "name": "pre", "arpeggio": { "pattern": "up", "interval": "16n", "octaves": 2 }, "velocity": 0.4 }
+        { "range": "pre", "arpeggio": { "pattern": "up", "interval": "16n", "octaves": 2 }, "velocity": 0.4 }
       ]
     },
     "lead": {
@@ -219,21 +219,21 @@
       "sends": { "echo": -9, "hall": -16 },
       "play": [
         {
-          "name": "chorus",
+          "range": "chorus",
           "subdivision": "8n",
           "velocity": 0.75,
           "humanize": 0.004,
           "notes": "E5! . E5 D5 C5 - A4 . C5 - - . A4 C5 D5 - E5! - G5 . E5 D5 C5 - D5 - - - B4 . G4 ."
         },
         {
-          "name": "chorus2",
+          "range": "chorus2",
           "subdivision": "8n",
           "velocity": 0.8,
           "humanize": 0.004,
           "notes": "E5! . E5 D5 C5 - A4 . C5 - - . A4 C5 D5 - E5! - G5 . E5 D5 C5 - D5 - - - B4 . G4 ."
         },
         {
-          "name": "break",
+          "range": "break",
           "subdivision": "8n",
           "velocity": 0.5,
           "notes": "E5 . . . . . . . C5 . . . . . . . E5 . G5 . . . . . D5 . . . . . . ."
@@ -248,10 +248,10 @@
       "room_db": -2,
       "sends": { "hall": -8 },
       "play": [
-        { "name": "intro@2m..intro", "chords": { "voicing": "spread" }, "velocity": 0.4 },
-        { "name": "break", "chords": { "voicing": "spread" }, "velocity": 0.45 },
-        { "name": "chorus2", "chords": { "voicing": "spread" }, "velocity": 0.6 },
-        { "name": "outro", "chords": { "voicing": "spread" }, "velocity": 0.45 }
+        { "range": "intro@2m..intro", "chords": { "voicing": "spread" }, "velocity": 0.4 },
+        { "range": "break", "chords": { "voicing": "spread" }, "velocity": 0.45 },
+        { "range": "chorus2", "chords": { "voicing": "spread" }, "velocity": 0.6 },
+        { "range": "outro", "chords": { "voicing": "spread" }, "velocity": 0.45 }
       ]
     }
   }

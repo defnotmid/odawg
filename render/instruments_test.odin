@@ -57,7 +57,7 @@ test_rows_render :: proc(t: ^testing.T) {
 		}
 		arena: virtual.Arena
 		s := compose_with(t, strings.concatenate({`{ bpm: 120, gain_db: 0, sections: [ { name: "a", duration: "1m" } ],
-			parts: { p: { instrument: "`, name, `", play: [ { name: "a", notes: "C4 E4 G4 -" } ] } } }`}, context.temp_allocator), &arena)
+			parts: { p: { instrument: "`, name, `", play: [ { range: "a", notes: "C4 E4 G4 -" } ] } } }`}, context.temp_allocator), &arena)
 		out := output_from_song(s, {})
 		expect_sound(t, name, out, out.frames)
 		output_destroy(&out)
@@ -68,7 +68,7 @@ test_rows_render :: proc(t: ^testing.T) {
 		for pad in pads {
 			arena: virtual.Arena
 			s := compose_with(t, strings.concatenate({`{ bpm: 120, gain_db: 0, sections: [ { name: "a", duration: "1m" } ],
-				parts: { d: { instrument: "`, machine, `", play: [ { name: "a", steps: { `, pad, `: "x..." } } ] } } }`}, context.temp_allocator), &arena)
+				parts: { d: { instrument: "`, machine, `", play: [ { range: "a", steps: { `, pad, `: "x..." } } ] } } }`}, context.temp_allocator), &arena)
 			out := output_from_song(s, {})
 			expect_sound(t, fmt.tprintf("%s %s", machine, pad), out, out.frames)
 			output_destroy(&out)
@@ -78,7 +78,7 @@ test_rows_render :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	defer virtual.arena_destroy(&arena)
 	s := compose_with(t, `{ bpm: 125, gain_db: 0, key: "A minor", sections: [ { name: "a", duration: "1m", chords: "Am" } ],
-		parts: { acid: { instrument: "instruments/tb303.json", octave: 2, play: [ { name: "a", degrees: "1! . 1 8~ 1 . 5~ 8", subdivision: "16n", duration: "32n." } ] } } }`, &arena)
+		parts: { acid: { instrument: "instruments/tb303.json", octave: 2, play: [ { range: "a", degrees: "1! . 1 8~ 1 . 5~ 8", subdivision: "16n", duration: "32n." } ] } } }`, &arena)
 	out := output_from_song(s, {})
 	defer output_destroy(&out)
 	expect_sound(t, "tb303", out, out.frames)
@@ -146,8 +146,8 @@ test_controls :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	defer virtual.arena_destroy(&arena)
 	s := compose_with(t, `{ bpm: 125, sections: [ { name: "a", duration: "1m" } ],
-		parts: { acid: { instrument: "instruments/tb303.json", play: [ { name: "a", notes: "C2 C2" } ] },
-		         drums: { instrument: "machines/909.json", play: [ { name: "a", steps: { snare: "x..." } } ] } } }`, &arena)
+		parts: { acid: { instrument: "instruments/tb303.json", play: [ { range: "a", notes: "C2 C2" } ] },
+		         drums: { instrument: "machines/909.json", play: [ { range: "a", steps: { snare: "x..." } } ] } } }`, &arena)
 	progs := &s.programs
 	// each instrument's label: its row as named
 	testing.expect_value(t, s.labels[s.tracks[song.part_index(s, "acid")].instrument], "instruments/tb303.json")
@@ -212,7 +212,7 @@ test_controls :: proc(t: ^testing.T) {
 	}
 	codes := findings_of(t, `{ bpm: 120, sections: [ { name: "a", duration: "1m" } ], parts: { p: { instrument: {
 		options: { bright: "nowhere/frequency", "f/frequency": { path: "f/q", op: "mul" } },
-		nodes: { o: { class: "Osc" }, f: { class: "Filter", input: "o" }, out: { class: "Mix", input: "f" } } }, play: [ { name: "a", notes: "C4" } ] } } }`)
+		nodes: { o: { class: "Osc" }, f: { class: "Filter", input: "o" }, out: { class: "Mix", input: "f" } } }, play: [ { range: "a", notes: "C4" } ] } } }`)
 	testing.expectf(t, slice.contains(codes[:], "unknown_option_target") && slice.contains(codes[:], "control_shadows_field"), "%v", codes)
 }
 
@@ -293,10 +293,10 @@ test_song_placed_sounds_alone :: proc(t: ^testing.T) {
 	s := compose_with(t, `{ name: "s", bpm: 120, seed: 9, sections: [ { name: "a", duration: "2m" } ],
 		returns: { hall: [ { name: "Reverb", decay: 2 } ] },
 		parts: {
-			drums: { instrument: "MembraneSynth", play: [ { name: "a", notes: "C2 - C2 -", subdivision: "8n" } ] },
+			drums: { instrument: "MembraneSynth", play: [ { range: "a", notes: "C2 - C2 -", subdivision: "8n" } ] },
 			lead: { instrument: "PluckSynth", sends: { hall: -6 }, effects: [ { name: "FeedbackDelay", delay_time: "8n", feedback: 0.4, wet: 0.3 } ],
-				play: [ { name: "a", notes: "A4 C5 E5 -", subdivision: "8n" } ] },
-			pad: { instrument: "Synth", effects: [ { name: "Chorus" }, { name: "AutoFilter" } ], play: [ { name: "a", notes: "A3 - C4 -", subdivision: "4n" } ] } } }`, &arena)
+				play: [ { range: "a", notes: "A4 C5 E5 -", subdivision: "8n" } ] },
+			pad: { instrument: "Synth", effects: [ { name: "Chorus" }, { name: "AutoFilter" } ], play: [ { range: "a", notes: "A3 - C4 -", subdivision: "4n" } ] } } }`, &arena)
 	alone := output_from_song(s, {})
 	length := base.seconds_from_samples(i64(alone.frames))
 	for place in ([][2]base.Seconds{{1.25, 1.25}, {0.1, 0}}) {
@@ -540,8 +540,8 @@ test_row_option_order :: proc(t: ^testing.T) {
 	sp := new(spec.Spec)
 	findings := make(base.Findings)
 	testing.expect(t, spec.spec_from_json(`{ bpm: 120, sections: [ { name: "a", duration: "1m" } ], parts: {
-		p: { instrument: { bright: 900, options: { bright: "f/frequency" }, nodes: { o: { class: "Osc" }, f: { class: "Filter", input: "o" }, out: { class: "Mix", input: "f" } } }, play: [ { name: "a", notes: "C4" } ] },
-		q: { instrument: { nodes: { out: { class: "Osc", amp: 0.15 } } }, play: [ { name: "a", notes: "C4" } ] } } }`, sp, &findings))
+		p: { instrument: { bright: 900, options: { bright: "f/frequency" }, nodes: { o: { class: "Osc" }, f: { class: "Filter", input: "o" }, out: { class: "Mix", input: "f" } } }, play: [ { range: "a", notes: "C4" } ] },
+		q: { instrument: { nodes: { out: { class: "Osc", amp: 0.15 } } }, play: [ { range: "a", notes: "C4" } ] } } }`, sp, &findings))
 	s := new(song.Song)
 	song.song_from_spec(sp, s)
 	amp_message := ""
@@ -579,13 +579,13 @@ test_layers :: proc(t: ^testing.T) {
 			{ instrument: `, tone, `, lo_key: "C3", hi_key: "C5", sw_last_lo: "C1" },
 			{ instrument: `, tone, `, lo_key: "C3", hi_key: "C5", sw_last_lo: "C#1", gain_db: -20 },
 			{ instrument: `, click, `, trigger: "release", rt_decay: 0 } ] },
-			play: [ { name: "a", notes: "C4 . C#1 . C4 . . .", subdivision: "4n", duration: "8n" } ] },
+			play: [ { range: "a", notes: "C4 . C#1 . C4 . . .", subdivision: "4n", duration: "8n" } ] },
 		rr: { gain_db: 0, instrument: { layers: [
 			{ instrument: `, tone, `, seq_length: 2, seq_position: 1 },
 			{ instrument: `, tone, `, seq_length: 2, seq_position: 2, gain_db: -20 } ] },
-			play: [ { name: "a", notes: "E4 . E4 . E4 . . .", subdivision: "4n", duration: "8n" } ] },
+			play: [ { range: "a", notes: "E4 . E4 . E4 . . .", subdivision: "4n", duration: "8n" } ] },
 		cut: { gain_db: 0, instrument: { layers: [ { instrument: `, tone, `, group: 1, off_by: 1 } ] },
-			play: [ { name: "a", events: [ { time: 0, note: "G4", duration: 2 }, { time: 0.5, note: "C4", duration: 0.25 } ] } ] } } }`})
+			play: [ { range: "a", events: [ { time: 0, note: "G4", duration: 2 }, { time: 0.5, note: "C4", duration: 0.25 } ] } ] } } }`})
 	s := compose_with(t, text, &arena)
 	out := output_from_song(s, {stems = true})
 	defer output_destroy(&out)
@@ -664,12 +664,12 @@ test_nested_layers :: proc(t: ^testing.T) {
 		{ instrument: ` + tone + `, sw_last_lo: "C1" }, { instrument: ` + tone + `, sw_last_lo: "C#1", gain_db: -20 } ] } } ] }`
 	grouped :: `{ layers: [ { instrument: ` + tone + `, off_by: 1 }, { instrument: { layers: [ { instrument: ` + tone + `, group: 1, gain_db: -40 } ] } } ] }`
 	text := strings.concatenate({`{ bpm: 120, gain_db: 0, sections: [ { name: "a", duration: "2m" } ], parts: {
-		loud: { gain_db: 0, instrument: `, nested, `, play: [ { name: "a", notes: "C4 . . .", subdivision: "4n", duration: "8n", velocity: 0.8 } ] },
-		loud_ref: { gain_db: 0, instrument: `, plain, `, play: [ { name: "a", notes: "C4 . . .", subdivision: "4n", duration: "8n", velocity: 0.8 } ] },
-		soft: { gain_db: 0, instrument: `, nested, `, play: [ { name: "a", notes: "C4 . . .", subdivision: "4n", duration: "8n", velocity: 0.3 } ] },
-		soft_ref: { gain_db: 0, instrument: `, plain, `, play: [ { name: "a", notes: "C4 . . .", subdivision: "4n", duration: "8n", velocity: 0.3 } ] },
-		sw: { gain_db: 0, instrument: `, switched, `, play: [ { name: "a", notes: "C4 . C#1 . C4 . . .", subdivision: "4n", duration: "8n" } ] },
-		grp: { gain_db: 0, instrument: `, grouped, `, play: [ { name: "a", events: [ { time: 0, note: "G4", duration: 2 }, { time: 0.5, note: "C4", duration: 0.25 } ] } ] } } }`}, context.temp_allocator)
+		loud: { gain_db: 0, instrument: `, nested, `, play: [ { range: "a", notes: "C4 . . .", subdivision: "4n", duration: "8n", velocity: 0.8 } ] },
+		loud_ref: { gain_db: 0, instrument: `, plain, `, play: [ { range: "a", notes: "C4 . . .", subdivision: "4n", duration: "8n", velocity: 0.8 } ] },
+		soft: { gain_db: 0, instrument: `, nested, `, play: [ { range: "a", notes: "C4 . . .", subdivision: "4n", duration: "8n", velocity: 0.3 } ] },
+		soft_ref: { gain_db: 0, instrument: `, plain, `, play: [ { range: "a", notes: "C4 . . .", subdivision: "4n", duration: "8n", velocity: 0.3 } ] },
+		sw: { gain_db: 0, instrument: `, switched, `, play: [ { range: "a", notes: "C4 . C#1 . C4 . . .", subdivision: "4n", duration: "8n" } ] },
+		grp: { gain_db: 0, instrument: `, grouped, `, play: [ { range: "a", events: [ { time: 0, note: "G4", duration: 2 }, { time: 0.5, note: "C4", duration: 0.25 } ] } ] } } }`}, context.temp_allocator)
 	s := compose_with(t, text, &arena)
 	out := output_from_song(s, {stems = true})
 	defer output_destroy(&out)
@@ -714,7 +714,7 @@ test_nested_layers :: proc(t: ^testing.T) {
 		sp := new(spec.Spec)
 		findings := make(base.Findings)
 		testing.expect(t, spec.spec_from_json(`{ bpm: 120, sections: [ { name: "a", duration: "1m" } ], parts: {
-			m: { instrument: { layers: [ { instrument: "machines/808.json" } ] }, play: [ { name: "a", notes: "C1" } ] } } }`, sp, &findings))
+			m: { instrument: { layers: [ { instrument: "machines/808.json" } ] }, play: [ { range: "a", notes: "C1" } ] } } }`, sp, &findings))
 		add_examples(sp, &findings)
 		m := new(song.Song)
 		song.song_from_spec(sp, m)
@@ -754,7 +754,7 @@ test_stereo_input_kinds_seek :: proc(t: ^testing.T) {
 				body: { class: "Filter", type: "highpass", frequency: 220, input: "x" },
 				env: { class: "Env", attack: 0.001, decay: 0.8, sustain: 0, release: 0.35 },
 				out: { class: "Mix", inputs: [ "body", "saw" ], amp: "env", gain_db: -7.5 } } },
-				play: [ { name: "a", arpeggio: { pattern: "up", interval: "16n", octaves: 2 }, octave: 4, velocity: 0.65, humanize: 0.003 } ] } } }`}, context.temp_allocator)
+				play: [ { range: "a", arpeggio: { pattern: "up", interval: "16n", octaves: 2 }, octave: 4, velocity: 0.65, humanize: 0.003 } ] } } }`}, context.temp_allocator)
 		s := compose_with(t, text, &arena)
 		out := output_from_song(s, {})
 		defer output_destroy(&out)
@@ -774,7 +774,7 @@ test_duck_gain_at :: proc(t: ^testing.T) {
 	arena: virtual.Arena
 	defer virtual.arena_destroy(&arena)
 	s := compose_with(t, `{ name: "s", bpm: 120, seed: 4, sections: [ { name: "a", duration: "4m" } ],
-		parts: { pad: { instrument: "Synth", play: [ { name: "a", notes: "A3 C4 E4 C4", subdivision: "4n" } ] } } }`, &arena)
+		parts: { pad: { instrument: "Synth", play: [ { range: "a", notes: "A3 C4 E4 C4", subdivision: "4n" } ] } } }`, &arena)
 	context.allocator = virtual.arena_allocator(&arena)
 	frames := 10 * RATE
 	music := make([]f32, 2 * frames)
@@ -896,7 +896,7 @@ test_tail_covers_a_moved_decay :: proc(t: ^testing.T) {
 				rnd: { class: "Random" },
 				env: { class: "Decay", time: `, time, ` },
 				tone: { class: "Osc", wave: "sine", amp: "env" } } },
-			play: [ { name: "a", events: [ { time: 0, note: "C4", duration: 0.05, velocity: 1 } ] } ] } } }`}, context.temp_allocator)
+			play: [ { range: "a", events: [ { time: 0, note: "C4", duration: 0.05, velocity: 1 } ] } ] } } }`}, context.temp_allocator)
 		s := compose_with(t, text, &arena)
 		context.allocator = virtual.arena_allocator(&arena)
 		out := output_from_song(s, {})

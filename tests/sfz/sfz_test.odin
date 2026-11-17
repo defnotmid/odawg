@@ -109,7 +109,7 @@ test_sfz_instrument :: proc(t: ^testing.T) {
 	sp := new(spec.Spec)
 	findings := make(base.Findings)
 	testing.expect(t, spec.spec_from_json(`{ bpm: 120, gain_db: 0, seed: 1, sections: [ { name: "a", duration: "8m" } ],
-		parts: { p: { gain_db: 0, instrument: { name: "inst/test.sfz", Mic: 127, ampeg_release: 0.01 }, play: [ { name: "a", events: [
+		parts: { p: { gain_db: 0, instrument: { name: "inst/test.sfz", Mic: 127, ampeg_release: 0.01 }, play: [ { range: "a", events: [
 			{ time: 0, note: "C4", duration: 0.4, velocity: 0.3 },
 			{ time: 0.5, note: "C4", duration: 0.4, velocity: 0.9 },
 			{ time: 1, note: "D4", duration: 0.4 }, { time: 1.5, note: "D4", duration: 0.4 },
@@ -227,7 +227,7 @@ test_layer_unavailable :: proc(t: ^testing.T) {
 		instruments: { grit: { mono: true, portamento: 0.03, nodes: {
 			env: { class: "Env", attack: 0.01, decay: 0.2, sustain: 0.6, release: 0.1 },
 			out: { class: "Osc", wave: "triangle", amp: "env", gain_db: -12 } } } },
-		parts: { p: { gain_db: 0, instrument: { layers: [ { instrument: "grit" }, { instrument: { name: "inst/two.sfz" }, gain_db: -8 } ] }, play: [ { name: "a", events: [
+		parts: { p: { gain_db: 0, instrument: { layers: [ { instrument: "grit" }, { instrument: { name: "inst/two.sfz" }, gain_db: -8 } ] }, play: [ { range: "a", events: [
 			{ time: 0, note: "F1", duration: 2, velocity: 0.3 },
 			{ time: 0.5, note: "C4", duration: 1, velocity: 0.85 },
 			{ time: 2.5, note: "F1", duration: 0.5, velocity: 0.3 } ] } ] } } }`, sp, &findings))

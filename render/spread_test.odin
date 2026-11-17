@@ -33,7 +33,7 @@ test_lfo_spread :: proc(t: ^testing.T) {
 	defer virtual.arena_destroy(&arena)
 	s := compose_spread(t, `{ bpm: 120, key: "C major", gain_db: 0, sections: [ { name: "a", duration: "2m" } ],
 		parts: { p: { instrument: { velocity: "none", nodes: { out: { class: "Lfo", rate: 2, spread: 90, gain_db: -6 } } },
-			play: [ { name: "a", events: [ { time: 0, note: "C4", duration: 3 } ] } ] } } }`, &arena)
+			play: [ { range: "a", events: [ { time: 0, note: "C4", duration: 3 } ] } ] } } }`, &arena)
 	context.allocator = virtual.arena_allocator(&arena)
 	out := output_from_song(s, {})
 	worst: f64
@@ -72,7 +72,7 @@ test_spread_kinds_seek :: proc(t: ^testing.T) {
 					lfo: { class: "Lfo", rate: 1.3, spread: `, spread, ` },
 					env: { class: "Env", attack: 0.01, decay: 0.8, sustain: 0.4, release: 0.35 },
 					out: `, x, ` } , out: "out" },
-					play: [ { name: "a", chords: { voicing: "open" }, octave: 3, velocity: 0.7 } ] } } }`}, context.temp_allocator)
+					play: [ { range: "a", chords: { voicing: "open" }, octave: 3, velocity: 0.7 } ] } } }`}, context.temp_allocator)
 		}
 		arena, arena2: virtual.Arena
 		defer virtual.arena_destroy(&arena)
@@ -114,7 +114,7 @@ test_phaser_spread :: proc(t: ^testing.T) {
 		return strings.concatenate({`{ bpm: 100, seed: 3, key: "D minor", gain_db: 0, effects: "instruments/effects.json",
 			sections: [ { name: "a", duration: "4m", chords: "Dm7 Bbmaj7" } ],
 			parts: { pad: { instrument: { nodes: { out: { class: "Noise", color: "pink", gain_db: -12 } } }, effects: `, fx, `,
-				play: [ { name: "a", events: [ { time: 0, note: "C4", duration: 9 } ] } ] } } }`}, context.temp_allocator)
+				play: [ { range: "a", events: [ { time: 0, note: "C4", duration: 9 } ] } ] } } }`}, context.temp_allocator)
 	}
 	correlation :: proc(o: Output, a, b: int) -> f64 {
 		lr, ll, rr: f64

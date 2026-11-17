@@ -544,9 +544,8 @@ program (§3.4): a note starts every region whose conditions it meets, each a vo
   `polyphony` count only its voices), and its keyswitches switch the row. A layered row as a
   layer plays the same way. A machine can't be a layer: its pads go by key (an error).
 - **An opcode written on the row** by its name sets it for every region
-  (`ampeg_release = 0.4`). v0.0.5's `{ "Sampler", set = "x.sfz", attack, release }` still
-  works: its attack and release are every region's `ampeg_attack` and `ampeg_release`, with
-  an info finding naming the form above.
+  (`ampeg_release = 0.4`). An SFZ file is never a node's sample set: `{ "Sampler", set =
+  "x.sfz" }` is an error naming `instrument = "x.sfz"`.
 - **Not played**, each a finding once a file with its count and first region: `<effect>`,
   scripts, ARIA's envelope shapes (linear here), pedal switches, `param_offset`,
   `note_selfmask`, `output`, `loop_crossfade`, `phase`, and anything not in the SFZ

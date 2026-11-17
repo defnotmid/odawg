@@ -23,7 +23,7 @@ test_segments_shape :: proc(t: ^testing.T) {
 	findings := make(base.Findings)
 	testing.expect(t, spec.spec_from_json(`{ bpm: 120, key: "C major", gain_db: 0, sections: [ { name: "a", duration: "4m" } ],
 		parts: { p: { instrument: { velocity: "none", nodes: { out: { class: "Segments", times: [0, 0.1, 0.1, 0.2], levels: [0, 1, 0.5, 0], sustain: 2, points: 4 } } },
-			play: [ { name: "a", events: [ { time: 0, note: "C4", duration: 1.3 }, { time: 3, note: "C4", duration: 0.15 } ] } ] } } }`, sp, &findings))
+			play: [ { range: "a", events: [ { time: 0, note: "C4", duration: 1.3 }, { time: 3, note: "C4", duration: 0.15 } ] } ] } } }`, sp, &findings))
 	s := new(song.Song)
 	testing.expect(t, song.song_from_spec(sp, s))
 	for f in s.findings {

@@ -31,7 +31,7 @@ held :: proc(bpm, fx: string) -> string {
 	return strings.concatenate({`{ key: "C major", gain_db: 0, effects: "instruments/effects.json",
 		sections: [ { name: "a", duration: "8m", bpm: `, bpm, `, chords: "C" } ],
 		parts: { p: { instrument: { nodes: { out: { class: "Osc", wave: "sine", gain_db: -12 } } }, effects: `, fx, `,
-			play: [ { name: "a", events: [ { time: 0.05, note: "A4", duration: 12 } ] } ] } } }`}, context.temp_allocator)
+			play: [ { range: "a", events: [ { time: 0.05, note: "A4", duration: 12 } ] } ] } } }`}, context.temp_allocator)
 }
 
 // How far a stem strays from `want(t)` times the dry stem (where the dry is
@@ -121,7 +121,7 @@ test_tempo_sync_instrument :: proc(t: ^testing.T) {
 			sections: [ { name: "a", duration: "8m", bpm: [ 90, 150 ], chords: "C" } ],
 			parts: { p: { instrument: { nodes: { lfo: { class: "Lfo", rate: `, rate, ` },
 				out: { class: "Osc", wave: "sine", gain_db: -12, amp: { by: "lfo", depth: `, depth, ` } } } },
-				play: [ { name: "a", events: [ { time: 0.5, note: "A4", duration: 12 } ] } ] } } }`}, context.temp_allocator)
+				play: [ { range: "a", events: [ { time: 0.5, note: "A4", duration: 12 } ] } ] } } }`}, context.temp_allocator)
 	}
 	arenas: [3]virtual.Arena
 	defer for &a in arenas {

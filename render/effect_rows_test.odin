@@ -43,11 +43,11 @@ ROWS :: `{ bpm: 110, seed: 5, key: "D dorian", gain_db: 0,
 	returns: { wide: [ "phaser6" ] },
 	parts: {
 		pad: { instrument: "Synth", effects: [ { name: "phaser", rate: 0.35, feedback: 0.6 } ], sends: { wide: -6 },
-		       play: [ { name: "a..b", chords: { voicing: "open" }, octave: 4 } ] },
+		       play: [ { range: "a..b", chords: { voicing: "open" }, octave: 4 } ] },
 		keys: { instrument: "AMSynth", effects: [ "autowah", "flanger" ],
-		        play: [ { name: "a..b", arpeggio: { pattern: "upDown", interval: "8n" }, octave: 4, velocity: 0.8 } ] },
+		        play: [ { range: "a..b", arpeggio: { pattern: "upDown", interval: "8n" }, octave: 4, velocity: 0.8 } ] },
 		lead: { instrument: "MonoSynth", effects: [ { name: "tremolo", rate: 3, depth: 0.7 }, "autopan" ],
-		        play: [ { name: "a..b", notes: "D5 . F5 A5 - . G5 E5", subdivision: "8n" } ] } },
+		        play: [ { range: "a..b", notes: "D5 . F5 A5 - . G5 E5", subdivision: "8n" } ] } },
 	automation: { "parts/pad/effects/phaser/depth": [ [ "a", 0.5 ], [ "b", 2 ] ], "parts/keys/effects/autowah/bp/q": [ [ "a", 1.5 ], [ "b", 4 ] ] } }`
 
 // A part's effect rows, a return's and lanes on a row's option and on a
@@ -115,7 +115,7 @@ test_effect_rows_exact :: proc(t: ^testing.T) {
 	defer virtual.arena_destroy(&arena2)
 	dry := compose_rows(t, `{ bpm: 110, seed: 5, key: "D dorian", gain_db: 0,
 		sections: [ { name: "a", duration: "4m", chords: "Dm7 G7" }, { name: "b", duration: "4m", chords: "Em7 A7" } ],
-		parts: { pad: { instrument: "Synth", play: [ { name: "a..b", chords: { voicing: "open" }, octave: 4 } ] } } }`, &arena2)
+		parts: { pad: { instrument: "Synth", play: [ { range: "a..b", chords: { voicing: "open" }, octave: 4 } ] } } }`, &arena2)
 	plain := output_from_song(dry, {stems = true})
 	defer output_destroy(&plain)
 	n := min(plain.frames, whole.frames)
@@ -132,7 +132,7 @@ test_effect_row_clock :: proc(t: ^testing.T) {
 		return strings.concatenate({`{ bpm: 120, seed: 1, key: "C major", gain_db: 0, effects: "instruments/effects.json",
 			sections: [ { name: "a", duration: "4m", chords: "C" } ],
 			parts: { p: { instrument: { nodes: { out: { class: "Osc", wave: "sine", gain_db: -12 } } }, effects: `, fx, `,
-				play: [ { name: "a", events: [ { time: 4.1, note: "A4", duration: 3 } ] } ] } } }`}, context.temp_allocator)
+				play: [ { range: "a", events: [ { time: 4.1, note: "A4", duration: 3 } ] } ] } } }`}, context.temp_allocator)
 	}
 	arena, arena2: virtual.Arena
 	defer virtual.arena_destroy(&arena)
@@ -166,7 +166,7 @@ test_effect_row_memory :: proc(t: ^testing.T) {
 		arena: virtual.Arena
 		defer virtual.arena_destroy(&arena)
 		s := compose_rows(t, strings.concatenate({`{ bpm: 120, seed: 1, effects: "instruments/effects.json", sections: [ { name: "a", duration: "1m" } ],
-			parts: { p: { instrument: "Synth", effects: [ "`, name, `" ], play: [ { name: "a", notes: "C4" } ] } } }`}, context.temp_allocator), &arena)
+			parts: { p: { instrument: "Synth", effects: [ "`, name, `" ], play: [ { range: "a", notes: "C4" } ] } } }`}, context.temp_allocator), &arena)
 		no_errors(t, s)
 		context.allocator = virtual.arena_allocator(&arena)
 		d := s.chain[s.tracks[0].chain.first]
@@ -223,20 +223,20 @@ test_effect_row_findings :: proc(t: ^testing.T) {
 	HEAD :: `{ bpm: 120, key: "C major", sections: [ { name: "a", duration: "1m" } ], `
 	cases := []Case {
 		{"effect_reads_note", "effects/env/nodes/env", `effects: [ "instruments/effects.json", { env: { nodes: { in: { class: "Input" }, env: { class: "Env" }, out: { class: "Mix", inputs: [ "in" ], amp: "env" } } } } ],
-			parts: { p: { instrument: "Synth", effects: [ "env" ], play: [ { name: "a", notes: "C4" } ] } } }`},
+			parts: { p: { instrument: "Synth", effects: [ "env" ], play: [ { range: "a", notes: "C4" } ] } } }`},
 		{"effect_reads_note", "effects/vel/nodes/out/amp/by", `effects: [ "instruments/effects.json", { vel: { nodes: { in: { class: "Input" }, out: { class: "Mix", inputs: [ "in" ], amp: { by: "velocity", depth: 1 } } } } } ],
-			parts: { p: { instrument: "Synth", effects: [ "vel" ], play: [ { name: "a", notes: "C4" } ] } } }`},
+			parts: { p: { instrument: "Synth", effects: [ "vel" ], play: [ { range: "a", notes: "C4" } ] } } }`},
 		{"fixed_value", "effects/wob/nodes/lfo/rate", `effects: [ "instruments/effects.json", { wob: { nodes: { in: { class: "Input" }, slow: { class: "Lfo", rate: 0.1 }, lfo: { class: "Lfo", rate: { base: 2, by: "slow", amount: 1 } }, out: { class: "Mix", inputs: [ "in" ], amp: { by: "lfo", depth: 0.5 } } } } } ],
-			parts: { p: { instrument: "Synth", effects: [ "wob" ], play: [ { name: "a", notes: "C4" } ] } } }`},
-		{"fixed_value", "automation/parts/p/effects/phaser/rate", `effects: "instruments/effects.json", parts: { p: { instrument: "Synth", effects: [ "phaser" ], play: [ { name: "a", notes: "C4" } ] } },
+			parts: { p: { instrument: "Synth", effects: [ "wob" ], play: [ { range: "a", notes: "C4" } ] } } }`},
+		{"fixed_value", "automation/parts/p/effects/phaser/rate", `effects: "instruments/effects.json", parts: { p: { instrument: "Synth", effects: [ "phaser" ], play: [ { range: "a", notes: "C4" } ] } },
 			automation: { "parts/p/effects/phaser/rate": [ [ "a", 0.2 ], [ "end", 2 ] ] } }`},
-		{"fixed_value", "automation/parts/p/effects/flanger/delay", `effects: "instruments/effects.json", parts: { p: { instrument: "Synth", effects: [ "flanger" ], play: [ { name: "a", notes: "C4" } ] } },
+		{"fixed_value", "automation/parts/p/effects/flanger/delay", `effects: "instruments/effects.json", parts: { p: { instrument: "Synth", effects: [ "flanger" ], play: [ { range: "a", notes: "C4" } ] } },
 			automation: { "parts/p/effects/flanger/delay": [ [ "a", 0.002 ], [ "end", 0.004 ] ] } }`},
-		{"bad_value", "parts/p/instrument/nodes/in", `parts: { p: { instrument: { nodes: { in: { class: "Input" }, out: { class: "Mix", inputs: [ "in" ] } } }, play: [ { name: "a", notes: "C4" } ] } } }`},
+		{"bad_value", "parts/p/instrument/nodes/in", `parts: { p: { instrument: { nodes: { in: { class: "Input" }, out: { class: "Mix", inputs: [ "in" ] } } }, play: [ { range: "a", notes: "C4" } ] } } }`},
 		{"bad_value", "song/effects/Chorus", `effects: [ "instruments/effects.json", { Chorus: { nodes: { out: { class: "Input" } } } } ],
-			parts: { p: { instrument: "Synth", play: [ { name: "a", notes: "C4" } ] } } }`},
-		{"unknown_effect", "parts/p/effects/1", `parts: { p: { instrument: "Synth", effects: [ "phazer" ], play: [ { name: "a", notes: "C4" } ] } } }`},
-		{"", "", `effects: "instruments/effects.json", parts: { p: { instrument: "Synth", effects: [ "phaser" ], play: [ { name: "a", notes: "C4" } ] } },
+			parts: { p: { instrument: "Synth", play: [ { range: "a", notes: "C4" } ] } } }`},
+		{"unknown_effect", "parts/p/effects/1", `parts: { p: { instrument: "Synth", effects: [ "phazer" ], play: [ { range: "a", notes: "C4" } ] } } }`},
+		{"", "", `effects: "instruments/effects.json", parts: { p: { instrument: "Synth", effects: [ "phaser" ], play: [ { range: "a", notes: "C4" } ] } },
 			automation: { "parts/p/effects/phaser/depth": [ [ "a", 0.5 ], [ "end", 2 ] ], "parts/p/effects/phaser/mix": [ [ "a", 1 ], [ "end", 0.2 ] ], "parts/p/effects/phaser/ap2/q": [ [ "a", 1 ], [ "end", 3 ] ] } }`},
 	}
 	for c in cases {
@@ -269,7 +269,7 @@ test_effect_row_live :: proc(t: ^testing.T) {
 	text :: proc(mix: string) -> string {
 		return strings.concatenate({`{ bpm: 120, seed: 4, key: "C major", gain_db: 0, effects: "instruments/effects.json",
 			sections: [ { name: "a", duration: "4m", chords: "C F" } ],
-			parts: { pad: { instrument: "Synth", effects: [ { name: "phaser", mix: `, mix, ` } ], play: [ { name: "a", chords: { voicing: "open" }, octave: 4 } ] } } }`}, context.temp_allocator)
+			parts: { pad: { instrument: "Synth", effects: [ { name: "phaser", mix: `, mix, ` } ], play: [ { range: "a", chords: { voicing: "open" }, octave: 4 } ] } } }`}, context.temp_allocator)
 	}
 	arena, arena2: virtual.Arena
 	defer virtual.arena_destroy(&arena)

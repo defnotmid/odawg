@@ -59,10 +59,10 @@ test_routes :: proc(t: ^testing.T) {
 		buses: { glue: { effects: [ { name: "Compressor", threshold: -18, ratio: 3 } ] } },
 		parts: {
 			drums: { instrument: "machines/909.json", to: "glue",
-				play: [ { name: "a", steps: { kick: "x...x...x...x..." } } ] },
-			lead: { instrument: "pluck", sends: { glue: -6 }, play: [ { name: "a", notes: "C5 E5 G5 -" } ] },
+				play: [ { range: "a", steps: { kick: "x...x...x...x..." } } ] },
+			lead: { instrument: "pluck", sends: { glue: -6 }, play: [ { range: "a", notes: "C5 E5 G5 -" } ] },
 			pad: { instrument: "pad", key: "drums", effects: [ { name: "Compressor", threshold: -40, ratio: 20, attack: 0.001, release: 0.1 } ],
-				play: [ { name: "a", chords: true } ] } } }`, &arena)
+				play: [ { range: "a", chords: true } ] } } }`, &arena)
 	testing.expect(t, !has_finding(s, "bad_value"))
 	drums, lead, pad := song.part_index(s, "drums"), song.part_index(s, "lead"), song.part_index(s, "pad")
 	glue := node_named(s, "glue")
@@ -106,10 +106,10 @@ test_routes :: proc(t: ^testing.T) {
 	// than the same pad keyed by itself
 	unkeyed := compose_text(t, `{ bpm: 120, sections: [ { name: "a", duration: "2m" } ],
 		parts: {
-			drums: { instrument: "machines/909.json", play: [ { name: "a", steps: { kick: "x...x...x...x..." } } ] },
-			lead: { instrument: "pluck", play: [ { name: "a", notes: "C5 E5 G5 -" } ] },
+			drums: { instrument: "machines/909.json", play: [ { range: "a", steps: { kick: "x...x...x...x..." } } ] },
+			lead: { instrument: "pluck", play: [ { range: "a", notes: "C5 E5 G5 -" } ] },
 			pad: { instrument: "pad", effects: [ { name: "Compressor", threshold: -40, ratio: 20, attack: 0.001, release: 0.1 } ],
-				play: [ { name: "a", chords: true } ] } } }`, &arena)
+				play: [ { range: "a", chords: true } ] } } }`, &arena)
 	tp6 := test_pool(2)
 	defer test_pool_free(tp6)
 	other := output_from_song(unkeyed, {stems = true, pool = &tp6.work_pool})
@@ -143,8 +143,8 @@ test_route_loop :: proc(t: ^testing.T) {
 	s := compose_text(t, `{ bpm: 120, sections: [ { name: "a", duration: "1m" } ],
 		buses: { x: { to: "y" }, y: { to: "x" } },
 		parts: {
-			looped: { instrument: "pluck", to: "x", play: [ { name: "a", notes: "C5 E5" } ] },
-			heard: { instrument: "pluck", play: [ { name: "a", notes: "G5 - - -" } ] } } }`, &arena)
+			looped: { instrument: "pluck", to: "x", play: [ { range: "a", notes: "C5 E5" } ] },
+			heard: { instrument: "pluck", play: [ { range: "a", notes: "G5 - - -" } ] } } }`, &arena)
 	out := output_from_song(s, {stems = true})
 	defer output_destroy(&out)
 	loops := 0
@@ -171,7 +171,7 @@ test_return_sleeps :: proc(t: ^testing.T) {
 	defer virtual.arena_destroy(&arena)
 	s := compose_text(t, `{ bpm: 120, sections: [ { name: "a", duration: "1m" }, { name: "gap", duration: "4m" }, { name: "b", duration: "1m" } ],
 		returns: { hall: [ { name: "Reverb", decay: 0.5 } ] },
-		parts: { lead: { instrument: "pluck", sends: { hall: -6 }, play: [ { name: "a", notes: "C5" }, { name: "b", notes: "E5" } ] } } }`, &arena)
+		parts: { lead: { instrument: "pluck", sends: { hall: -6 }, play: [ { range: "a", notes: "C5" }, { range: "b", notes: "E5" } ] } } }`, &arena)
 	whole := output_from_song(s, {})
 	defer output_destroy(&whole)
 	e: Engine
@@ -204,8 +204,8 @@ test_route_latency :: proc(t: ^testing.T) {
 	s := compose_text(t, `{ bpm: 120, sections: [ { name: "a", duration: "1m" } ],
 		buses: { brick: { effects: [ { name: "Limiter", threshold: -3 } ] } },
 		parts: {
-			a: { instrument: "machines/909.json", to: "brick", play: [ { name: "a", steps: { rim: "....x..........." } } ] },
-			b: { instrument: "machines/909.json", play: [ { name: "a", steps: { rim: "....x..........." } } ] } } }`, &arena)
+			a: { instrument: "machines/909.json", to: "brick", play: [ { range: "a", steps: { rim: "....x..........." } } ] },
+			b: { instrument: "machines/909.json", play: [ { range: "a", steps: { rim: "....x..........." } } ] } } }`, &arena)
 	out := output_from_song(s, {stems = true})
 	defer output_destroy(&out)
 	first :: proc(x: []f32) -> int {
@@ -230,7 +230,7 @@ test_stem_names :: proc(t: ^testing.T) {
 	s := compose_text(t, `{ bpm: 120, sections: [ { name: "a", duration: "1m" } ],
 		returns: { hall: [ { name: "Reverb", decay: 1 } ] },
 		buses: { glue: {} },
-		parts: { lead: { instrument: "pluck", to: "glue", sends: { hall: -6 }, play: [ { name: "a", notes: "C5" } ] } } }`, &arena)
+		parts: { lead: { instrument: "pluck", to: "glue", sends: { hall: -6 }, play: [ { range: "a", notes: "C5" } ] } } }`, &arena)
 	names := make([dynamic]string, context.temp_allocator)
 	for p in 0 ..< stem_count(s) {
 		append(&names, stem_name(s, p))
@@ -251,9 +251,9 @@ test_bus_key :: proc(t: ^testing.T) {
 	s := compose_text(t, `{ bpm: 120, gain_db: 0, sections: [ { name: "a", duration: "2m" } ],
 		buses: { pump: { key: "kick", effects: [ { name: "Compressor", threshold: -40, ratio: 20, attack: 0.001, release: 0.05, knee: 0 } ] } },
 		parts: {
-			kick: { instrument: "machines/909.json", play: [ { name: "a", steps: { kick: "x...x...x...x..." } } ] },
+			kick: { instrument: "machines/909.json", play: [ { range: "a", steps: { kick: "x...x...x...x..." } } ] },
 			pad: { instrument: { name: "Synth", oscillator: { type: "sawtooth" }, envelope: { attack: 0.01, sustain: 1, release: 0.1 } }, to: "pump",
-				play: [ { name: "a", notes: "C4", subdivision: "1m" } ] } } }`, &arena)
+				play: [ { range: "a", notes: "C4", subdivision: "1m" } ] } } }`, &arena)
 	testing.expect(t, !has_finding(s, "bad_value"))
 	kick, pump := song.part_node(s, song.part_index(s, "kick")), node_named(s, "pump")
 	testing.expect(t, pump >= 0 && has_edge(s, kick, pump, .Key))

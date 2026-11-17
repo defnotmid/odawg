@@ -16,8 +16,8 @@ LIVE :: `{ bpm: 120, seed: 4, key: "C major", gain_db: 0,
 	returns: { hall: [ { name: "Reverb", decay: 1.2 } ] },
 	parts: {
 		lead: { instrument: "MonoSynth", effects: [ { name: "Filter", type: "lowpass", frequency: 3000 } ], sends: { hall: -12 },
-		        play: [ { name: "a", notes: "C5 E5 G5 C6 G5 E5 C5 .", subdivision: "8n" } ] },
-		pad: { instrument: "Synth", play: [ { name: "a", chords: { voicing: "open" }, octave: 4 } ] } } }`
+		        play: [ { range: "a", notes: "C5 E5 G5 C6 G5 E5 C5 .", subdivision: "8n" } ] },
+		pad: { instrument: "Synth", play: [ { range: "a", chords: { voicing: "open" }, octave: 4 } ] } } }`
 
 @(private = "file")
 compose_live :: proc(t: ^testing.T, arena: ^virtual.Arena) -> ^song.Song {

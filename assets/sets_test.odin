@@ -80,7 +80,7 @@ test_song_view :: proc(t: ^testing.T) {
 	sp := new(spec.Spec)
 	testing.expect(t, spec.spec_from_json(`{ bpm: 120, chords: "C", sections: [ { name: "a", duration: "1m" } ],
 		sets: { keys: { zones: [ { file: "keys/c4.wav", root: "C4" } ] } },
-		parts: { piano: { instrument: { name: "Sampler", set: "keys" }, play: [ { name: "a", notes: "C4 E4 G4 C5" } ] } } }`, sp, &findings))
+		parts: { piano: { instrument: { name: "Sampler", set: "keys" }, play: [ { range: "a", notes: "C4 E4 G4 C5" } ] } } }`, sp, &findings))
 	host := Bank_Host{root = root}
 	bank: device.Bank
 	defer device.bank_destroy(&bank)
@@ -164,8 +164,8 @@ test_inline_set :: proc(t: ^testing.T) {
 	testing.expect(t, spec.spec_from_json(`{ bpm: 120, chords: "C", sections: [ { name: "a", duration: "1m" } ],
 		sets: { keys: { zones: [ { file: "keys/c3.wav", root: "C3" }, { file: "keys/c4.wav", root: "C4" } ] },
 		        kit: { pads: { kick: "kit/kick.wav" } } },
-		parts: { piano: { instrument: { name: "Sampler", set: "keys" }, play: [ { name: "a", notes: "C3 E3 G3 C4" } ] },
-		         drums: { instrument: { name: "Sampler", set: "kit" }, play: [ { name: "a", steps: { kick: "x...x...x...x..." } } ] } } }`, sp, &findings))
+		parts: { piano: { instrument: { name: "Sampler", set: "keys" }, play: [ { range: "a", notes: "C3 E3 G3 C4" } ] },
+		         drums: { instrument: { name: "Sampler", set: "kit" }, play: [ { range: "a", steps: { kick: "x...x...x...x..." } } ] } } }`, sp, &findings))
 	testing.expect(t, !has_code(findings, "bad_value"))
 	host := Bank_Host{root = root}
 	bank: device.Bank
@@ -254,7 +254,7 @@ test_host_read :: proc(t: ^testing.T) {
 	{
 		context.allocator = context.temp_allocator
 		testing.expect(t, spec.spec_from_json(`{ sections: [ { name: "a", duration: "1m" } ], sets: { tone: { zones: [ { file: "a440.ogg", root: "A4" }, { file: "c3.wav", root: "C3" } ] } },
-			parts: { lead: { instrument: { name: "Sampler", set: "tone" }, play: [ { name: "a", notes: "A4" } ] } } }`, sp, &findings))
+			parts: { lead: { instrument: { name: "Sampler", set: "tone" }, play: [ { range: "a", notes: "A4" } ] } } }`, sp, &findings))
 	}
 	bank: device.Bank
 	defer device.bank_destroy(&bank)
@@ -422,7 +422,7 @@ test_source_pins :: proc(t: ^testing.T) {
 	sp := new(spec.Spec)
 	testing.expect(t, spec.spec_from_json(`{ sources: { lib: { url: "https://example.invalid/lib/", licence: "CC0-1.0", pins: "lib.pins" } },
 		sections: [ { name: "a", duration: "1m" } ],
-		parts: { soft: { instrument: { name: "Sampler", set: "lib/lib.sfz" }, play: [ { name: "a", notes: "A3", velocity: 0.3 } ] } } }`, sp, &findings))
+		parts: { soft: { instrument: "lib/lib.sfz", play: [ { range: "a", notes: "A3", velocity: 0.3 } ] } } }`, sp, &findings))
 	bank: device.Bank
 	defer device.bank_destroy(&bank)
 	host := Bank_Host{root = root, fetched = data}
@@ -464,7 +464,7 @@ test_source_pins :: proc(t: ^testing.T) {
 	nc := new(spec.Spec)
 	testing.expect(t, spec.spec_from_json(`{ sources: { lib: { url: "https://example.invalid/lib/", licence: "CC-BY-NC-4.0", pins: "lib.pins" } },
 		sections: [ { name: "a", duration: "1m" } ],
-		parts: { soft: { instrument: { name: "Sampler", set: "lib/lib.sfz" }, play: [ { name: "a", notes: "A3" } ] } } }`, nc, &findings))
+		parts: { soft: { instrument: "lib/lib.sfz", play: [ { range: "a", notes: "A3" } ] } } }`, nc, &findings))
 	other: device.Bank
 	defer device.bank_destroy(&other)
 	testing.expect(t, !bank_declare_spec(&other, nc, &findings, &host))
@@ -502,7 +502,7 @@ test_pad_list :: proc(t: ^testing.T) {
 	testing.expect(t, spec.spec_from_json(`{ sets: { perc: { pads: { clap: [ "clap1.wav", "clap2.wav" ],
 		tambourine: [ { file: "tamb.wav", hi_velocity: 90 }, { file: "tamb_hit.wav", lo_velocity: 91 } ] } } },
 		sections: [ { name: "a", duration: "1m" } ],
-		parts: { p: { instrument: { name: "Sampler", set: "perc" }, play: [ { name: "a", steps: { clap: "x...", tambourine: "..xX" } } ] } } }`, sp, &findings))
+		parts: { p: { instrument: { name: "Sampler", set: "perc" }, play: [ { range: "a", steps: { clap: "x...", tambourine: "..xX" } } ] } } }`, sp, &findings))
 	testing.expectf(t, len(findings) == 0, "%v", findings[:])
 	bank: device.Bank
 	defer device.bank_destroy(&bank)
@@ -558,7 +558,7 @@ test_source_paths :: proc(t: ^testing.T) {
 	sp := new(spec.Spec)
 	testing.expect(t, spec.spec_from_json(fmt.tprintf(`{{ "sources": {{ %s }}, "sets": {{ "kit": {{ "pads": {{ "kick": "lib/../../escape.wav" }} }} }},
 		"sections": [ {{ "name": "a", "duration": "1m" }} ],
-		"parts": {{ "d": {{ "instrument": {{ "name": "Sampler", "set": "kit" }}, "play": [ {{ "name": "a", "steps": {{ "kick": "x..." }} }} ] }} }} }}`, src), sp, &findings))
+		"parts": {{ "d": {{ "instrument": {{ "name": "Sampler", "set": "kit" }}, "play": [ {{ "range": "a", "steps": {{ "kick": "x..." }} }} ] }} }} }}`, src), sp, &findings))
 	bank: device.Bank
 	defer device.bank_destroy(&bank)
 	host := Bank_Host{root = root, fetched = data, pinning = true} // even pinning fetches nothing out of the source
@@ -584,7 +584,7 @@ test_source_paths :: proc(t: ^testing.T) {
 	write(t, root, "lib.pins", transmute([]u8)fmt.tprintf("%s %d evil.sfz\n", sfz_sha, len(sfz)))
 	evil := new(spec.Spec)
 	testing.expect(t, spec.spec_from_json(fmt.tprintf(`{{ "sources": {{ %s }}, "sections": [ {{ "name": "a", "duration": "1m" }} ],
-		"parts": {{ "d": {{ "instrument": {{ "name": "Sampler", "set": "lib/evil.sfz" }}, "play": [ {{ "name": "a", "notes": "C4" }} ] }} }} }}`, src), evil, &findings))
+		"parts": {{ "d": {{ "instrument": "lib/evil.sfz", "play": [ {{ "range": "a", "notes": "C4" }} ] }} }} }}`, src), evil, &findings))
 	other: device.Bank
 	defer device.bank_destroy(&other)
 	host.pinning = false
@@ -658,7 +658,7 @@ test_style_source_for_song_part :: proc(t: ^testing.T) {
 	findings := make(base.Findings)
 	sp := new(spec.Spec)
 	testing.expect(t, spec.spec_from_json(`{ sections: [ { name: "a", duration: "1m", style: "styles/band.json" } ],
-		parts: { own: { instrument: { name: "lib/lib.sfz", ampeg_release: 0.05 }, play: [ { name: "a", notes: "A3" } ] } } }`, sp, &findings))
+		parts: { own: { instrument: { name: "lib/lib.sfz", ampeg_release: 0.05 }, play: [ { range: "a", notes: "A3" } ] } } }`, sp, &findings))
 	testing.expect(t, spec.spec_add_style_text(sp, "styles/band.json", `{ sources: { lib: { url: "https://example.invalid/lib/", licence: "CC0-1.0", pins: "lib.pins" } } }`, &findings))
 	bank: device.Bank
 	defer device.bank_destroy(&bank)
@@ -724,7 +724,7 @@ test_load_on_a_pool :: proc(t: ^testing.T) {
 		text := strings.concatenate({`{ bpm: 120, chords: "C", sections: [ { name: "a", duration: "1m" } ],
 			sets: { tones: { zones: [ `, big ? `{ file: "big.wav", root: "C1" }, ` : "", `{ file: "at_rate.wav", root: "C2" }, { file: "other.wav", root: "C3" }, { file: "cut.wav", root: "C4" },
 			                          { file: "lent.wav", root: "C5" }, { file: "host_other.wav", root: "C6" } ] } },
-			parts: { p: { instrument: { name: "Sampler", set: "tones" }, play: [ { name: "a", notes: "C4" } ] } } }`})
+			parts: { p: { instrument: { name: "Sampler", set: "tones" }, play: [ { range: "a", notes: "C4" } ] } } }`})
 		testing.expect(t, spec.spec_from_json(text, sp, &findings))
 		host := Bank_Host {
 			root = root,

@@ -177,7 +177,6 @@ PART_FIELDS := []Field_Row {
 }
 
 PLAY_FIELDS := []Field_Row {
-	{"name", .Ranges, offset_of(Play_Spec, ranges)},
 	{"range", .Ranges, offset_of(Play_Spec, ranges)},
 	{"steps", .Steps, 0},
 	{"notes", .Notes, 0},
@@ -241,7 +240,6 @@ SET_FIELDS := []Field_Row {
 }
 
 SET_ZONE_FIELDS := []Field_Row {
-	{"name", .String, offset_of(Set_Zone_Spec, file)},
 	{"file", .String, offset_of(Set_Zone_Spec, file)},
 	{"root", .Note, offset_of(Set_Zone_Spec, root)},
 	{"lo", .Note, offset_of(Set_Zone_Spec, lo)},
@@ -258,7 +256,6 @@ SOURCE_FIELDS := []Field_Row {
 	{"url", .String, offset_of(Source_Spec, url)},
 	{"page", .String, offset_of(Source_Spec, page)},
 	{"licence", .String, offset_of(Source_Spec, licence)},
-	{"license", .String, offset_of(Source_Spec, licence)},
 	{"credit", .String, offset_of(Source_Spec, credit)},
 	{"pins", .String, offset_of(Source_Spec, pins)},
 }
@@ -271,7 +268,6 @@ BUS_FIELDS := []Field_Row {
 }
 
 SIDECHAIN_FIELDS := []Field_Row {
-	{"name", .String, offset_of(Sidechain_Spec, source)},
 	{"source", .String, offset_of(Sidechain_Spec, source)},
 	{"depth_db", .Number, offset_of(Sidechain_Spec, depth_db)},
 	{"release", .Number, offset_of(Sidechain_Spec, release)},
@@ -292,9 +288,6 @@ read_record :: proc(r: ^Reader, v: json.Value, path: string, fields: []Field_Row
 				FIELD_READERS[f.kind](r, o[k], base.path_join(path, k), rawptr(uintptr(dst) + f.offset))
 				continue outer
 			}
-		}
-		if k == "class" || k == "name" {
-			continue
 		}
 		base.report(r.findings, "unknown_key", .Warning, base.path_join(path, k), "%s: nothing reads %q", path, k)
 	}

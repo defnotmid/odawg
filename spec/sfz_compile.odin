@@ -79,7 +79,7 @@ Sfz_Compile :: struct {
 	rows_read: []bool, // by row of SFZ_OPCODES
 	read:      map[Sfz_Name]bool,
 	patterns:  [Sfz_Pattern]int, // their rows
-	overrides: map[string]f64, // opcodes the row sets for every region (the Sampler form's attack, release)
+	overrides: map[string]f64, // opcodes the row sets for every region
 }
 
 // `name` read: its row whole when it is the row's own name, else that one

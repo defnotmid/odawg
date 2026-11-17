@@ -115,6 +115,17 @@ is_sfz_name :: proc(name: string) -> bool {
 	return strings.has_suffix(strings.to_lower(name, context.temp_allocator), ".sfz")
 }
 
+// Whether `name` can be a node's sample set: an SFZ file is an instrument of
+// its own (its regions, envelopes and layers), never a node's set.
+@(private = "file")
+asset_named :: proc(c: ^Ctx, name, path: string) -> bool {
+	if is_sfz_name(name) {
+		report(c, "bad_value", .Error, path, "%s: an SFZ file is an instrument, not a sample set: instrument = %q (opcodes such as ampeg_release on the row)", path, name)
+		return false
+	}
+	return true
+}
+
 // Whether an instrument's name is a file's path.
 is_file_name :: proc(name: string) -> bool {
 	return strings.contains(name, "/") || strings.has_suffix(name, ".json")
@@ -308,9 +319,9 @@ POSITIONAL := []Positional_Row {
 	{pattern = {"returns", "*"}, fields = {"name"}},
 	{pattern = {"sections", "*"}, anchored = true, fields = {"name"}},
 	{pattern = {"markers", "*"}, anchored = true, fields = {"name"}},
-	{pattern = {"play", "*"}, fields = {"name"}},
-	{pattern = {"play"}, fields = {"name"}},
-	{pattern = {"sidechain"}, fields = {"name"}},
+	{pattern = {"play", "*"}, fields = {"range"}},
+	{pattern = {"play"}, fields = {"range"}},
+	{pattern = {"sidechain"}, fields = {"source"}},
 	{pattern = {"zones", "*"}, fields = {"file"}},
 }
 
@@ -375,7 +386,7 @@ Draft :: struct {
 	sfz_owner:    ^Spec, // where it was named (its path is from that spec's folder)
 	sfz_cc:       [128]f32, // the CC values the row gave (ccN = v, or a label_ccN's name)
 	sfz_cc_given: bit_set[0 ..< 128;u128],
-	sfz_overrides: map[string]f64, // opcodes for every region (the Sampler form's attack, release)
+	sfz_overrides: map[string]f64, // opcodes written on the row, for every region
 	out:          string,
 	length:       f64,
 	length_beats: bool,
@@ -845,7 +856,7 @@ draft_option :: proc(c: ^Ctx, d: ^Draft, key: string, v: json.Value, path: strin
 		if f := target_field(d, x.targets[0].path); f != nil && f.unit == .Asset {
 			for t in x.targets {
 				parts := strings.split(t.path, "/", context.temp_allocator)
-				if node := draft_node_named(d, parts[0]); node != nil {
+				if node := draft_node_named(d, parts[0]); node != nil && asset_named(c, s, path) {
 					node.set_name, node.set_path, node.set_from = s, path, c.writer
 				}
 			}
@@ -1022,7 +1033,9 @@ draft_field :: proc(c: ^Ctx, node: ^Draft_Node, field: ^device.Node_Field, slot:
 		return
 	}
 	if field.unit == .Asset {
-		node.set_name, node.set_path, node.set_from = s, path, c.writer
+		if asset_named(c, s, path) {
+			node.set_name, node.set_path, node.set_from = s, path, c.writer
+		}
 		return
 	}
 	value, beats, expect, ok := unit_from_text(field.unit, field.choices, s)
@@ -1265,28 +1278,6 @@ note_value :: proc(c: ^Ctx, v: json.Value, path: string) -> f32 {
 // the row gave them; a machine's pads each its own.
 @(private = "file")
 draft_desc :: proc(c: ^Ctx, d: ^Draft, written: string) -> ^device.Program_Desc {
-	// the Sampler over an SFZ file (v0.0.5's form) is that SFZ instrument
-	if d.sfz_name == "" && len(d.nodes) == 1 && d.nodes[0].kind == device.NODE_SAMPLER && is_sfz_name(d.nodes[0].set_name) {
-		d.sfz_name, d.sfz_owner = d.nodes[0].set_name, d.nodes[0].set_from
-		// the attack and release it gives: every region's amp envelope's
-		if d.sfz_overrides == nil {
-			d.sfz_overrides = make(map[string]f64, context.temp_allocator)
-		}
-		for x in d.controls {
-			if x.value == nil {
-				continue
-			}
-			n, is_number := number_from_value(x.value)
-			switch {
-			case !is_number:
-			case x.name == "attack":
-				d.sfz_overrides["ampeg_attack"] = n
-			case x.name == "release":
-				d.sfz_overrides["ampeg_release"] = n
-			}
-		}
-		report(c, "sfz_instrument", .Info, d.nodes[0].set_path, "%s: an SFZ file plays as an instrument: instrument = {{ %q, ampeg_attack = ..., ampeg_release = ... }} (its own envelopes and layers; a Sampler's attack and release are its ampeg's)", d.nodes[0].set_path, d.sfz_name)
-	}
 	if d.sfz_name != "" {
 		return sfz_desc(c, d, written)
 	}
