@@ -88,13 +88,19 @@ run_analyze :: proc(a: ^Args) -> bool {
 			analyze.meter_init(&mt, render.RATE)
 		}
 	}
-	// the meters, from the export (mastered when asked: the master is the
-	// song's from then on, so the tables after it hear it too)
+	// the meters and the tables, from the one export (mastered when asked:
+	// master_export's last pass is the one that reaches the sink)
+	tables := make([dynamic]^render.Table)
+	for &src in sources {
+		append(&tables, &src.bands, &src.stereo, &src.crest)
+	}
 	Metering :: struct {
 		song:    ^song.Song,
 		sources: []Source,
+		tables:  render.Tables_Build,
 	}
-	x := Metering{s, sources}
+	x := Metering{song = s, sources = sources}
+	render.tables_begin(&x.tables, s, tables[:])
 	sink := render.Sink{&x, proc(data: rawptr, at: i64, l, r: []f32, stems: [][2][]f32) {
 		x := (^Metering)(data)
 		push :: proc(src: ^Source, s: ^song.Song, at: i64, l, r: []f32) {
@@ -112,13 +118,10 @@ run_analyze :: proc(a: ^Args) -> bool {
 		for st, p in stems {
 			push(&x.sources[1 + p], x.song, at, st[0], st[1])
 		}
+		render.tables_take(&x.tables, at, l, r, stems)
 	}}
 	render.master_export(s, {to = base.seconds_from_samples(i64(frames)), stems = true, pool = a.pool}, m, sink)
-	tables := make([dynamic]^render.Table)
-	for &src in sources {
-		append(&tables, &src.bands, &src.stereo, &src.crest)
-	}
-	render.tables_build(s, tables[:], a.pool)
+	render.tables_end(&x.tables)
 
 	report := Analysis_Report{song = s.name}
 	report.band_hz = make([]f64, len(render.BAND_HZ))

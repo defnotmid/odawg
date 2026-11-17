@@ -410,96 +410,122 @@ table_init_frames :: proc(t: ^Table, kind: Table_Kind, frames: int, step_num, st
 	t.values = make([]f32, t.rows * t.width, allocator)
 }
 
-// Fills every table in `tables` from one streamed export of the song
-// (`threads` as export_song's). The tables are the song's own size
-// (table_init); what each reads is held only until its rows are filled.
-tables_build :: proc(s: ^song.Song, tables: []^Table, pool: ^common.Work_Pool = nil) {
-	if len(tables) == 0 {
-		return
-	}
-	Build :: struct {
-		tables:      []^Table,
-		next:        []int, // the next row of each table to fill
-		span:        []int, // and the span it is in
-		source:      []int, // and the channel of `held` it reads from
-		// What arrived and no row is done with: channels [mix l, mix r,
-		// then each part's l, r] from song sample `held_first`.
-		held:        [][dynamic]f32,
-		held_first:  int,
-		held_offset: int,
-		received:    int,
-		frames:      int,
-	}
-	b := Build{tables = tables, frames = frames_from_song(s)}
+// Fills tables from blocks of a streamed export as they arrive, holding what
+// each reads only until its rows are filled: tables_begin, then
+// tables_take with each block (a Sink's take: tables_sink), then tables_end.
+// The tables are the song's own size (table_init).
+Tables_Build :: struct {
+	song:        ^song.Song,
+	tables:      []^Table,
+	stems:       bool, // whether a table reads a stem: the export's stems wanted
+	next:        []int, // the next row of each table to fill
+	span:        []int, // and the span it is in
+	source:      []int, // and the channel of `held` it reads from
+	// What arrived and no row is done with: channels [mix l, mix r, then
+	// each part's l, r] from song sample `held_first`.
+	held:        [][dynamic]f32,
+	held_first:  int,
+	held_offset: int,
+	received:    int,
+	frames:      int,
+}
+
+tables_begin :: proc(b: ^Tables_Build, s: ^song.Song, tables: []^Table) {
+	b^ = {song = s, tables = tables, frames = frames_from_song(s)}
 	b.next = make([]int, len(tables), context.temp_allocator)
 	b.span = make([]int, len(tables), context.temp_allocator)
 	b.source = make([]int, len(tables), context.temp_allocator)
-	stems := false
 	for t, k in tables {
 		stem := stem_from_id(s, t.source)
-		stems ||= stem >= 0
+		b.stems ||= stem >= 0
 		b.source[k] = 2 * (stem >= 0 ? 1 + int(stem) : 0)
 		if stem == STEM_NONE {
 			b.span[k] = len(t.spans) // not in this build: nothing to read
 		}
 	}
-	b.held = make([][dynamic]f32, 2 * (1 + (stems ? stem_count(s) : 0)), context.temp_allocator)
+	b.held = make([][dynamic]f32, 2 * (1 + (b.stems ? stem_count(s) : 0)), context.temp_allocator)
 	for &h in b.held {
 		h = make([dynamic]f32, context.temp_allocator)
 	}
-	fill_rows :: proc(b: ^Build) {
-		frames := b.frames
-		low := b.received
-		from := b.held_first + b.held_offset
-		for t, k in b.tables {
-			row := TABLE_KINDS[t.kind]
-			w := row.window(t)
-			src := b.source[k]
-			for b.span[k] < len(t.spans) {
-				sp := t.spans[b.span[k]]
-				step := sp.from + b.next[k] - sp.first
-				if step >= sp.to {
-					b.span[k] += 1
-					continue
-				}
-				start := row_start(t, step)
-				end := min(start + w, frames)
-				if end > b.received {
-					low = min(low, start)
-					break
-				}
-				fill_row(t, row, w, step, t.values[b.next[k] * t.width:][:t.width], from, b.held[src][b.held_offset:], b.held[src + 1][b.held_offset:])
-				b.next[k] += 1
-			}
-		}
-		// what no table reads any more goes
-		if drop := low - from; drop > 0 {
-			b.held_offset += drop
-			if b.held_offset > 0 && b.held_offset * 2 >= len(b.held[0]) {
-				for &h in b.held {
-					remove_range(&h, 0, min(b.held_offset, len(h)))
-				}
-				b.held_first += b.held_offset
-				b.held_offset = 0
-			}
+}
+
+// One block of the export, from song sample `at`: the mix and its stems.
+tables_take :: proc(b: ^Tables_Build, at: i64, l, r: []f32, stems: [][2][]f32) {
+	append(&b.held[0], ..l)
+	append(&b.held[1], ..r)
+	for st, p in stems {
+		if 2 + 2 * p + 1 < len(b.held) {
+			append(&b.held[2 + 2 * p], ..st[0])
+			append(&b.held[3 + 2 * p], ..st[1])
 		}
 	}
-	export_song(s, {to = base.seconds_from_samples(i64(b.frames)), pool = pool, stems = stems}, {&b, proc(data: rawptr, at: i64, l, r: []f32, stems: [][2][]f32) {
-		b := (^Build)(data)
-		append(&b.held[0], ..l)
-		append(&b.held[1], ..r)
-		for st, p in stems {
-			if 2 + 2 * p + 1 < len(b.held) {
-				append(&b.held[2 + 2 * p], ..st[0])
-				append(&b.held[3 + 2 * p], ..st[1])
-			}
-		}
-		b.received = int(at) + len(l)
-		fill_rows(b)
-	}})
+	b.received = int(at) + len(l)
+	tables_fill_rows(b)
+}
+
+// The sink tables_take is, for export_song or master_export.
+tables_sink :: proc(b: ^Tables_Build) -> Sink {
+	return {b, proc(data: rawptr, at: i64, l, r: []f32, stems: [][2][]f32) {
+		tables_take((^Tables_Build)(data), at, l, r, stems)
+	}}
+}
+
+// The rows past the export's end (read as silence), and each table's version.
+tables_end :: proc(b: ^Tables_Build) {
 	b.received = b.frames
-	fill_rows(&b)
-	for t in tables {
-		t.version = source_version(s, stem_from_id(s, t.source))
+	tables_fill_rows(b)
+	for t in b.tables {
+		t.version = source_version(b.song, stem_from_id(b.song, t.source))
 	}
+}
+
+@(private = "file")
+tables_fill_rows :: proc(b: ^Tables_Build) {
+	frames := b.frames
+	low := b.received
+	from := b.held_first + b.held_offset
+	for t, k in b.tables {
+		row := TABLE_KINDS[t.kind]
+		w := row.window(t)
+		src := b.source[k]
+		for b.span[k] < len(t.spans) {
+			sp := t.spans[b.span[k]]
+			step := sp.from + b.next[k] - sp.first
+			if step >= sp.to {
+				b.span[k] += 1
+				continue
+			}
+			start := row_start(t, step)
+			end := min(start + w, frames)
+			if end > b.received {
+				low = min(low, start)
+				break
+			}
+			fill_row(t, row, w, step, t.values[b.next[k] * t.width:][:t.width], from, b.held[src][b.held_offset:], b.held[src + 1][b.held_offset:])
+			b.next[k] += 1
+		}
+	}
+	// what no table reads any more goes
+	if drop := low - from; drop > 0 {
+		b.held_offset += drop
+		if b.held_offset > 0 && b.held_offset * 2 >= len(b.held[0]) {
+			for &h in b.held {
+				remove_range(&h, 0, min(b.held_offset, len(h)))
+			}
+			b.held_first += b.held_offset
+			b.held_offset = 0
+		}
+	}
+}
+
+// Fills every table in `tables` from one streamed export of the song (on
+// `pool`, as export_song's).
+tables_build :: proc(s: ^song.Song, tables: []^Table, pool: ^common.Work_Pool = nil) {
+	if len(tables) == 0 {
+		return
+	}
+	b: Tables_Build
+	tables_begin(&b, s, tables)
+	export_song(s, {to = base.seconds_from_samples(i64(b.frames)), pool = pool, stems = b.stems}, tables_sink(&b))
+	tables_end(&b)
 }
