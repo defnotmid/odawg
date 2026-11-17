@@ -4,6 +4,7 @@ import "core:fmt"
 import "core:mem/virtual"
 import "core:os"
 import "core:path/filepath"
+import "core:slice"
 import "core:strings"
 import assets "deps:odawg/assets"
 import base "deps:odawg/base"
@@ -19,11 +20,13 @@ import spec "deps:odawg/spec"
 //     odawg pin SPEC
 
 // The register's set names the arguments give (a spec's for a spec), the
-// sources the specs fetch from, and whether every argument was understood.
+// sources the specs fetch from, the credit lines of the sets the specs bring
+// themselves (each once), and whether every argument was understood.
 @(private = "file")
-set_names_from_args :: proc(a: ^Args) -> (names: [dynamic]string, ok: bool, sources: [dynamic]spec.Source_Ref) {
+set_names_from_args :: proc(a: ^Args) -> (names: [dynamic]string, ok: bool, sources: [dynamic]spec.Source_Ref, own: [dynamic]string) {
 	names = make([dynamic]string, context.temp_allocator)
 	sources = make([dynamic]spec.Source_Ref, context.temp_allocator)
+	own = make([dynamic]string, context.temp_allocator)
 	ok = true
 	for arg in a.positional {
 		switch {
@@ -52,6 +55,17 @@ set_names_from_args :: proc(a: ^Args) -> (names: [dynamic]string, ok: bool, sour
 				}
 			}
 			spec.source_refs(s, &sources)
+			add_credits :: proc(own: ^[dynamic]string, s: ^spec.Spec) {
+				for set in s.sets {
+					if set.credit != "" && !slice.contains(own[:], set.credit) {
+						append(own, set.credit)
+					}
+				}
+			}
+			add_credits(&own, s)
+			for st in s.styles {
+				add_credits(&own, st.spec)
+			}
 		case:
 			if _, found := assets.set_row_from_name(arg); !found {
 				fmt.eprintfln("odawg: no sample set %q (odawg sets lists them)", arg)
@@ -120,11 +134,11 @@ run_fetch :: proc(a: ^Args) -> bool {
 
 // The credit lines for what a spec plays (or the named sets).
 run_credits :: proc(a: ^Args) -> bool {
-	names, ok, sources := set_names_from_args(a)
+	names, ok, sources, own := set_names_from_args(a)
 	if !ok {
 		return false
 	}
-	if len(names) == 0 && len(sources) == 0 {
+	if len(names) == 0 && len(sources) == 0 && len(own) == 0 {
 		fmt.println("no sample sets: everything is synthesized")
 		return true
 	}
@@ -134,6 +148,9 @@ run_credits :: proc(a: ^Args) -> bool {
 	for src in sources {
 		credit := src.credit != "" ? src.credit : src.name
 		fmt.printfln("%s, %s (%s)", credit, src.licence, src.page != "" ? src.page : src.url)
+	}
+	for line in own {
+		fmt.println(line)
 	}
 	return true
 }
