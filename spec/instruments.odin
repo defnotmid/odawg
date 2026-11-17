@@ -310,7 +310,9 @@ POSITIONAL := []Positional_Row {
 	{pattern = {"nodes", "*"}, fields = {"class"}, rest = "inputs"},
 	{pattern = {"nodes", "*", "*"}, fields = {"base"}},
 	{pattern = {"nodes", "*", "*", "*"}, fields = {"base"}}, // one of a field's list of modulators
-	{pattern = {"pads", "*"}, fields = {"instrument"}},
+	{pattern = {"sets", "*", "pads", "*"}, fields = {"file"}}, // a set's pad: { "snare.wav", gain_db = -2 }
+	{pattern = {"sets", "*", "pads", "*", "*"}, fields = {"file"}}, // one of its round robin
+	{pattern = {"pads", "*"}, fields = {"instrument"}}, // a machine's pad: { "kick_row", key = "C1" }
 	{pattern = {"instrument"}, fields = {"name"}},
 	{pattern = {"instruments", "*"}, fields = {"name"}},
 	{pattern = {"effects", "*"}, fields = {"name"}},

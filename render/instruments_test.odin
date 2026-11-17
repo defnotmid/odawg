@@ -503,6 +503,15 @@ test_positional_list :: proc(t: ^testing.T) {
 	fields, _ = spec.positional_fields("parts/acid/instrument/options/decay/2")
 	testing.expect(t, len(fields) == 1 && fields[0] == "path")
 	testing.expect(t, spec.positional_list("parts/acid/instrument/options/decay", 2, true)) // { "meg/time", "hit/time" }
+	// a set's pad is a file's zone, a machine's pad its instrument
+	fields, _ = spec.positional_fields("sets/kit/pads/snare")
+	testing.expect(t, len(fields) == 1 && fields[0] == "file")
+	fields, _ = spec.positional_fields("sets/kit/pads/snare/2") // { { "a.wav" }, { "b.wav", gain_db = -2 } }
+	testing.expect(t, len(fields) == 1 && fields[0] == "file")
+	fields, _ = spec.positional_fields("parts/drums/instrument/pads/kick")
+	testing.expect(t, len(fields) == 1 && fields[0] == "instrument")
+	testing.expect(t, spec.positional_list("sets/kit/pads/snare", 2, true)) // { "a.wav", "b.wav" }: a round robin
+	testing.expect(t, !spec.positional_list("sets/kit/pads/snare", 1, true)) // { "snare.wav" }
 }
 
 // The example songs and the styles, instruments and machines they use read
