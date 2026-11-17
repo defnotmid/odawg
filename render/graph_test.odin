@@ -236,6 +236,39 @@ test_route_latency :: proc(t: ^testing.T) {
 	}
 }
 
+// A note at the song's first sample through a lookahead (a Limiter bus, a
+// part's own Distortion) plays whole, as the same note a second later does:
+// the stream starts each node its lookahead early (from before 0: silence).
+@(test)
+test_lookahead_at_start :: proc(t: ^testing.T) {
+	text :: proc(at: string) -> string {
+		return strings.concatenate({`{ bpm: 120, sections: [ { name: "a", duration: "2m" } ],
+			buses: { brick: { effects: [ { name: "Limiter", threshold: -1 } ] } },
+			parts: {
+				a: { instrument: "MembraneSynth", to: "brick", play: [ { range: "a", events: [ { time: `, at, `, note: "C2", duration: 0.1 } ] } ] },
+				b: { instrument: "MembraneSynth", effects: [ { name: "Distortion", distortion: 0.6 } ], play: [ { range: "a", events: [ { time: `, at, `, note: "C2", duration: 0.1 } ] } ] } } }`}, context.temp_allocator)
+	}
+	arenas: [2]virtual.Arena
+	defer for &x in arenas {
+		virtual.arena_destroy(&x)
+	}
+	first := output_from_song(compose_text(t, text("0"), &arenas[0]), {stems = true})
+	defer output_destroy(&first)
+	later := output_from_song(compose_text(t, text("1"), &arenas[1]), {stems = true})
+	defer output_destroy(&later)
+	worst :: proc(a, b: []f32) -> f32 {
+		w: f32
+		for v, i in a[:RATE / 2] {
+			w = max(w, abs(v - b[RATE + i]))
+		}
+		return w
+	}
+	testing.expectf(t, worst(first.left, later.left) == 0, "the mix of a note at 0 differs from one at 1 s by %g", worst(first.left, later.left))
+	for st, p in first.stems {
+		testing.expectf(t, worst(st[0], later.stems[p][0]) == 0, "stem %d of a note at 0 differs from one at 1 s by %g", p, worst(st[0], later.stems[p][0]))
+	}
+}
+
 // Every stem has a name a file can take: the parts by theirs, the returns
 // and buses by kind and name, as many as stem_count.
 @(test)

@@ -153,7 +153,7 @@ declare_set :: proc(bank: ^device.Bank, s: ^Set_Row) -> Error {
 // (every velocity layer and round robin of them), each file downloaded first
 // if it isn't on disk yet (on first use, only these files), then read once
 // and decoded, the files side by side on every core, as 16-bit PCM in its
-// own channels at its own rate (a Sampler reads it at RATE). A file that
+// own channels at RATE (a file at another rate resampled once). A file that
 // can't be had is a finding; the rest load. True when every needed zone is
 // loaded.
 bank_load :: proc(bank: ^device.Bank, needs: []device.Sample_Need, findings: ^base.Findings, progress: Progress = progress_stderr, host: ^Bank_Host = nil) -> bool {
@@ -360,7 +360,7 @@ bank_load_at :: proc(bank: ^device.Bank, root: string, needs: []device.Sample_Ne
 }
 
 // One file to decode: what it is, and what came of it (16-bit PCM in at
-// most two channels, at its own rate, its loop; or why not).
+// most two channels, at RATE, its loop with it; or why not).
 @(private = "file")
 Decode_Job :: struct {
 	file:                i32, // into the bank's files (-1: not to decode)

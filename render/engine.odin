@@ -1131,13 +1131,17 @@ engine_seek :: proc(e: ^Engine, at: i64, exact: bool) {
 	w := &e.workers[0]
 	context.temp_allocator = virtual.arena_allocator(&w.temp)
 	defer free_all(context.temp_allocator)
+	// Where each node joins the walk to `at`. A node with a lookahead (its
+	// latency) or feeding one (its lead) joins that much early, so what its
+	// lookahead reads at `at` was made, at a stream's start too (from before
+	// sample 0: silence). Exact: as far back as its effects' memory and that
+	// of everything after it need, never before a stream from 0 starts it.
+	join := make([]i64, len(e.nodes), context.temp_allocator)
 	from := at
-	if exact {
-		most: i64
-		for nd in e.nodes {
-			most = max(most, nd.pre)
-		}
-		from = max(at - most, 0)
+	for nd, k in e.nodes {
+		need := nd.lead + i64(nd.latency)
+		join[k] = exact ? max(at - max(nd.pre, need), -need) : at - need
+		from = min(from, join[k])
 	}
 	e.cursor, e.ahead = from, 0
 	for &nd in e.nodes {
@@ -1155,7 +1159,7 @@ engine_seek :: proc(e: ^Engine, at: i64, exact: bool) {
 		for e.cursor < at {
 			n := int(min(at - e.cursor, BLOCK))
 			for k in e.order {
-				if !e.nodes[k].started && e.cursor + i64(n) > at - e.nodes[k].pre {
+				if !e.nodes[k].started && e.cursor + i64(n) > join[k] {
 					node_start(e, w, int(k))
 				}
 			}
@@ -2398,7 +2402,9 @@ group_block :: proc(e: ^Engine, w: ^Worker, gi: int, l, r: []f32) -> (wrote: boo
 			}
 			cuts(e, run, input + i64(pos))
 			limit := group_sounding(e, gi) ? i64(n) : clamp(nd.awake_until - input, i64(pos), i64(n))
-			next := clamp(min(next_start(s, run, end), next_cut(e, run)) - input, i64(pos), limit)
+			// (none to come is max(i64): taken to the block's end first, so an input
+			// before sample 0, a stream's start, can't overflow it)
+			next := clamp(min(next_start(s, run, end), next_cut(e, run), input + limit) - input, i64(pos), limit)
 			next = i64(pos + cell_piece(input + i64(pos), int(next) - pos, stepped))
 			if int(next) > pos {
 				clear_to(&clean, int(next), l, r)
@@ -2471,7 +2477,7 @@ track_block :: proc(e: ^Engine, w: ^Worker, ti: int, j: int, l, r: []f32) -> (wr
 		from := pos
 		for pos < n {
 			limit := clamp(nd.awake_until - input, i64(pos), i64(n))
-			pos = int(clamp(next_start(s, run, end) - input, i64(pos), limit))
+			pos = int(clamp(min(next_start(s, run, end), input + limit) - input, i64(pos), limit)) // none: max(i64)
 			if run.next_note < end && next_start(s, run, end) == input + i64(pos) && pos < n {
 				if e.note_end[run.next_note] != min(i64) {
 					nd.awake_until = max(nd.awake_until, e.note_end[run.next_note] + nd.tail)

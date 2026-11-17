@@ -8,7 +8,8 @@ import "core:math"
 
 // Bumped whenever the samples for the same spec change (the mix, a stem, an
 // analysis), so a host keeping any of them knows when they are stale. 5: the
-// sampler's kernel and mid/side (within 1.3e-6), stems aligned with the mix.
+// sampler's kernel and mid/side (within 1.3e-6), stems aligned with the mix,
+// a sound at a stream's start through a lookahead played whole.
 VERSION :: 5
 
 // The rate everything renders at (onimite's mix rate).

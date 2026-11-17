@@ -146,7 +146,7 @@ test_song_view :: proc(t: ^testing.T) {
 
 // A set the song brings: zones split their keys between roots, pads sit
 // at their drum keys, every file is reported, the song plays them at their
-// own rate; a file changed declares the set again (new songs hear it, the
+// pitch; a file changed declares the set again (new songs hear it, the
 // set declared before stays for the songs that use it).
 @(test)
 test_inline_set :: proc(t: ^testing.T) {
