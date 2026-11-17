@@ -1302,13 +1302,13 @@ control_from_path :: proc(progs: ^Programs, program: i32, path: string) -> i32 {
 	}
 	name := base.name_id(parts[0])
 	for pi in programs {
-		p := progs.programs[pi]
-		for &g, j in progs.nodes[p.nodes.first:base.span_end(p.nodes)] {
+		prog := progs.programs[pi]
+		for &g, j in progs.nodes[prog.nodes.first:base.span_end(prog.nodes)] {
 			field, slot, known := node_field_from_name(g.kind, parts[1])
 			if g.name != name || !known || field.list > 0 || field.unit == .Asset {
 				continue // a sample set never moves after compile
 			}
-			x := Control_Target{node = p.nodes.first + i32(j), mod = -1, param = -1, slot = u8(slot), field = mf, op = .Set, scale = 1}
+			x := Control_Target{node = prog.nodes.first + i32(j), mod = -1, param = -1, slot = u8(slot), field = mf, op = .Set, scale = 1}
 			if mf != .None {
 				for mi in g.mods.first ..< base.span_end(g.mods) {
 					if int(progs.mods[mi].slot) == slot {

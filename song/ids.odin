@@ -159,7 +159,7 @@ ids_build :: proc(s: ^Song, mixed: bool) {
 			sec := s.sections[section_from_beat(s, s.notes.beat[i])]
 			at := i64(math.round((s.notes.beat[i] - sec.beat) * 9600)) // ticks, so a section before it can't round it
 			h = base.hash_combine(h, u64(sec.id))
-			h = base.hash_combine(h, transmute(u64)at)
+			h = base.hash_combine(h, u64(at))
 			h = base.hash_combine(h, u64(transmute(u32)f32(s.notes.pitch[i])))
 			h = base.hash_combine(h, u64(s.notes.pad[i]))
 			h = base.hash_combine(h, u64(s.notes.kind[i]))

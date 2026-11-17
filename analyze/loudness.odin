@@ -115,8 +115,8 @@ true_peak_from_samples :: proc(l, r: []f32) -> f64 {
 // stream's K-weighted energy (100 ms each, a Steps' or a Meter's): its
 // 400 ms blocks every 100 ms inside the span. -inf where no block of it is
 // above -70 LUFS (silence, or a span under 400 ms).
-loudness_of_span :: proc(energy: []f64, first, last: int) -> f64 {
-	first, last := max(first, 0), min(last, len(energy))
+loudness_of_span :: proc(energy: []f64, from, to: int) -> f64 {
+	first, last := max(from, 0), min(to, len(energy))
 	blocks := make([]Loudness_Block, max(last - first - 3, 0), context.temp_allocator)
 	for &b, k in blocks {
 		b = block_loudness(energy, first + k, 4)

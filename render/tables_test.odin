@@ -196,9 +196,9 @@ test_tables_shape :: proc(t: ^testing.T) {
 	buf := make([]f32, 2 * whole.frames * (1 + len(s.parts)), context.temp_allocator)
 	into_mix := [2][]f32{buf[:whole.frames], buf[whole.frames:][:whole.frames]}
 	into_parts := make([][2][]f32, len(s.parts), context.temp_allocator)
-	for &st, p in into_parts {
+	for &part, p in into_parts {
 		at := 2 * whole.frames * (1 + p)
-		st = {buf[at:][:whole.frames], buf[at + whole.frames:][:whole.frames]}
+		part = {buf[at:][:whole.frames], buf[at + whole.frames:][:whole.frames]}
 	}
 	tp14 := test_pool(3)
 	defer test_pool_free(tp14)

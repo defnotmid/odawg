@@ -26,7 +26,8 @@ env:
 # rendered by the CLI. Ten of the fifteen play sample sets and SFZ libraries,
 # fetched once (about 300 MB, each file checked against its pin) into a cached
 # data directory, then rendered with the network cut off, so a render reads
-# only what fetch put there. Windows is type-checked from Linux.
+# only what fetch put there. make check (-vet -strict-style over every package
+# and both tools, for the Linux, Windows and macOS targets) runs on Linux.
 
 jobs:
   test:
@@ -89,9 +90,9 @@ jobs:
       - name: Build the CLI
         run: make build
 
-      - name: Check the Windows build
+      - name: Vet and strict style
         if: runner.os == 'Linux'
-        run: odin check tools/odawg -collection:deps=.. -target:windows_amd64
+        run: make check
 
       # Keyed by what decides which files the examples play: the songs and
       # their pins, and the register of sample sets in assets/. A partial hit

@@ -792,7 +792,7 @@ sfz_key :: proc(s: ^Sfz, v: string, fallback: int, region := -1) -> int {
 		k = n
 	} else if len(v) > 0 {
 		name := strings.concatenate({strings.to_upper(v[:1], context.temp_allocator), v[1:]}, context.temp_allocator)
-		if p, ok := theory.pitch_from_string(name); ok {
+		if p, is_pitch := theory.pitch_from_string(name); is_pitch {
 			k = int(math.round(f32(p)))
 		} else {
 			return fallback

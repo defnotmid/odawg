@@ -1270,8 +1270,8 @@ device_from_value :: proc(r: ^Reader, v: json.Value, path: string) -> i32 {
 		o = x
 		if s, ok := x["name"].(json.String); ok {
 			name = s
-		} else if s, ok := x["class"].(json.String); ok {
-			name = s
+		} else if class, is_class := x["class"].(json.String); is_class {
+			name = class
 		}
 		if s, ok := x["id"].(json.String); ok {
 			id = strings.clone(s)
@@ -1347,10 +1347,10 @@ set_option :: proc(r: ^Reader, d: ^Device_Spec, p: device.Param, v: json.Value, 
 		}
 		value = f32(n)
 	} else if s, is_string := v.(json.String); is_string {
-		beats, ok: bool
+		beats, understood: bool
 		expect: string
-		value, beats, expect, ok = unit_from_text(row.unit, row.choices, s)
-		if !ok {
+		value, beats, expect, understood = unit_from_text(row.unit, row.choices, s)
+		if !understood {
 			bad(r, path, expect)
 			return
 		}

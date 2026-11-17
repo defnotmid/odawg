@@ -1,6 +1,5 @@
 package odawg_render
 
-import "core:math"
 import "core:mem/virtual"
 import "core:testing"
 import base "../base"

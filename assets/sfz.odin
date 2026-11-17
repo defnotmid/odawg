@@ -87,8 +87,8 @@ declare_sfz :: proc(bank: ^device.Bank, ref: spec.Asset_Ref, d: ^Declaring) -> b
 			base.report(d.findings, "bad_value", .Error, key, "%s: sample %s is outside its source; not fetched", key, sample)
 			return false
 		}
-		g, ok := song_file(d, ref.from, p)
-		if !ok {
+		g, has_file := song_file(d, ref.from, p)
+		if !has_file {
 			return false
 		}
 		if g.url == "" {

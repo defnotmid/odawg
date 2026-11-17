@@ -130,8 +130,8 @@ exp_decay :: #force_inline proc "contextless" (x: f32) -> f32 {
 // 2^y for any y (clamped to f32's exponents): its whole part as the
 // exponent, the same polynomial for the fraction (relative error under
 // 2e-7): a pitch or a cutoff moved in octaves, per sample.
-exp2_fast :: #force_inline proc "contextless" (y: f32) -> f32 {
-	y := clamp(y, -126, 127)
+exp2_fast :: #force_inline proc "contextless" (x: f32) -> f32 {
+	y := clamp(x, -126, 127)
 	k := i32(y)
 	if f32(k) > y {
 		k -= 1
