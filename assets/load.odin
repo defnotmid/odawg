@@ -149,29 +149,6 @@ declare_set :: proc(bank: ^device.Bank, s: ^Set_Row) -> Error {
 	return nil
 }
 
-// Declares the named sets not in the bank yet (their zones, nothing loaded).
-// A name the register lacks is a finding. True when every name is declared.
-bank_declare :: proc(bank: ^device.Bank, names: []string, findings: ^base.Findings) -> bool {
-	device.bank_init(bank)
-	ok := true
-	for name in names {
-		if _, declared := device.bank_set_from_name(bank, name); declared {
-			continue
-		}
-		s, found := set_row_from_name(name)
-		if !found {
-			base.report(findings, "unknown_asset", .Error, name, "no sample set %q; the sets: %s", name, set_names_joined())
-			ok = false
-			continue
-		}
-		if err := declare_set(bank, s); err != nil {
-			base.report(findings, "asset_unavailable", .Error, name, "%s: %s", name, err.?)
-			ok = false
-		}
-	}
-	return ok
-}
-
 // Loads what a song plays: the zones of each need's set answering its keys
 // (every velocity layer and round robin of them), each file downloaded first
 // if it isn't on disk yet (on first use, only these files), then read once
@@ -518,20 +495,6 @@ decode_all :: proc(jobs: []Decode_Job, pool: ^common.Work_Pool) {
 		pool.run(pool, len(jobs), each, &decodes)
 	}
 }
-
-// Declares the named sets and loads all of them (every key): for listening
-// to a whole set, and the tests.
-bank_from_names :: proc(bank: ^device.Bank, names: []string, findings: ^base.Findings, progress: Progress = progress_stderr) -> bool {
-	ok := bank_declare(bank, names, findings)
-	needs := make([dynamic]device.Sample_Need, context.temp_allocator)
-	for name in names {
-		if set, declared := device.bank_set_from_name(bank, name); declared {
-			append(&needs, device.Sample_Need{set = set, keys = ~bit_set[0 ..< 128;u128]{}})
-		}
-	}
-	return bank_load(bank, needs[:], findings, progress) && ok
-}
-
 
 @(private)
 set_names_joined :: proc() -> string {

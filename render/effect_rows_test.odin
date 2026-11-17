@@ -1,5 +1,6 @@
 package odawg_render
 
+import "core:encoding/json"
 import "core:math"
 import "core:mem"
 import "core:mem/virtual"
@@ -342,7 +343,7 @@ test_effect_row_host_clip :: proc(t: ^testing.T) {
 	testing.expect(t, spec.spec_from_json(`{ effects: "instruments/effects.json" }`, rows, &findings))
 	add_examples(rows, &findings)
 	effects, _ := spec.json_parse(`[ { name: "tremolo", rate: 2, depth: 1 } ]`)
-	play :: proc(rows: ^spec.Spec, bank: ^device.Bank, set: device.Set_Id, effects: spec.json_value) -> (^song.Song, Output) {
+	play :: proc(rows: ^spec.Spec, bank: ^device.Bank, set: device.Set_Id, effects: json.Value) -> (^song.Song, Output) {
 		m := new(song.Song)
 		song.mix_init(m)
 		m.host_rows = rows

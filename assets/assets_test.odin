@@ -2,6 +2,7 @@ package odawg_assets
 
 import base "../base"
 import device "../device"
+import spec "../spec"
 import "core:encoding/endian"
 import "core:fmt"
 import "core:math"
@@ -353,9 +354,9 @@ test_load_set :: proc(t: ^testing.T) {
 	testing.expect(t, device.zone_for(&bank, set, 40, 100, 3) >= 0)
 }
 
-// Offline (no proxy answers): a set not on disk is declared (a song can
-// compose against it) but its files can't be had, one finding for the set,
-// not a crash; an unknown name is a finding too.
+// Offline (no proxy answers): a register's set not on disk is declared (a
+// song can compose against it) but its files can't be had, one finding for
+// the set, not a crash. (An unknown name: test_style_plays_song_set's lost part.)
 @(test)
 test_bank_offline :: proc(t: ^testing.T) {
 	root := temp_root("offline")
@@ -367,12 +368,17 @@ test_bank_offline :: proc(t: ^testing.T) {
 	bank: device.Bank
 	defer device.bank_destroy(&bank)
 	quiet :: proc(message: string) {}
-	ok := bank_from_names(&bank, {"vcsl/upright_piano", "no/such_set"}, &findings, quiet)
-	testing.expect(t, !ok)
-	testing.expect_value(t, len(findings), 2)
-	if len(findings) == 2 {
-		testing.expect_value(t, findings[0].code, "unknown_asset")
-		testing.expect_value(t, findings[1].code, "asset_unavailable")
+	sp := new(spec.Spec, context.temp_allocator)
+	testing.expect(t, spec.spec_from_json(`{ sections: [ { name: "a", duration: "1m" } ],
+		parts: { keys: { instrument: { name: "Sampler", set: "vcsl/upright_piano" }, play: [ { range: "a", notes: "C4" } ] } } }`, sp, &findings))
+	testing.expect(t, bank_declare_spec(&bank, sp, &findings))
+	set, declared := device.bank_set_from_name(&bank, "vcsl/upright_piano")
+	testing.expect(t, declared)
+	every := device.Sample_Need{set = set, keys = ~bit_set[0 ..< 128;u128]{}}
+	testing.expect(t, !bank_load(&bank, {every}, &findings, quiet))
+	testing.expect_value(t, len(findings), 1)
+	if len(findings) == 1 {
+		testing.expect_value(t, findings[0].code, "asset_unavailable")
 	}
 	testing.expect_value(t, len(bank.sets), 1)
 	testing.expect_value(t, len(bank.samples), 0)

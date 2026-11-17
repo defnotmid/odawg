@@ -1,6 +1,7 @@
 package odawg_spec
 
 import "base:runtime"
+import "core:encoding/json"
 import "core:mem/virtual"
 import "core:reflect"
 import "core:testing"
@@ -137,7 +138,7 @@ test_row_order :: proc(t: ^testing.T) {
 }
 
 @(private = "file")
-map_value :: proc(text: string) -> json_value {
+map_value :: proc(text: string) -> json.Value {
 	v, _ := json_parse(text)
 	return v
 }

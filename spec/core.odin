@@ -472,8 +472,8 @@ asset_refs :: proc(s: ^Spec, out: ^[dynamic]Asset_Ref, drafts: ^Drafts = nil) {
 	}
 }
 
-// The names asset_refs finds (what bank_declare took before sets of a
-// song's own: the register's names, an SFZ's path).
+// The names asset_refs finds: the register's sets by name, a song's own,
+// an SFZ file's path.
 asset_names :: proc(s: ^Spec, out: ^[dynamic]string) {
 	refs := make([dynamic]Asset_Ref, context.temp_allocator)
 	asset_refs(s, &refs)

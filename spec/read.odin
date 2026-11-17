@@ -1365,5 +1365,4 @@ set_option :: proc(r: ^Reader, d: ^Device_Spec, p: device.Param, v: json.Value, 
 }
 
 // For tests and hosts: a value from JSON text.
-json_value :: json.Value
 json_parse :: proc(text: string) -> (json.Value, json.Error) {return json.parse_string(text, .JSON5, true)}
