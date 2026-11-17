@@ -9,8 +9,8 @@ oksl, oicut and ottis, built the same way:
   **Web Audio and Tone.js**, which agents and people already know. Where odawg adds
   something, it says so, the way ovg's README separates "From femtovg" from "Added in ovg".
 - **Deterministic and stateless.** It has a `VERSION` that changes whenever the output for
-  the same input does (like `pocket.VERSION`). Hosts own the caches: onimite's adapter
-  keeps renders the way `speech/` keeps lines.
+  the same input does (like `pocket.VERSION`). odawg keeps nothing between renders; a host
+  that keeps one can key it on `VERSION`.
 - **Data-oriented**: layers as packages
   (`base`, `tempo`, `theory`, `dsp`, `analyze`, `assets`, `spec`, `song`, `render`, `check`,
   then `tools/odawg`), imported as `deps:odawg/song` etc.; every kind (node kind,
@@ -46,7 +46,7 @@ cues or `say()`, it is in onimite.
 | | odawg (Odin library) | onimite (Lua binding, adapter, commands) | a GUI (later) |
 | --- | --- | --- | --- |
 | reads | a **song spec** (data: §3) as an Odin struct or JSON | the `song{}` / `sound{}` Lua tables, which it turns into specs | `.odawg` projects |
-| owns | composing (spec → project), the project document and its ops, the engine, render, time queries, analysis, checks, instruments, effects, styles (as data) | the video clock, scenes, `cue`/`inspect`, `say` and captions, track placement, the render cache, commands and MCP | the editing UI |
+| owns | composing (spec → project), the project document and its ops, the engine, render, time queries, analysis, checks, instruments, effects, styles (as data) | the video clock, scenes, `cue`/`inspect`, `say` and captions, track placement, the renders it keeps, commands and MCP | the editing UI |
 | sync | generic constraints: a section's `duration` (at least N s) and `start` (exactly at N s); finding moments in sound (onsets, the beat, a song's note hits, energy) | turning words, scenes and clips into those numbers; naming moments on the video (cues) and checking picture and sound land on them | — |
 | sound | the whole mix (phase 2): clips, songs, sounds, buses, ducking, master, analysis, decoding, the stream the preview plays | placing tracks on the video, resolving scene-relative times to seconds | — |
 | calls | — | the odawg Odin API | the odawg Odin API, and later a C ABI |
@@ -762,8 +762,8 @@ Inside onimite:
 
 - `script/song_api.odin` binds `song{}` and `sound{}` (like `view3d_api.odin`), and
   `std.lua` adds `say_start`.
-- The adapter package `music/` (like `speech/`) caches renders by content and
-  `odawg.VERSION` in `onimite/music/` in the user data folder.
+- The adapter, `onimite/music.odin`, keeps each song clip's render in memory (`Song_Clip`);
+  nothing of the music is stored on disk.
 - Renders run natively, in parallel per part. A song needs no fresh script load per clip,
   unlike `audio_add` functions.
 

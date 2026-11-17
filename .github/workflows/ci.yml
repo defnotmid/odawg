@@ -20,7 +20,7 @@ env:
 # `-collection:deps=..`, and its CLI (tools/odawg) reads odawg itself as
 # deps:odawg, so the job checks both out side by side:
 #   $GITHUB_WORKSPACE/{odawg,oicut}
-# oicut is pinned to the tag onimite builds odawg with.
+# oicut is pinned to a tag (README.md names the same one).
 #
 # Everything runs headless: the tests (make test), then every example song
 # rendered by the CLI. Ten of the fifteen play sample sets and SFZ libraries,
@@ -47,7 +47,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: defnotmid/oicut
-          ref: v0.0.29
+          ref: v0.0.30
           path: oicut
 
       - name: Cache Odin

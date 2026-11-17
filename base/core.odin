@@ -6,9 +6,10 @@ package odawg_base
 
 import "core:math"
 
-// Bumped whenever the samples for the same spec change: a host's render
-// cache keys on it (like ottis's pocket.VERSION).
-VERSION :: 4
+// Bumped whenever the samples for the same spec change (the mix, a stem, an
+// analysis), so a host keeping any of them knows when they are stale. 5: the
+// sampler's kernel and mid/side (within 1.3e-6), stems aligned with the mix.
+VERSION :: 5
 
 // The rate everything renders at (onimite's mix rate).
 RATE :: 48000
