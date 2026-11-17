@@ -196,7 +196,10 @@ test_return_sleeps :: proc(t: ^testing.T) {
 }
 
 // Paths of different latency line up where they meet: a part through a
-// lookahead limiter bus and a part straight to the master hit together.
+// lookahead limiter bus and a part straight to the master hit together. So
+// do their stems, the part feeding the limiter's too (its node runs the
+// limiter's lookahead ahead), and under a limiting master the stems are
+// the same ones, where the mix is.
 @(test)
 test_route_latency :: proc(t: ^testing.T) {
 	arena: virtual.Arena
@@ -219,6 +222,18 @@ test_route_latency :: proc(t: ^testing.T) {
 	bus := int(node_named(s, "brick")) - len(s.tracks)
 	through, straight := first(out.stems[bus][0]), first(out.stems[song.part_index(s, "b")][0])
 	testing.expectf(t, through > 0 && abs(through - straight) <= 1, "through the limiter at %d, straight at %d", through, straight)
+	into := first(out.stems[song.part_index(s, "a")][0])
+	testing.expectf(t, into == straight, "the part into the limiter's stem at %d, straight at %d", into, straight)
+	testing.expectf(t, abs(first(out.left) - straight) <= 1, "the mix at %d, the stems at %d", first(out.left), straight)
+	limited := output_from_song(s, {stems = true, mastering = {on = true, limit = true, ceiling_db = -1}})
+	defer output_destroy(&limited)
+	for st, p in out.stems {
+		worst: f32
+		for v, i in st[0] {
+			worst = max(worst, abs(v - limited.stems[p][0][i]), abs(st[1][i] - limited.stems[p][1][i]))
+		}
+		testing.expectf(t, worst == 0, "stem %d under a limiting master differs by %g", p, worst)
+	}
 }
 
 // Every stem has a name a file can take: the parts by theirs, the returns

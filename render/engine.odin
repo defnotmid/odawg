@@ -87,6 +87,12 @@ Engine :: struct {
 	master:    Master_Run, // the song's master: its gain, chain, lookahead, what it measured
 	no_master: bool, // its host runs the master itself, over what the engine gives in order
 	stem_gain: []f32, // per stem (stem_count): its placement's level, so a stem is what the master hears of it
+	// A stem's node runs `ahead + lead` ahead of the mix, so its stem is read
+	// where the mix is: the samples of that lead its last chunks made, by
+	// song sample (mod stem_size; l, then r, per stem), kept at every walk's
+	// chunk, a seek's too.
+	stem_tail: []f32,
+	stem_size: i64,
 	lanes:     Lanes,
 	// What it plays of the song's values a host may change while it plays
 	// (song.command_apply, then engine_sync): its own copies, so an edit to
@@ -455,6 +461,16 @@ engine_init :: proc(e: ^Engine, s: ^song.Song, pool: ^common.Work_Pool = nil, ma
 		}
 	}
 	e.rings = make([]f32, ring_total)
+	// room for the most any stem's node runs ahead of the mix
+	stem_lead := i64(e.master.latency)
+	for p in 0 ..< stem_count(s) {
+		stem_lead = max(stem_lead, i64(e.master.latency) + e.nodes[len(s.tracks) + p].lead)
+	}
+	e.stem_size = 1
+	for e.stem_size < stem_lead {
+		e.stem_size *= 2
+	}
+	e.stem_tail = make([]f32, 2 * e.stem_size * i64(stem_count(s)))
 	// an exact seek's start per node, and how long its chain rings
 	pres := prerolls_from_song(s, e.order, looped, context.temp_allocator)
 	for &nd, k in e.nodes {
@@ -1127,6 +1143,7 @@ engine_seek :: proc(e: ^Engine, at: i64, exact: bool) {
 	for &nd in e.nodes {
 		nd.started = false
 	}
+	slice.zero(e.stem_tail)
 	// nodes start in the walk's order: a track's groups before it (its strip
 	// reads where the notes they start end)
 	if from == at {
@@ -1234,41 +1251,77 @@ walk :: proc(e: ^Engine, n: int, master: bool, out: Walk_Out) {
 }
 
 // Chunk c of the walk to its out: the master's, and each stem's at its
-// placement's level (silence where it made none).
+// placement's level (silence where it made none), where the mix is: what
+// its node made `ahead + lead` before this chunk, then this chunk's. Every
+// walk's chunks leave their last samples in the stems' tails, a seek's too,
+// so a stream's first stem samples are the ones its nodes made before it.
 @(private = "file")
 take :: proc(e: ^Engine, c: int) {
 	out := &e.flow.out
-	if out.l == nil && out.sink.take == nil {
-		return
-	}
 	slot := c % RING
 	at := c * CHUNK
 	n := min(CHUNK, e.flow.frames - at)
-	ml, mr := chunk_of(e, slot, int(song.master_node(e.song)), n)
+	first := len(e.song.tracks)
+	size := e.stem_size
 	stems := out.stems
 	o := at
 	if out.sink.take != nil {
 		stems, o = out.scratch, 0
-	} else {
-		copy(out.l[at:], ml)
-		copy(out.r[at:], mr)
 	}
-	first := len(e.song.tracks)
-	for st, p in stems {
-		g := e.stem_gain[p]
-		for j := 0; j * BLOCK < n; j += 1 {
-			m := min(BLOCK, n - j * BLOCK)
-			b := o + j * BLOCK
-			if e.dirty[((first + p) * RING + slot) * CHUNK_BLOCKS + j] {
-				sl, sr := slot_block(e, slot, first + p, j, m)
-				for i in 0 ..< m {
-					st[0][b + i] = sl[i] * g
-					st[1][b + i] = sr[i] * g
-				}
-			} else {
-				slice.zero(st[0][b:][:m])
-				slice.zero(st[1][b:][:m])
+	ml, mr: []f32
+	if out.l != nil || out.sink.take != nil {
+		ml, mr = chunk_of(e, slot, int(song.master_node(e.song)), n)
+		if out.sink.take == nil {
+			copy(out.l[at:], ml)
+			copy(out.r[at:], mr)
+		}
+	}
+	for p in 0 ..< stem_count(e.song) {
+		k := first + p
+		tail := e.stem_tail[2 * size * i64(p):][:2 * size]
+		dirty := e.dirty[(k * RING + slot) * CHUNK_BLOCKS:][:CHUNK_BLOCKS]
+		lead := int(e.ahead + e.nodes[k].lead) // how far this chunk runs ahead of the mix
+		from := e.cursor + i64(at) // the mix's song sample at the chunk's start
+		// sample i of the chunk: 0 when its block made none
+		sample :: #force_inline proc(e: ^Engine, slot, k: int, dirty: []bool, i, n: int) -> (f32, f32) {
+			j := i / BLOCK
+			if !dirty[j] {
+				return 0, 0
 			}
+			l, r := slot_block(e, slot, k, j, min(BLOCK, n - j * BLOCK))
+			return l[i % BLOCK], r[i % BLOCK]
+		}
+		if p < len(stems) {
+			st := stems[p]
+			g := e.stem_gain[p]
+			// the first `lead` from the tail, the rest from this chunk
+			held := min(lead, n)
+			for i in 0 ..< held {
+				x := (from + i64(i)) & (size - 1)
+				st[0][o + i] = tail[x] * g
+				st[1][o + i] = tail[size + x] * g
+			}
+			for j := 0; j * BLOCK < n - held; j += 1 {
+				m := min(BLOCK, n - held - j * BLOCK)
+				b := o + held + j * BLOCK
+				if dirty[j] {
+					sl, sr := slot_block(e, slot, k, j, m)
+					for i in 0 ..< m {
+						st[0][b + i] = sl[i] * g
+						st[1][b + i] = sr[i] * g
+					}
+				} else {
+					slice.zero(st[0][b:][:m])
+					slice.zero(st[1][b:][:m])
+				}
+			}
+		}
+		// this chunk's last samples (the node's song samples from + lead on)
+		// for the next chunk's first
+		keep := min(int(size), n)
+		for i in n - keep ..< n {
+			x := (from + i64(lead) + i64(i)) & (size - 1)
+			tail[x], tail[size + x] = sample(e, slot, k, dirty, i, n)
 		}
 	}
 	if out.sink.take != nil {
