@@ -25,7 +25,15 @@ for i, part in ipairs(ORDER) do
     notes[#notes + 1] = { from = from, len = score.beat(e.time + e.duration) - from, m = m, v = e.velocity or 0.8 }
     lo, hi = math.min(lo, m), math.max(hi, m)
   end
-  table.sort(notes, function(a, b) return a.from < b.from end)
+  -- a total order: table.sort isn't stable (and Lua picks its pivots at
+  -- random), so notes starting together must not tie, or overlapping ones
+  -- would stack differently in each of the render's Lua states
+  table.sort(notes, function(a, b)
+    if a.from ~= b.from then return a.from < b.from end
+    if a.m ~= b.m then return a.m < b.m end
+    if a.len ~= b.len then return a.len < b.len end
+    return a.v < b.v
+  end)
   LANES[i] = { part = part, role = score.spec.parts[part].role, notes = notes, lo = lo, hi = hi }
 end
 

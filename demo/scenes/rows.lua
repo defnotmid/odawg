@@ -28,15 +28,28 @@ local AT = {
   out = { col(6), 460 }, env = { col(6), 650 },
 }
 
+-- Every list is built in a sorted order: pairs() walks a table in an order
+-- each Lua state picks for itself, and a render builds frames in many
+-- states, so wires drawn in pairs() order would overlap differently from
+-- frame to frame.
+local function sorted_keys(t)
+  local keys = {}
+  for k in pairs(t) do keys[#keys + 1] = k end
+  table.sort(keys)
+  return keys
+end
+
 local NODES, WIRES = {}, {}
-for name, node in pairs(ROW.nodes) do
+for _, name in ipairs(sorted_keys(ROW.nodes)) do
+  local node = ROW.nodes[name]
   assert(AT[name], "rows.lua: no place for the talk box's node " .. name)
   NODES[#NODES + 1] = { name = name, class = node.class, x = AT[name][1], y = AT[name][2] }
   local function wire(from, kind) WIRES[#WIRES + 1] = { from = from, to = name, kind = kind } end
   if node.input then wire(node.input, "sound") end
   for _, i in ipairs(node.inputs or {}) do wire(i, "sound") end
   if node.amp then wire(node.amp, "control") end
-  for _, v in pairs(node) do
+  for _, field in ipairs(sorted_keys(node)) do
+    local v = node[field]
     if type(v) == "table" and v.by then wire(v.by, "control") end
   end
 end
